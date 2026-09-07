@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://robobuddy.dev/schemas/observation.schema.json",
+  "title": "RoboBuddy physical observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "sessionId", "epoch", "simulationTimeSeconds", "view", "robotId", "joints"],
+  "properties": {
+    "schemaVersion": { "const": "0.2.0-alpha.1" },
+    "sessionId": { "type": "string" },
+    "epoch": { "type": "integer", "minimum": 0 },
+    "simulationTimeSeconds": { "type": "number", "minimum": 0 },
+    "view": { "enum": ["ground_truth", "sensor"] },
+    "robotId": { "type": "string" },
+    "joints": { "type": "object" },
+    "bodies": { "type": "object" },
+    "contacts": { "type": "array", "items": { "type": "object" } },
+    "sensors": { "type": "object" }
+  }
+}
