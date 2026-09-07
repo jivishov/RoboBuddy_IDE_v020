@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -8,6 +9,8 @@ import mujoco
 
 EXPECTED_MUJOCO_VERSION = "3.11.0"
 EXPECTED_TIMESTEP_SECONDS = 0.002
+MODEL_ID = "phase1-vertical-slice-v1"
+MODEL_ASSET = "models/vertical-slice/model.xml"
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = ROOT / "models" / "vertical-slice" / "model.xml"
 
@@ -55,6 +58,7 @@ def run(target_rad: float, steps: int, allow_version_mismatch: bool = False) -> 
     if steps < 1 or steps > 100_000:
         raise ValueError("steps must be between 1 and 100000")
 
+    model_sha256 = hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
     data = mujoco.MjData(model)
 
@@ -85,9 +89,25 @@ def run(target_rad: float, steps: int, allow_version_mismatch: bool = False) -> 
 
     contacts = _contacts(model, data)
     return {
-        "simulationTime": float(data.time),
+        "simulationTimeSeconds": float(data.time),
+        "frames": {
+            "world": {
+                "id": "mujoco_world",
+                "handedness": "right-handed",
+                "upAxis": "+Z",
+                "linearUnit": "m",
+                "angularUnit": "rad",
+            }
+        },
+        "model": {
+            "id": MODEL_ID,
+            "asset": MODEL_ASSET,
+            "sha256": model_sha256,
+        },
         "engine": {
+            "name": "MuJoCo",
             "version": mujoco.__version__,
+            "versionEvidence": "mujoco.__version__ native package introspection",
             "timestepSeconds": float(model.opt.timestep),
         },
         "joints": {
@@ -101,6 +121,7 @@ def run(target_rad: float, steps: int, allow_version_mismatch: bool = False) -> 
         },
         "bodies": {
             "free_box": {
+                "frame": "mujoco_world",
                 "positionM": [float(value) for value in data.xpos[free_box_body_id]],
             }
         },
