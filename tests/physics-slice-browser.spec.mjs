@@ -1,12 +1,31 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
-test('Phase 1 browser MuJoCo slice uses the pinned engine and fixed simulation time', async ({ page }) => {
+const NATIVE_REFERENCE_PATH = '/tmp/robobuddy-native-reference.json';
+const PHASE1_CONFORMANCE = Object.freeze({
+  simulationTimeSeconds: 1e-9,
+  jointPositionRad: 1e-5,
+  jointVelocityRadS: 1e-4,
+  bodyPositionM: 1e-5,
+});
+
+function expectNear(label, actual, expected, tolerance) {
+  const delta = Math.abs(Number(actual) - Number(expected));
+  expect(Number.isFinite(delta), `${label} must be finite`).toBe(true);
+  expect(delta, `${label} delta ${delta} exceeded Phase 1 tolerance ${tolerance}`).toBeLessThanOrEqual(tolerance);
+  return delta;
+}
+
+test('Phase 1 browser MuJoCo slice is fixed-step, bounded, and native-conformant', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
 
   await page.goto('/physics-slice.html', { waitUntil: 'domcontentloaded' });
   await page.locator('#load').click();
   await expect(page.locator('#status')).toHaveText('Load scene complete', { timeout: 30_000 });
+  await expect(page.locator('#schemaVersion')).toHaveText('0.2.0-alpha.1');
+  await expect(page.locator('#view')).toHaveText('ground_truth');
+  await expect(page.locator('#worldFrame')).toContainText('mujoco_world · right-handed · +Z');
   await expect(page.locator('#engineVersion')).toHaveText('3.11.0');
   await expect(page.locator('#timestep')).toHaveText('0.002000 s');
   await expect(page.locator('#time')).toHaveText('0.0000 s');
@@ -20,18 +39,48 @@ test('Phase 1 browser MuJoCo slice uses the pinned engine and fixed simulation t
   await expect(page.locator('#time')).toHaveText('1.0000 s');
   await expect(page.locator('#contactsReadable')).toHaveText('yes');
 
-  const boxText = await page.locator('#box').textContent();
-  const boxZ = Number(String(boxText).split(',')[2]?.replace('m', '').trim());
+  const browser = await page.evaluate(() => structuredClone(window.__phase1Observation));
+  expect(browser.schemaVersion).toBe('0.2.0-alpha.1');
+  expect(browser.sessionId).toBe('phase1-browser-slice');
+  expect(browser.epoch).toBe(1);
+  expect(browser.view).toBe('ground_truth');
+  expect(browser.robotId).toBe('phase1_articulated_joint');
+  expect(browser.frames.world).toEqual({
+    id: 'mujoco_world', handedness: 'right-handed', upAxis: '+Z', linearUnit: 'm', angularUnit: 'rad',
+  });
+  expect(browser.model.id).toBe('phase1-vertical-slice-v1');
+  expect(browser.model.asset).toBe('models/vertical-slice/model.xml');
+  expect(browser.model.sha256).toMatch(/^[0-9a-f]{64}$/);
+
+  const boxZ = Number(browser.bodies.free_box.positionM[2]);
   expect(Number.isFinite(boxZ)).toBe(true);
   expect(boxZ).toBeLessThan(1.0);
   expect(boxZ).toBeGreaterThan(0.38);
+  expect(browser.contactCount).toBeGreaterThan(0);
+  expect(Math.abs(Number(browser.joints.hinge.positionRad))).toBeGreaterThan(0.01);
 
-  const contactCount = Number(await page.locator('#contacts').textContent());
-  expect(contactCount).toBeGreaterThan(0);
+  const diagnostics = await page.evaluate(() => structuredClone(window.__phase1Diagnostics));
+  expect(diagnostics.remainingCommandSteps).toBe(0);
+  expect(diagnostics.model.sha256).toBe(browser.model.sha256);
 
-  const hingePosition = Number(String(await page.locator('#position').textContent()).replace('rad', '').trim());
-  expect(Number.isFinite(hingePosition)).toBe(true);
-  expect(Math.abs(hingePosition)).toBeGreaterThan(0.01);
+  await page.locator('#step100').click();
+  await expect(page.locator('#status')).toContainText('exceeds remaining command budget 0');
+
+  if (existsSync(NATIVE_REFERENCE_PATH)) {
+    const native = JSON.parse(readFileSync(NATIVE_REFERENCE_PATH, 'utf8'));
+    expect(native.engine.version).toBe('3.11.0');
+    expect(native.model.sha256).toBe(browser.model.sha256);
+    expect(native.frames.world).toEqual(browser.frames.world);
+    const deltas = {
+      simulationTimeSeconds: expectNear('simulation time', browser.simulationTimeSeconds, native.simulationTimeSeconds, PHASE1_CONFORMANCE.simulationTimeSeconds),
+      jointPositionRad: expectNear('hinge position', browser.joints.hinge.positionRad, native.joints.hinge.positionRad, PHASE1_CONFORMANCE.jointPositionRad),
+      jointVelocityRadS: expectNear('hinge velocity', browser.joints.hinge.velocityRadS, native.joints.hinge.velocityRadS, PHASE1_CONFORMANCE.jointVelocityRadS),
+      freeBoxX: expectNear('free box x', browser.bodies.free_box.positionM[0], native.bodies.free_box.positionM[0], PHASE1_CONFORMANCE.bodyPositionM),
+      freeBoxY: expectNear('free box y', browser.bodies.free_box.positionM[1], native.bodies.free_box.positionM[1], PHASE1_CONFORMANCE.bodyPositionM),
+      freeBoxZ: expectNear('free box z', browser.bodies.free_box.positionM[2], native.bodies.free_box.positionM[2], PHASE1_CONFORMANCE.bodyPositionM),
+    };
+    console.log('Phase 1 browser/native deltas', deltas);
+  }
 
   expect(pageErrors, pageErrors.join('\n\n')).toEqual([]);
 });
