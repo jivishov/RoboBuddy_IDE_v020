@@ -21,6 +21,7 @@ export class BrowserMuJoCoBackend {
     this.state = PhysicsBackendState.IDLE;
     this.trace = [];
     this.generation = 0;
+    this.commandBudget = null;
   }
 
   async loadScene(scene = {}, context = {}) {
@@ -28,25 +29,24 @@ export class BrowserMuJoCoBackend {
     this.#validateNewEpoch(context);
     if (!scene?.revision || !scene?.robotId) throw new TypeError('Scene requires revision and robotId');
     const requestedModelUrl = scene.modelUrl ? new URL(scene.modelUrl, this.modelUrl) : this.modelUrl;
-    if (requestedModelUrl.href !== this.modelUrl.href) {
-      throw new Error('Phase 1 only permits the pinned vertical-slice model');
-    }
+    if (requestedModelUrl.href !== this.modelUrl.href) throw new Error('Phase 1 only permits the pinned vertical-slice model');
     if (!this.worker) this.#spawn();
     this.state = PhysicsBackendState.LOADING;
     this.sessionId = String(context.sessionId);
     this.epoch = context.epoch;
+    this.commandBudget = null;
     const generation = ++this.generation;
     try {
-      const state = await this.#call('load', { modelUrl: this.modelUrl.href });
+      const observation = await this.#call('load', { modelUrl: this.modelUrl.href });
       this.#assertGeneration(generation, context);
       this.loaded = true;
       this.sceneRevision = String(scene.revision);
       this.robotId = String(scene.robotId);
       this.lastScene = { revision: this.sceneRevision, robotId: this.robotId, modelUrl: this.modelUrl.href };
-      this.lastObservation = state;
+      this.lastObservation = observation;
       this.state = PhysicsBackendState.READY;
-      this.#record('loadScene', { observation: state });
-      return { sceneRevision: this.sceneRevision, robotId: this.robotId, observation: state };
+      this.#record('loadScene', { observation });
+      return { sceneRevision: this.sceneRevision, robotId: this.robotId, observation };
     } catch (error) {
       if (generation === this.generation) this.state = PhysicsBackendState.FAILED;
       throw error;
@@ -56,13 +56,14 @@ export class BrowserMuJoCoBackend {
   async reset(context = {}) {
     this.#assertLoaded();
     this.#adoptNewEpoch(context);
+    this.commandBudget = null;
     const generation = ++this.generation;
-    const state = await this.#call('reset');
+    const observation = await this.#call('reset');
     this.#assertGeneration(generation, context);
-    this.lastObservation = state;
+    this.lastObservation = observation;
     this.state = PhysicsBackendState.READY;
-    this.#record('reset', { observation: state });
-    return state;
+    this.#record('reset', { observation });
+    return observation;
   }
 
   async acceptCommand(envelope) {
@@ -71,18 +72,25 @@ export class BrowserMuJoCoBackend {
     this.#assertContext(envelope);
     if (envelope.sceneRevision !== this.sceneRevision) throw new Error('Stale scene revision');
     if (envelope.robotId !== this.robotId) throw new Error('Command robot does not match loaded scene');
+    if (envelope.command?.type === 'set_joint_target' && !Number.isInteger(envelope.maxSteps)) {
+      throw new RangeError('Phase 1 set_joint_target requires a positive maxSteps budget');
+    }
     const generation = this.generation;
     const observation = await this.#call('command', envelope.command);
     this.#assertGeneration(generation, envelope);
     this.lastObservation = observation;
+    this.commandBudget = Number.isInteger(envelope.maxSteps)
+      ? { commandId: envelope.commandId, remainingSteps: envelope.maxSteps }
+      : null;
     this.state = PhysicsBackendState.READY;
     this.#record('command', {
       commandId: envelope.commandId,
       command: structuredClone(envelope.command),
       maxSteps: envelope.maxSteps,
+      remainingSteps: this.commandBudget?.remainingSteps ?? null,
       observation,
     });
-    return { status: 'accepted', commandId: envelope.commandId, observation };
+    return { status: 'accepted', commandId: envelope.commandId, remainingSteps: this.commandBudget?.remainingSteps ?? null, observation };
   }
 
   async advanceSteps(stepCount = 1, context = {}) {
@@ -91,14 +99,23 @@ export class BrowserMuJoCoBackend {
     if (!Number.isInteger(stepCount) || stepCount < 1 || stepCount > MAX_STEP_BATCH) {
       throw new RangeError(`stepCount must be an integer from 1 to ${MAX_STEP_BATCH}`);
     }
+    if (this.commandBudget && stepCount > this.commandBudget.remainingSteps) {
+      throw new RangeError(`Step request ${stepCount} exceeds remaining command budget ${this.commandBudget.remainingSteps}`);
+    }
     const generation = this.generation;
     this.state = PhysicsBackendState.RUNNING;
     try {
       const observation = await this.#call('step', { count: stepCount });
       this.#assertGeneration(generation, context);
       this.lastObservation = observation;
+      if (this.commandBudget) this.commandBudget.remainingSteps -= stepCount;
       this.state = PhysicsBackendState.READY;
-      this.#record('advanceSteps', { stepCount, observation });
+      this.#record('advanceSteps', {
+        stepCount,
+        commandId: this.commandBudget?.commandId ?? null,
+        remainingSteps: this.commandBudget?.remainingSteps ?? null,
+        observation,
+      });
       return observation;
     } catch (error) {
       if (generation === this.generation && this.loaded) this.state = PhysicsBackendState.FAILED;
@@ -130,6 +147,8 @@ export class BrowserMuJoCoBackend {
       workerActive: Boolean(this.worker),
       engineVersion: this.lastObservation?.engine?.version || null,
       timestepSeconds: this.lastObservation?.engine?.timestepSeconds ?? null,
+      activeCommandId: this.commandBudget?.commandId ?? null,
+      remainingCommandSteps: this.commandBudget?.remainingSteps ?? null,
       traceEvents: this.trace.length,
     };
   }
@@ -170,6 +189,7 @@ export class BrowserMuJoCoBackend {
     this.robotId = null;
     this.lastScene = null;
     this.lastObservation = null;
+    this.commandBudget = null;
     return { cancelled: true, reloadRequired: true };
   }
 
@@ -187,17 +207,15 @@ export class BrowserMuJoCoBackend {
     };
   }
 
-  async dispose() {
+  dispose() {
     if (this.disposed) return;
     this.disposed = true;
     ++this.generation;
-    if (this.worker) {
-      try { await this.#call('dispose'); } catch {}
-      this.#terminate('disposed');
-    }
+    this.#terminate('disposed');
     this.loaded = false;
     this.state = PhysicsBackendState.DISPOSED;
     this.lastObservation = null;
+    this.commandBudget = null;
   }
 
   #spawn() {
@@ -225,7 +243,15 @@ export class BrowserMuJoCoBackend {
   }
 
   #record(type, details = {}) {
-    this.trace.push({ type, simulationTime: details.observation?.simulationTime ?? this.lastObservation?.simulationTime ?? null, ...details });
+    this.trace.push({
+      type,
+      sessionId: this.sessionId,
+      epoch: this.epoch,
+      sceneRevision: this.sceneRevision,
+      robotId: this.robotId,
+      simulationTime: details.observation?.simulationTime ?? this.lastObservation?.simulationTime ?? null,
+      ...details,
+    });
     if (this.trace.length > MAX_TRACE_EVENTS) this.trace.splice(0, this.trace.length - MAX_TRACE_EVENTS);
   }
 
