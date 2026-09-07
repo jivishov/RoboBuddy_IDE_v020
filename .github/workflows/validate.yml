@@ -33,6 +33,14 @@ jobs:
           node --check src/simulator-host.js
           node --check src/task-catalog.js
           node --check src/task-workspace.js
+          node --check src/physics/backend-contract.js
+          node --check src/physics/browser-mujoco-backend.js
+          node --check src/physics/capabilities.js
+          node --check src/physics/model-registry.js
+          node --check src/physics/mujoco-worker.js
+          node --check src/physics/session.js
+          node --check src/physics/ui-status.js
+          node --check src/runtime/live-python-bridge.js
           node --check src/microduck/audio-engine.js
           node --check src/microduck/baked-visual.js
           node --check src/microduck/command-bus.js
@@ -46,12 +54,17 @@ jobs:
           node --check src/webmcp/agent-facade.js
           node --check src/webmcp/microduck-control.js
           node --check src/webmcp/register-ide-tools.js
+          node --check tests/physics/vertical-slice-core.mjs
+          node --check tests/physics-slice-browser.spec.mjs
+          node --check playwright.config.mjs
       - name: Static fidelity checks
         run: node tests/validate.mjs
       - name: Canonical RoboBuddy visual checks
         run: node tests/validate_canonical_visuals.mjs
       - name: Latest pinned task patch and source-plant checks
         run: node tests/validate_task_patch.mjs
+      - name: Phase 1 physics contract checks
+        run: node tests/physics/vertical-slice-core.mjs
       - name: MicroDuck asset and policy contracts
         run: |
           node tests/validate_microduck_assets.mjs
@@ -67,15 +80,33 @@ jobs:
         run: python tests/execute_starters.py
       - name: OpenArm canonical reference invariants
         run: python tests/validate_openarm_reference.py
+      - name: Native MuJoCo reference runner
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
+          python -m py_compile native/reference_runner.py
+          python native/reference_runner.py --target 0.8 --steps 500 > /tmp/robobuddy-native-reference.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('/tmp/robobuddy-native-reference.json').read_text())
+          assert result['engine']['version'] == '3.11.0'
+          assert abs(result['engine']['timestepSeconds'] - 0.002) < 1e-12
+          assert abs(result['simulationTime'] - 1.0) < 1e-9
+          assert result['bodies']['free_box']['positionM'][2] < 1.0
+          assert result['contactCount'] > 0
+          print('Native Phase 1 reference: OK')
+          PY
       - name: HTML parse smoke test
         run: |
           python - <<'PY'
           from html.parser import HTMLParser
           from pathlib import Path
           class P(HTMLParser): pass
-          P().feed(Path('index.html').read_text())
+          for name in ('index.html', 'physics-slice.html'):
+              P().feed(Path(name).read_text())
           assert 'id="taskSelect"' in Path('index.html').read_text()
           assert './src/app-v2.js' in Path('index.html').read_text()
+          assert './src/physics/session.js' in Path('physics-slice.html').read_text()
           print('HTML parse: OK')
           PY
       - name: Install browser fidelity harness
