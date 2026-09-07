@@ -7,7 +7,7 @@ function uid(prefix) {
 export class PhysicsSession {
   constructor(backend, { sessionId = uid('physics') } = {}) {
     this.backend = assertPhysicsBackend(backend);
-    this.sessionId = sessionId;
+    this.sessionId = String(sessionId);
     this.epoch = 0;
     this.sceneRevision = null;
     this.robotId = null;
@@ -17,67 +17,80 @@ export class PhysicsSession {
 
   async loadScene(scene) {
     this.#assertLive();
+    if (!scene || typeof scene !== 'object' || !scene.revision || !scene.robotId) {
+      throw new TypeError('Physical scene requires revision and robotId');
+    }
     this.epoch += 1;
     this.activeCommandId = null;
-    const result = await this.backend.loadScene(structuredClone(scene), { sessionId: this.sessionId, epoch: this.epoch });
-    this.sceneRevision = result?.sceneRevision ?? scene?.revision ?? null;
-    this.robotId = result?.robotId ?? scene?.robotId ?? null;
-    return { apiVersion: PHYSICS_BACKEND_API_VERSION, sessionId: this.sessionId, epoch: this.epoch, ...result };
+    const result = await this.backend.loadScene(structuredClone(scene), this.#context());
+    this.sceneRevision = result?.sceneRevision ?? scene.revision;
+    this.robotId = result?.robotId ?? scene.robotId;
+    return { apiVersion: PHYSICS_BACKEND_API_VERSION, ...this.#context(), ...result };
   }
 
   async reset(options = {}) {
-    this.#assertLive();
+    this.#assertLoaded();
     this.epoch += 1;
     this.activeCommandId = null;
-    return this.backend.reset({ ...structuredClone(options), sessionId: this.sessionId, epoch: this.epoch });
+    const result = await this.backend.reset({ ...structuredClone(options), ...this.#context() });
+    return { ...this.#context(), result };
   }
 
   async sendCommand(command, { commandId = uid('cmd'), maxSteps = null } = {}) {
-    this.#assertLive();
-    if (!this.robotId) throw new Error('No physical scene loaded');
+    this.#assertLoaded();
     const envelope = makeCommandEnvelope({
-      sessionId: this.sessionId,
-      epoch: this.epoch,
+      ...this.#context(),
       commandId,
       sceneRevision: this.sceneRevision,
       robotId: this.robotId,
       command,
       maxSteps,
     });
-    this.activeCommandId = commandId;
+    this.activeCommandId = envelope.commandId;
     return this.backend.acceptCommand(envelope);
   }
 
   advanceSteps(steps) {
-    this.#assertLive();
+    this.#assertLoaded();
     if (!Number.isInteger(steps) || steps < 1) throw new RangeError('steps must be a positive integer');
-    return this.backend.advanceSteps(steps, { sessionId: this.sessionId, epoch: this.epoch });
+    return this.backend.advanceSteps(steps, this.#context());
   }
 
   getObservation(options = {}) {
-    this.#assertLive();
-    return this.backend.getObservation({ ...options, sessionId: this.sessionId, epoch: this.epoch });
+    this.#assertLoaded();
+    return this.backend.getObservation({ ...options, ...this.#context() });
   }
 
   getDiagnostics() {
     this.#assertLive();
-    return this.backend.getDiagnostics({ sessionId: this.sessionId, epoch: this.epoch });
+    return this.backend.getDiagnostics(this.#context());
   }
 
-  pause() { this.#assertLive(); return this.backend.pause(); }
-  resume() { this.#assertLive(); return this.backend.resume(); }
+  pause() {
+    this.#assertLoaded();
+    return this.backend.pause(this.#context());
+  }
+
+  resume() {
+    this.#assertLoaded();
+    return this.backend.resume(this.#context());
+  }
 
   async cancelRun(reason = 'cancelled') {
-    this.#assertLive();
+    this.#assertLoaded();
     this.epoch += 1;
-    const cancelled = await this.backend.cancelRun({ reason, sessionId: this.sessionId, epoch: this.epoch });
+    const result = await this.backend.cancelRun({ reason, ...this.#context() });
     this.activeCommandId = null;
-    return cancelled;
+    if (result?.reloadRequired) {
+      this.sceneRevision = null;
+      this.robotId = null;
+    }
+    return result;
   }
 
   exportTrace() {
     this.#assertLive();
-    return this.backend.exportTrace({ sessionId: this.sessionId, epoch: this.epoch });
+    return this.backend.exportTrace(this.#context());
   }
 
   dispose() {
@@ -85,7 +98,18 @@ export class PhysicsSession {
     this.disposed = true;
     this.epoch += 1;
     this.activeCommandId = null;
+    this.sceneRevision = null;
+    this.robotId = null;
     this.backend.dispose();
+  }
+
+  #context() {
+    return { sessionId: this.sessionId, epoch: this.epoch };
+  }
+
+  #assertLoaded() {
+    this.#assertLive();
+    if (!this.robotId || !this.sceneRevision) throw new Error('No physical scene loaded');
   }
 
   #assertLive() {
