@@ -78,7 +78,17 @@
   <footer class="statusbar"><span id="statusMessage">Starting…</span><span id="statusCursor">main.py</span><span class="right">Physics Preview v0.2.0-alpha.1 · Python 3 · <span id="driverStatus">legacy adapter</span> · Hardware validation: pending</span></footer>
 </div>
 
-<dialog id="aboutDialog" class="about-dialog" aria-labelledby="aboutDialogTitle" aria-describedby="aboutDialogDescription"><div class="about-dialog-shell"><button id="aboutCloseBtn" class="about-close" type="button" aria-label="Close About RoboBuddy IDE dialog">×</button><div class="about-head"><div class="about-mark" aria-hidden="true">RB</div><div><p class="about-eyebrow">Robotics learning environment</p><h2 id="aboutDialogTitle">RoboBuddy IDE Physics Preview</h2></div></div><p id="aboutDialogDescription" class="about-copy">A browser robotics IDE migrating toward a shared MuJoCo physics architecture while preserving Python programming and bounded WebMCP collaboration.</p><div class="about-rule" aria-hidden="true"></div><div class="about-license"><span class="about-license-label">Version</span><strong>v0.2.0-alpha.1</strong><span>Legacy workspaces remain available and explicitly labeled while physical backends are introduced robot by robot.</span></div><p class="about-copyright">© 2026 Dr. Emil Jivishov</p></div></dialog>
+<dialog id="aboutDialog" class="about-dialog" aria-labelledby="aboutDialogTitle" aria-describedby="aboutDialogDescription">
+  <div class="about-dialog-shell">
+    <button id="aboutCloseBtn" class="about-close" type="button" aria-label="Close About RoboBuddy IDE dialog">×</button>
+    <div class="about-head"><div class="about-mark" aria-hidden="true">RB</div><div><p class="about-eyebrow">Robotics learning environment</p><h2 id="aboutDialogTitle">RoboBuddy IDE Physics Preview</h2></div></div>
+    <p id="aboutDialogDescription" class="about-copy">A browser robotics IDE migrating toward a shared MuJoCo physics architecture while preserving Python programming and bounded WebMCP collaboration.</p>
+    <div class="about-rule" aria-hidden="true"></div>
+    <div class="about-license"><span class="about-license-label">Version</span><strong>v0.2.0-alpha.1</strong><span>Legacy workspaces remain available and explicitly labeled while physical backends are introduced robot by robot.</span></div>
+    <div class="about-license"><span class="about-license-label">License</span><strong>MIT License</strong><span>Open source under the MIT License. Bundled third-party assets retain their own notices.</span></div>
+    <p class="about-copyright">© 2026 Dr. Emil Jivishov</p>
+  </div>
+</dialog>
 <div id="commandPalette" class="command-palette" hidden><div class="command-box"><div class="command-input-row"><input id="commandInput" placeholder="Type a command…" aria-label="Command palette"><button id="commandClose" class="close">×</button></div><div id="commandList" class="command-list"></div></div></div>
 <input id="importFile" type="file" accept=".py,text/x-python" hidden>
 <script src="https://cdn.jsdelivr.net/npm/codemirror@5.65.16/lib/codemirror.min.js"></script>
