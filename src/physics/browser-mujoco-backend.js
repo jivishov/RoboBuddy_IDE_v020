@@ -49,8 +49,13 @@ export class BrowserMuJoCoBackend {
       this.loaded = true;
       this.sceneRevision = String(scene.revision);
       this.robotId = String(scene.robotId);
-      this.lastScene = { revision: this.sceneRevision, robotId: this.robotId, modelUrl: this.modelUrl.href };
       const observation = this.#decorateObservation(raw);
+      this.lastScene = {
+        revision: this.sceneRevision,
+        robotId: this.robotId,
+        modelUrl: this.modelUrl.href,
+        model: structuredClone(observation.model),
+      };
       this.lastObservation = observation;
       this.state = PhysicsBackendState.READY;
       this.#record('loadScene', { observation });
@@ -159,6 +164,7 @@ export class BrowserMuJoCoBackend {
       epoch: this.epoch,
       pendingRequests: this.pending.size,
       workerActive: Boolean(this.worker),
+      model: this.lastObservation?.model ? structuredClone(this.lastObservation.model) : null,
       engineVersion: this.lastObservation?.engine?.version || null,
       engineVersionEvidence: this.lastObservation?.engine?.versionEvidence || null,
       timestepSeconds: this.lastObservation?.engine?.timestepSeconds ?? null,
@@ -239,8 +245,10 @@ export class BrowserMuJoCoBackend {
   #decorateObservation(raw = {}, view = 'ground_truth') {
     const simulationTimeSeconds = Number(raw.simulationTime);
     const timestepSeconds = Number(raw.engine?.timestepSeconds);
+    const modelSha256 = String(raw.model?.sha256 || '').toLowerCase();
     if (!Number.isFinite(simulationTimeSeconds) || simulationTimeSeconds < 0) throw new Error('MuJoCo returned invalid simulation time');
     if (!Number.isFinite(timestepSeconds) || timestepSeconds <= 0) throw new Error('MuJoCo returned invalid timestep');
+    if (!/^[0-9a-f]{64}$/.test(modelSha256)) throw new Error('MuJoCo worker did not provide a valid model SHA-256');
     return {
       schemaVersion: PHYSICS_BACKEND_API_VERSION,
       sessionId: this.sessionId,
@@ -249,6 +257,11 @@ export class BrowserMuJoCoBackend {
       view,
       robotId: this.robotId,
       frames: { world: structuredClone(WORLD_FRAME) },
+      model: {
+        id: String(raw.model?.id || ''),
+        asset: String(raw.model?.asset || ''),
+        sha256: modelSha256,
+      },
       engine: {
         name: 'MuJoCo',
         version: raw.engine?.version == null ? null : String(raw.engine.version),
