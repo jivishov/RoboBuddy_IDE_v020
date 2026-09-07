@@ -4,6 +4,8 @@ const DEFAULT_MODEL_URL = new URL('../../models/vertical-slice/model.xml', impor
 const MUJOCO_BASE_URL = new URL('../../assets/microduck/runtime/mujoco/', import.meta.url);
 const EXPECTED_MUJOCO_VERSION = '3.11.0';
 const EXPECTED_TIMESTEP_SECONDS = 0.002;
+const MODEL_ID = 'phase1-vertical-slice-v1';
+const MODEL_ASSET = 'models/vertical-slice/model.xml';
 const MAX_STEP_BATCH = 100000;
 
 let mujoco = null;
@@ -22,6 +24,12 @@ async function ensureMuJoCo() {
   if (mujoco) return mujoco;
   mujoco = await loadMujoco({ locateFile: (path) => new URL(path, MUJOCO_BASE_URL).href });
   return mujoco;
+}
+
+async function sha256Text(text) {
+  if (!crypto?.subtle) throw new Error('Web Crypto is required to identify the Phase 1 model bytes');
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
 function enumValue(name) {
@@ -54,7 +62,7 @@ function runtimeVersionEvidence() {
   return { version, evidence: 'mj_versionString runtime introspection' };
 }
 
-function resolveModelAddresses() {
+function resolveModelAddresses(modelSha256) {
   ids = {
     hinge: idFor('mjOBJ_JOINT', 'hinge'),
     actuator: idFor('mjOBJ_ACTUATOR', 'hinge_position'),
@@ -81,6 +89,7 @@ function resolveModelAddresses() {
   }
   const version = runtimeVersionEvidence();
   modelInfo = {
+    modelSha256,
     engineVersion: version.version,
     engineVersionEvidence: version.evidence,
     timestepSeconds,
@@ -126,12 +135,17 @@ function readContacts() {
 
 function observation() {
   if (!model || !data || !ids || !addresses || !modelInfo) {
-    return { simulationTime: 0, engine: null, joints: {}, bodies: {}, contactCount: 0, contactsReadable: false, contacts: [] };
+    return { simulationTime: 0, model: null, engine: null, joints: {}, bodies: {}, contactCount: 0, contactsReadable: false, contacts: [] };
   }
   const bodyOffset = ids.freeBoxBody * 3;
   const contactState = readContacts();
   return {
     simulationTime: Number(data.time || 0),
+    model: {
+      id: MODEL_ID,
+      asset: MODEL_ASSET,
+      sha256: modelInfo.modelSha256,
+    },
     engine: {
       version: modelInfo.engineVersion,
       versionEvidence: modelInfo.engineVersionEvidence,
@@ -182,11 +196,12 @@ async function load(url = DEFAULT_MODEL_URL) {
     if (!response.ok) throw new Error(`MuJoCo model returned HTTP ${response.status}`);
     return response.text();
   });
+  const modelSha256 = await sha256Text(xml);
   model = mj.from_xml_string(xml);
   if (!model) throw new Error('MuJoCo failed to compile the Phase 1 model');
   data = new mj.MjData(model);
   if (!data) throw new Error('MuJoCo failed to allocate Phase 1 data');
-  resolveModelAddresses();
+  resolveModelAddresses(modelSha256);
   paused = false;
   mj.mj_forward(model, data);
   return observation();
