@@ -1,5 +1,7 @@
+import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
+
 const DEFAULT_MODEL_URL = new URL('../../models/vertical-slice/model.xml', import.meta.url).href;
-const MUJOCO_MODULE_URL = new URL('../../assets/microduck/runtime/mujoco/mujoco.js', import.meta.url).href;
+const MUJOCO_BASE_URL = new URL('../../assets/microduck/runtime/mujoco/', import.meta.url);
 
 let mujoco = null;
 let model = null;
@@ -13,9 +15,7 @@ function reply(id, ok, payload = null, error = null) {
 
 async function ensureMuJoCo() {
   if (mujoco) return mujoco;
-  const module = await import(MUJOCO_MODULE_URL);
-  const factory = module.default || module.Mujoco || module;
-  mujoco = typeof factory === 'function' ? await factory() : factory;
+  mujoco = await loadMujoco({ locateFile: (path) => new URL(path, MUJOCO_BASE_URL).href });
   return mujoco;
 }
 
@@ -26,18 +26,8 @@ function disposeModel() {
   model = null;
 }
 
-function findName(type, name) {
-  if (!model || !mujoco?.mjtObj) return -1;
-  return mujoco.mj_name2id(model, mujoco.mjtObj[type], name);
-}
-
 function observation() {
   if (!model || !data) return { simulationTime: 0, joints: {}, bodies: {}, contacts: [] };
-  const hingeId = findName('mjOBJ_JOINT', 'hinge');
-  const boxId = findName('mjOBJ_BODY', 'free_box');
-  const qadr = hingeId >= 0 ? model.jnt_qposadr[hingeId] : -1;
-  const dadr = hingeId >= 0 ? model.jnt_dofadr[hingeId] : -1;
-  const boxBase = boxId >= 0 ? boxId * 3 : -1;
   const contacts = [];
   const ncon = Number(data.ncon || 0);
   for (let i = 0; i < ncon; i += 1) {
@@ -49,15 +39,19 @@ function observation() {
     simulationTime: Number(data.time || 0),
     joints: {
       hinge: {
-        positionRad: qadr >= 0 ? Number(data.qpos[qadr]) : null,
-        velocityRadS: dadr >= 0 ? Number(data.qvel[dadr]) : null,
+        positionRad: Number(data.qpos?.[0] ?? 0),
+        velocityRadS: Number(data.qvel?.[0] ?? 0),
         targetRad: data.ctrl?.length ? Number(data.ctrl[0]) : null,
       },
     },
     bodies: {
-      free_box: boxBase >= 0 ? {
-        positionM: [Number(data.xpos[boxBase]), Number(data.xpos[boxBase + 1]), Number(data.xpos[boxBase + 2])],
-      } : null,
+      free_box: {
+        positionM: [
+          Number(data.qpos?.[1] ?? 0),
+          Number(data.qpos?.[2] ?? 0),
+          Number(data.qpos?.[3] ?? 0),
+        ],
+      },
     },
     contacts,
   };
@@ -71,10 +65,7 @@ async function load(url = DEFAULT_MODEL_URL) {
     if (!r.ok) throw new Error(`MuJoCo model returned HTTP ${r.status}`);
     return r.text();
   });
-  const filename = '/robobuddy_vertical_slice.xml';
-  try { mj.FS.unlink(filename); } catch {}
-  mj.FS.writeFile(filename, xml);
-  model = mj.MjModel.loadFromXML(filename);
+  model = mj.from_xml_string(xml);
   data = new mj.MjData(model);
   paused = false;
   mj.mj_forward(model, data);
