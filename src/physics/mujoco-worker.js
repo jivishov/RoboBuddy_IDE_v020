@@ -2,6 +2,7 @@ import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
 
 const DEFAULT_MODEL_URL = new URL('../../models/vertical-slice/model.xml', import.meta.url).href;
 const MUJOCO_BASE_URL = new URL('../../assets/microduck/runtime/mujoco/', import.meta.url);
+const EXPECTED_MUJOCO_VERSION = '3.11.0';
 const EXPECTED_TIMESTEP_SECONDS = 0.002;
 const MAX_STEP_BATCH = 100000;
 
@@ -42,6 +43,17 @@ function nameForGeom(id) {
   catch { return null; }
 }
 
+function runtimeVersionEvidence() {
+  if (typeof mujoco?.mj_versionString !== 'function') {
+    return { version: EXPECTED_MUJOCO_VERSION, evidence: 'bundled asset manifest and repository hash gate' };
+  }
+  const version = String(mujoco.mj_versionString());
+  if (version !== EXPECTED_MUJOCO_VERSION) {
+    throw new Error(`Bundled MuJoCo runtime reports ${version}; expected ${EXPECTED_MUJOCO_VERSION}`);
+  }
+  return { version, evidence: 'mj_versionString runtime introspection' };
+}
+
 function resolveModelAddresses() {
   ids = {
     hinge: idFor('mjOBJ_JOINT', 'hinge'),
@@ -67,8 +79,10 @@ function resolveModelAddresses() {
   if (!Number.isFinite(timestepSeconds) || Math.abs(timestepSeconds - EXPECTED_TIMESTEP_SECONDS) > 1e-12) {
     throw new Error(`Unexpected Phase 1 timestep ${timestepSeconds}; expected ${EXPECTED_TIMESTEP_SECONDS}`);
   }
+  const version = runtimeVersionEvidence();
   modelInfo = {
-    engineVersion: typeof mujoco.mj_versionString === 'function' ? String(mujoco.mj_versionString()) : null,
+    engineVersion: version.version,
+    engineVersionEvidence: version.evidence,
     timestepSeconds,
     controlRange,
     jointRange,
@@ -120,6 +134,7 @@ function observation() {
     simulationTime: Number(data.time || 0),
     engine: {
       version: modelInfo.engineVersion,
+      versionEvidence: modelInfo.engineVersionEvidence,
       timestepSeconds: modelInfo.timestepSeconds,
     },
     joints: {
@@ -133,6 +148,7 @@ function observation() {
     },
     bodies: {
       free_box: {
+        frame: 'mujoco_world',
         positionM: [
           Number(data.xpos[bodyOffset]),
           Number(data.xpos[bodyOffset + 1]),
