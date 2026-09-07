@@ -2,6 +2,13 @@ import { assertPhysicsBackend, PHYSICS_BACKEND_API_VERSION, PhysicsBackendState 
 
 const MAX_TRACE_EVENTS = 512;
 const MAX_STEP_BATCH = 100000;
+const WORLD_FRAME = Object.freeze({
+  id: 'mujoco_world',
+  handedness: 'right-handed',
+  upAxis: '+Z',
+  linearUnit: 'm',
+  angularUnit: 'rad',
+});
 
 export class BrowserMuJoCoBackend {
   constructor({ workerUrl = new URL('./mujoco-worker.js', import.meta.url), modelUrl = new URL('../../models/vertical-slice/model.xml', import.meta.url) } = {}) {
@@ -37,12 +44,13 @@ export class BrowserMuJoCoBackend {
     this.commandBudget = null;
     const generation = ++this.generation;
     try {
-      const observation = await this.#call('load', { modelUrl: this.modelUrl.href });
+      const raw = await this.#call('load', { modelUrl: this.modelUrl.href });
       this.#assertGeneration(generation, context);
       this.loaded = true;
       this.sceneRevision = String(scene.revision);
       this.robotId = String(scene.robotId);
       this.lastScene = { revision: this.sceneRevision, robotId: this.robotId, modelUrl: this.modelUrl.href };
+      const observation = this.#decorateObservation(raw);
       this.lastObservation = observation;
       this.state = PhysicsBackendState.READY;
       this.#record('loadScene', { observation });
@@ -58,8 +66,9 @@ export class BrowserMuJoCoBackend {
     this.#adoptNewEpoch(context);
     this.commandBudget = null;
     const generation = ++this.generation;
-    const observation = await this.#call('reset');
+    const raw = await this.#call('reset');
     this.#assertGeneration(generation, context);
+    const observation = this.#decorateObservation(raw);
     this.lastObservation = observation;
     this.state = PhysicsBackendState.READY;
     this.#record('reset', { observation });
@@ -76,8 +85,9 @@ export class BrowserMuJoCoBackend {
       throw new RangeError('Phase 1 set_joint_target requires a positive maxSteps budget');
     }
     const generation = this.generation;
-    const observation = await this.#call('command', envelope.command);
+    const raw = await this.#call('command', envelope.command);
     this.#assertGeneration(generation, envelope);
+    const observation = this.#decorateObservation(raw);
     this.lastObservation = observation;
     this.commandBudget = Number.isInteger(envelope.maxSteps)
       ? { commandId: envelope.commandId, remainingSteps: envelope.maxSteps }
@@ -105,8 +115,9 @@ export class BrowserMuJoCoBackend {
     const generation = this.generation;
     this.state = PhysicsBackendState.RUNNING;
     try {
-      const observation = await this.#call('step', { count: stepCount });
+      const raw = await this.#call('step', { count: stepCount });
       this.#assertGeneration(generation, context);
+      const observation = this.#decorateObservation(raw);
       this.lastObservation = observation;
       if (this.commandBudget) this.commandBudget.remainingSteps -= stepCount;
       this.state = PhysicsBackendState.READY;
@@ -126,9 +137,12 @@ export class BrowserMuJoCoBackend {
   async getObservation(context = {}) {
     this.#assertLoaded();
     this.#assertContext(context);
+    const requestedView = context.view ?? 'ground_truth';
+    if (requestedView !== 'ground_truth') throw new Error(`Observation view ${requestedView} is unsupported by the Phase 1 slice`);
     const generation = this.generation;
-    const observation = await this.#call('observe');
+    const raw = await this.#call('observe');
     this.#assertGeneration(generation, context);
+    const observation = this.#decorateObservation(raw, requestedView);
     this.lastObservation = observation;
     return observation;
   }
@@ -146,7 +160,9 @@ export class BrowserMuJoCoBackend {
       pendingRequests: this.pending.size,
       workerActive: Boolean(this.worker),
       engineVersion: this.lastObservation?.engine?.version || null,
+      engineVersionEvidence: this.lastObservation?.engine?.versionEvidence || null,
       timestepSeconds: this.lastObservation?.engine?.timestepSeconds ?? null,
+      worldFrame: structuredClone(WORLD_FRAME),
       activeCommandId: this.commandBudget?.commandId ?? null,
       remainingCommandSteps: this.commandBudget?.remainingSteps ?? null,
       traceEvents: this.trace.length,
@@ -157,8 +173,9 @@ export class BrowserMuJoCoBackend {
     this.#assertLoaded();
     this.#assertContext(context);
     const generation = this.generation;
-    const observation = await this.#call('pause');
+    const raw = await this.#call('pause');
     this.#assertGeneration(generation, context);
+    const observation = this.#decorateObservation(raw);
     this.lastObservation = observation;
     this.state = PhysicsBackendState.PAUSED;
     this.#record('pause', { observation });
@@ -169,8 +186,9 @@ export class BrowserMuJoCoBackend {
     this.#assertLoaded();
     this.#assertContext(context);
     const generation = this.generation;
-    const observation = await this.#call('resume');
+    const raw = await this.#call('resume');
     this.#assertGeneration(generation, context);
+    const observation = this.#decorateObservation(raw);
     this.lastObservation = observation;
     this.state = PhysicsBackendState.READY;
     this.#record('resume', { observation });
@@ -218,6 +236,34 @@ export class BrowserMuJoCoBackend {
     this.commandBudget = null;
   }
 
+  #decorateObservation(raw = {}, view = 'ground_truth') {
+    const simulationTimeSeconds = Number(raw.simulationTime);
+    const timestepSeconds = Number(raw.engine?.timestepSeconds);
+    if (!Number.isFinite(simulationTimeSeconds) || simulationTimeSeconds < 0) throw new Error('MuJoCo returned invalid simulation time');
+    if (!Number.isFinite(timestepSeconds) || timestepSeconds <= 0) throw new Error('MuJoCo returned invalid timestep');
+    return {
+      schemaVersion: PHYSICS_BACKEND_API_VERSION,
+      sessionId: this.sessionId,
+      epoch: this.epoch,
+      simulationTimeSeconds,
+      view,
+      robotId: this.robotId,
+      frames: { world: structuredClone(WORLD_FRAME) },
+      engine: {
+        name: 'MuJoCo',
+        version: raw.engine?.version == null ? null : String(raw.engine.version),
+        versionEvidence: String(raw.engine?.versionEvidence || 'unknown'),
+        timestepSeconds,
+      },
+      joints: structuredClone(raw.joints || {}),
+      bodies: structuredClone(raw.bodies || {}),
+      contactCount: Math.max(0, Number(raw.contactCount) || 0),
+      contactsReadable: Boolean(raw.contactsReadable),
+      contacts: structuredClone(Array.isArray(raw.contacts) ? raw.contacts : []),
+      sensors: {},
+    };
+  }
+
   #spawn() {
     this.worker = new Worker(this.workerUrl, { type: 'module', name: 'robobuddy-mujoco-physics' });
     this.worker.onmessage = ({ data }) => {
@@ -249,7 +295,7 @@ export class BrowserMuJoCoBackend {
       epoch: this.epoch,
       sceneRevision: this.sceneRevision,
       robotId: this.robotId,
-      simulationTime: details.observation?.simulationTime ?? this.lastObservation?.simulationTime ?? null,
+      simulationTimeSeconds: details.observation?.simulationTimeSeconds ?? this.lastObservation?.simulationTimeSeconds ?? null,
       ...details,
     });
     if (this.trace.length > MAX_TRACE_EVENTS) this.trace.splice(0, this.trace.length - MAX_TRACE_EVENTS);
