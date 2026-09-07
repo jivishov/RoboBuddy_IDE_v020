@@ -75,37 +75,37 @@ function resolveModelAddresses() {
   };
 }
 
-function contactAt(index) {
-  const collection = data?.contact;
-  if (!collection) return null;
-  if (typeof collection.get === 'function') return collection.get(index);
-  if (typeof collection.at === 'function') return collection.at(index);
-  return collection[index] ?? null;
-}
-
 function readContacts() {
   const count = Number(data?.ncon || 0);
   const contacts = [];
   let readable = true;
-  for (let index = 0; index < count; index += 1) {
-    const contact = contactAt(index);
-    if (!contact) {
-      readable = false;
-      continue;
+  const collection = data?.contact;
+  if (!collection) return { count, readable: count === 0, contacts };
+  try {
+    const available = typeof collection.size === 'function' ? Number(collection.size()) : count;
+    if (available < count) readable = false;
+    for (let index = 0; index < Math.min(count, available); index += 1) {
+      const contact = typeof collection.get === 'function' ? collection.get(index) : collection[index];
+      if (!contact) {
+        readable = false;
+        continue;
+      }
+      try {
+        const geom1 = Number(contact.geom?.[0] ?? contact.geom1 ?? -1);
+        const geom2 = Number(contact.geom?.[1] ?? contact.geom2 ?? -1);
+        contacts.push({
+          geom1,
+          geom2,
+          geom1Name: nameForGeom(geom1),
+          geom2Name: nameForGeom(geom2),
+          distanceM: Number(contact.dist ?? 0),
+        });
+      } finally {
+        contact.delete?.();
+      }
     }
-    try {
-      const geom1 = Number(contact.geom?.[0] ?? contact.geom1 ?? -1);
-      const geom2 = Number(contact.geom?.[1] ?? contact.geom2 ?? -1);
-      contacts.push({
-        geom1,
-        geom2,
-        geom1Name: nameForGeom(geom1),
-        geom2Name: nameForGeom(geom2),
-        distanceM: Number(contact.dist ?? 0),
-      });
-    } finally {
-      contact.delete?.();
-    }
+  } finally {
+    collection.delete?.();
   }
   return { count, readable, contacts };
 }
