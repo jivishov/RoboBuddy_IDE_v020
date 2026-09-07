@@ -29,16 +29,22 @@ export function assertPhysicsBackend(backend) {
   return backend;
 }
 
-export function makeCommandEnvelope({ sessionId, epoch, commandId, sceneRevision, robotId, command, maxSteps }) {
-  if (!sessionId || !commandId || !robotId || !command?.type) throw new TypeError('Incomplete physics command envelope');
+export function makeCommandEnvelope({ sessionId, epoch, commandId, sceneRevision, robotId, command, maxSteps = null }) {
+  if (!sessionId || !commandId || !sceneRevision || !robotId || !command?.type) {
+    throw new TypeError('Incomplete physics command envelope');
+  }
+  if (!Number.isInteger(epoch) || epoch < 1) throw new RangeError('Physics command epoch must be a positive integer');
+  if (maxSteps != null && (!Number.isInteger(maxSteps) || maxSteps < 1)) {
+    throw new RangeError('maxSteps must be null or a positive integer');
+  }
   return Object.freeze({
     schemaVersion: PHYSICS_BACKEND_API_VERSION,
-    sessionId,
+    sessionId: String(sessionId),
     epoch,
-    commandId,
-    sceneRevision,
-    robotId,
+    commandId: String(commandId),
+    sceneRevision: String(sceneRevision),
+    robotId: String(robotId),
     command: structuredClone(command),
-    maxSteps: Number.isFinite(maxSteps) ? Math.max(1, Math.floor(maxSteps)) : null,
+    maxSteps,
   });
 }
