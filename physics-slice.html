@@ -27,7 +27,7 @@
 <body>
 <main>
   <h1>RoboBuddy IDE — Phase 1 Physics Slice</h1>
-  <p>Isolated browser MuJoCo validation harness. It does not replace any production robot workspace.</p>
+  <p>Isolated browser MuJoCo diagnostic harness. It is not hardware validation and is not browser/native conformance evidence by itself.</p>
   <div id="status" class="status">Not loaded</div>
   <div class="controls">
     <button id="load">Load scene</button>
@@ -42,12 +42,15 @@
     <section>
       <h2>Live observation</h2>
       <dl class="metric">
+        <dt>MuJoCo version</dt><dd id="engineVersion">—</dd>
+        <dt>Physics timestep</dt><dd id="timestep">—</dd>
         <dt>Simulation time</dt><dd id="time">—</dd>
         <dt>Hinge position</dt><dd id="position">—</dd>
         <dt>Hinge velocity</dt><dd id="velocity">—</dd>
         <dt>Hinge target</dt><dd id="target">—</dd>
         <dt>Free box position</dt><dd id="box">—</dd>
-        <dt>Contact count</dt><dd id="contacts">—</dd>
+        <dt>MuJoCo contact count</dt><dd id="contacts">—</dd>
+        <dt>Contact pairs readable</dt><dd id="contactsReadable">—</dd>
       </dl>
     </section>
     <section>
@@ -66,12 +69,15 @@
 
   function renderObservation(obs) {
     const hinge = obs?.joints?.hinge || {};
+    $('engineVersion').textContent = obs?.engine?.version || 'unknown';
+    $('timestep').textContent = obs?.engine?.timestepSeconds == null ? '—' : Number(obs.engine.timestepSeconds).toFixed(6) + ' s';
     $('time').textContent = Number(obs?.simulationTime ?? 0).toFixed(4) + ' s';
     $('position').textContent = Number(hinge.positionRad ?? 0).toFixed(5) + ' rad';
     $('velocity').textContent = Number(hinge.velocityRadS ?? 0).toFixed(5) + ' rad/s';
     $('target').textContent = hinge.targetRad == null ? '—' : Number(hinge.targetRad).toFixed(5) + ' rad';
     $('box').textContent = Array.isArray(obs?.bodies?.free_box?.positionM) ? obs.bodies.free_box.positionM.map((v) => Number(v).toFixed(4)).join(', ') + ' m' : '—';
-    $('contacts').textContent = String(obs?.contacts?.length ?? 0);
+    $('contacts').textContent = String(obs?.contactCount ?? 0);
+    $('contactsReadable').textContent = obs?.contactsReadable === true ? 'yes' : obs?.contactsReadable === false ? 'no' : '—';
   }
 
   async function renderDiagnostics() {
@@ -82,7 +88,7 @@
     $('status').textContent = label + '…';
     try {
       const result = await fn();
-      const obs = result?.observation || result;
+      const obs = result?.observation || result?.result || result;
       if (obs?.simulationTime != null) renderObservation(obs);
       await renderDiagnostics();
       $('status').textContent = label + ' complete';
