@@ -4,7 +4,7 @@
   "title": "RoboBuddy physical observation",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "sessionId", "epoch", "simulationTimeSeconds", "view", "robotId", "frames", "joints", "bodies", "contacts"],
+  "required": ["schemaVersion", "sessionId", "epoch", "simulationTimeSeconds", "view", "robotId", "frames", "model", "engine", "joints", "bodies", "contacts"],
   "properties": {
     "schemaVersion": { "const": "0.2.0-alpha.1" },
     "sessionId": { "type": "string", "minLength": 1 },
@@ -31,10 +31,20 @@
         }
       }
     },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "asset", "sha256"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "asset": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
     "engine": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version", "timestepSeconds"],
+      "required": ["name", "version", "versionEvidence", "timestepSeconds"],
       "properties": {
         "name": { "const": "MuJoCo" },
         "version": { "type": ["string", "null"] },
