@@ -42,7 +42,11 @@
     <section>
       <h2>Live observation</h2>
       <dl class="metric">
+        <dt>Observation schema</dt><dd id="schemaVersion">—</dd>
+        <dt>Observation view</dt><dd id="view">—</dd>
+        <dt>World frame</dt><dd id="worldFrame">—</dd>
         <dt>MuJoCo version</dt><dd id="engineVersion">—</dd>
+        <dt>Version evidence</dt><dd id="versionEvidence">—</dd>
         <dt>Physics timestep</dt><dd id="timestep">—</dd>
         <dt>Simulation time</dt><dd id="time">—</dd>
         <dt>Hinge position</dt><dd id="position">—</dd>
@@ -69,10 +73,16 @@
   const COMMAND_STEP_BUDGET = 500;
 
   function renderObservation(obs) {
+    window.__phase1Observation = structuredClone(obs);
     const hinge = obs?.joints?.hinge || {};
+    const world = obs?.frames?.world || {};
+    $('schemaVersion').textContent = obs?.schemaVersion || '—';
+    $('view').textContent = obs?.view || '—';
+    $('worldFrame').textContent = world.id ? `${world.id} · ${world.handedness} · ${world.upAxis}` : '—';
     $('engineVersion').textContent = obs?.engine?.version || 'unknown';
+    $('versionEvidence').textContent = obs?.engine?.versionEvidence || 'unknown';
     $('timestep').textContent = obs?.engine?.timestepSeconds == null ? '—' : Number(obs.engine.timestepSeconds).toFixed(6) + ' s';
-    $('time').textContent = Number(obs?.simulationTime ?? 0).toFixed(4) + ' s';
+    $('time').textContent = Number(obs?.simulationTimeSeconds ?? 0).toFixed(4) + ' s';
     $('position').textContent = Number(hinge.positionRad ?? 0).toFixed(5) + ' rad';
     $('velocity').textContent = Number(hinge.velocityRadS ?? 0).toFixed(5) + ' rad/s';
     $('target').textContent = hinge.targetRad == null ? '—' : Number(hinge.targetRad).toFixed(5) + ' rad';
@@ -82,7 +92,9 @@
   }
 
   async function renderDiagnostics() {
-    $('diagnostics').textContent = JSON.stringify(await session.getDiagnostics(), null, 2);
+    const diagnostics = await session.getDiagnostics();
+    window.__phase1Diagnostics = structuredClone(diagnostics);
+    $('diagnostics').textContent = JSON.stringify(diagnostics, null, 2);
   }
 
   async function run(label, fn) {
@@ -90,7 +102,7 @@
     try {
       const result = await fn();
       const obs = result?.observation || result?.result || result;
-      if (obs?.simulationTime != null) renderObservation(obs);
+      if (obs?.simulationTimeSeconds != null) renderObservation(obs);
       await renderDiagnostics();
       $('status').textContent = label + ' complete';
     } catch (error) {
