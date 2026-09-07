@@ -91,7 +91,9 @@ jobs:
           result = json.loads(Path('/tmp/robobuddy-native-reference.json').read_text())
           assert result['engine']['version'] == '3.11.0'
           assert abs(result['engine']['timestepSeconds'] - 0.002) < 1e-12
-          assert abs(result['simulationTime'] - 1.0) < 1e-9
+          assert abs(result['simulationTimeSeconds'] - 1.0) < 1e-9
+          assert len(result['model']['sha256']) == 64
+          assert result['frames']['world']['id'] == 'mujoco_world'
           assert result['bodies']['free_box']['positionM'][2] < 1.0
           assert result['contactCount'] > 0
           print('Native Phase 1 reference: OK')
