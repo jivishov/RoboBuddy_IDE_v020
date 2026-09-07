@@ -31,9 +31,9 @@
   <div id="status" class="status">Not loaded</div>
   <div class="controls">
     <button id="load">Load scene</button>
-    <button id="left">Target -0.8 rad</button>
-    <button id="center">Target 0 rad</button>
-    <button id="right">Target +0.8 rad</button>
+    <button id="left">Target -0.8 rad · 500 steps</button>
+    <button id="center">Target 0 rad · 500 steps</button>
+    <button id="right">Target +0.8 rad · 500 steps</button>
     <button id="step100">Advance 100 steps</button>
     <button id="step500">Advance 500 steps</button>
     <button id="reset">Reset</button>
@@ -66,6 +66,7 @@
   const $ = (id) => document.getElementById(id);
   const backend = new BrowserMuJoCoBackend();
   const session = new PhysicsSession(backend, { sessionId: 'phase1-browser-slice' });
+  const COMMAND_STEP_BUDGET = 500;
 
   function renderObservation(obs) {
     const hinge = obs?.joints?.hinge || {};
@@ -98,13 +99,18 @@
     }
   }
 
+  const targetCommand = (targetRad) => session.sendCommand(
+    { type: 'set_joint_target', targetRad },
+    { maxSteps: COMMAND_STEP_BUDGET },
+  );
+
   $('load').onclick = () => run('Load scene', () => session.loadScene({
     revision: 'phase1-vertical-slice-v1',
     robotId: 'phase1_articulated_joint',
   }));
-  $('left').onclick = () => run('Set target -0.8 rad', () => session.sendCommand({ type: 'set_joint_target', targetRad: -0.8 }));
-  $('center').onclick = () => run('Set target 0 rad', () => session.sendCommand({ type: 'set_joint_target', targetRad: 0 }));
-  $('right').onclick = () => run('Set target +0.8 rad', () => session.sendCommand({ type: 'set_joint_target', targetRad: 0.8 }));
+  $('left').onclick = () => run('Set target -0.8 rad', () => targetCommand(-0.8));
+  $('center').onclick = () => run('Set target 0 rad', () => targetCommand(0));
+  $('right').onclick = () => run('Set target +0.8 rad', () => targetCommand(0.8));
   $('step100').onclick = () => run('Advance 100 steps', () => session.advanceSteps(100));
   $('step500').onclick = () => run('Advance 500 steps', () => session.advanceSteps(500));
   $('reset').onclick = () => run('Reset', () => session.reset());
