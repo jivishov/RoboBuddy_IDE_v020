@@ -1,4 +1,4 @@
-import { assertPhysicalBackend } from './backend-contract.js';
+import { assertPhysicsBackend } from './backend-contract.js';
 
 export class BrowserMuJoCoBackend {
   constructor({ workerUrl = new URL('./mujoco-worker.js', import.meta.url), modelUrl = new URL('../../models/vertical-slice/model.xml', import.meta.url) } = {}) {
@@ -9,55 +9,91 @@ export class BrowserMuJoCoBackend {
     this.pending = new Map();
     this.loaded = false;
     this.disposed = false;
+    this.sceneRevision = null;
+    this.robotId = null;
+    this.lastObservation = null;
   }
 
-  async load() {
+  async loadScene(scene = {}) {
     if (this.disposed) throw new Error('Backend is disposed');
     if (!this.worker) this.#spawn();
-    const state = await this.#call('load', { modelUrl: this.modelUrl.href });
+    const state = await this.#call('load', { modelUrl: scene.modelUrl || this.modelUrl.href });
     this.loaded = true;
-    return state;
+    this.sceneRevision = scene.revision || 'phase1-vertical-slice-v1';
+    this.robotId = scene.robotId || 'phase1_articulated_joint';
+    this.lastObservation = state;
+    return { sceneRevision: this.sceneRevision, robotId: this.robotId, observation: state };
   }
 
   async reset() {
     this.#assertLoaded();
-    return this.#call('reset');
+    this.lastObservation = await this.#call('reset');
+    return this.lastObservation;
   }
 
-  async command(command) {
+  async acceptCommand(envelope) {
     this.#assertLoaded();
-    return this.#call('command', command);
+    if (envelope?.sceneRevision && this.sceneRevision && envelope.sceneRevision !== this.sceneRevision) {
+      throw new Error('Stale scene revision');
+    }
+    if (envelope?.robotId && this.robotId && envelope.robotId !== this.robotId) {
+      throw new Error('Command robot does not match loaded scene');
+    }
+    this.lastObservation = await this.#call('command', envelope.command);
+    return { status: 'accepted', commandId: envelope.commandId, observation: this.lastObservation };
   }
 
-  async step(stepCount = 1) {
+  async advanceSteps(stepCount = 1) {
     this.#assertLoaded();
-    return this.#call('step', { count: stepCount });
+    this.lastObservation = await this.#call('step', { count: stepCount });
+    return this.lastObservation;
   }
 
-  async observe() {
+  async getObservation() {
     this.#assertLoaded();
-    return this.#call('observe');
+    this.lastObservation = await this.#call('observe');
+    return this.lastObservation;
+  }
+
+  async getDiagnostics() {
+    return {
+      backend: 'browser-mujoco',
+      loaded: this.loaded,
+      sceneRevision: this.sceneRevision,
+      robotId: this.robotId,
+      pendingRequests: this.pending.size,
+      workerActive: Boolean(this.worker),
+    };
   }
 
   async pause() {
     this.#assertLoaded();
-    return this.#call('pause');
+    this.lastObservation = await this.#call('pause');
+    return this.lastObservation;
   }
 
   async resume() {
     this.#assertLoaded();
-    return this.#call('resume');
+    this.lastObservation = await this.#call('resume');
+    return this.lastObservation;
   }
 
-  async cancel() {
+  async cancelRun() {
     if (!this.worker) return false;
     this.#terminate('cancelled');
     this.loaded = false;
+    this.lastObservation = null;
     return true;
   }
 
   async exportTrace() {
-    return { backend: 'browser-mujoco', phase: 'vertical-slice', observation: this.loaded ? await this.observe() : null };
+    return {
+      backend: 'browser-mujoco',
+      phase: 'vertical-slice',
+      sceneRevision: this.sceneRevision,
+      robotId: this.robotId,
+      observation: this.loaded ? await this.getObservation() : this.lastObservation,
+    };
   }
 
   async dispose() {
@@ -68,6 +104,7 @@ export class BrowserMuJoCoBackend {
       this.#terminate('disposed');
     }
     this.loaded = false;
+    this.lastObservation = null;
   }
 
   #spawn() {
@@ -104,4 +141,4 @@ export class BrowserMuJoCoBackend {
   }
 }
 
-assertPhysicalBackend(new BrowserMuJoCoBackend());
+assertPhysicsBackend(new BrowserMuJoCoBackend());
