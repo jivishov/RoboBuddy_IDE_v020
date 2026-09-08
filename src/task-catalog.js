@@ -1,3 +1,6 @@
+import { OPENARM_PHASE5A_CONTROLLER, OPENARM_PHASE5A_SCENE } from './physics/openarm-scene.js';
+import { OPENARM_PHASE5A_MODEL_PACKAGE } from './physics/openarm-model-package.js';
+
 export const TASK_PATCH_REVISION = '75fe2669c0ab0b029986de424c69162071174df8';
 export const TASK_PATCH_SOURCE = 'jivishov/RoboBuddy_AI';
 
@@ -11,7 +14,7 @@ const task = (profileId, family, file, id, title, robotId) => Object.freeze({
 
 export const PATCH_TASKS = Object.freeze({
   openarm: Object.freeze([
-    task('openarm', 'openarm', 'openarm-04-filtration-workcell.json', 'openarm-04-filtration-workcell', 'Bimanual Heater and Ring-Stand Stack', 'openarm_v2_bimanual'),
+    Object.freeze({ profileId: 'openarm', family: 'openarm', file: 'openarm-04-filtration-workcell.json', id: 'openarm-04-filtration-workcell-legacy', sourceScenarioId: 'openarm-04-filtration-workcell', title: 'Bimanual Heater and Ring-Stand Stack', robotId: 'openarm_v2_bimanual', url: `${ROOT}/openarm/openarm-04-filtration-workcell.json` }),
   ]),
   // These legacy SO-101 definitions remain read-only provenance/regression fixtures.
   // They are deliberately not returned by tasksForProfile('so101') in the physical version.
@@ -23,6 +26,13 @@ export const PATCH_TASKS = Object.freeze({
   lekiwi: Object.freeze([
     task('lekiwi', 'lekiwi', 'lekiwi-01-beaker-courier.json', 'lekiwi-01-beaker-courier', 'Beaker Courier', 'lekiwi_sim'),
   ]),
+});
+
+export const OPENARM_LEGACY_TASK_CLASSIFICATION = Object.freeze({
+  'openarm-04-filtration-workcell-legacy': Object.freeze({
+    classification: 'LEGACY_REFERENCE_ONLY',
+    reason: 'The pinned source-plant mission remains useful as task-objective, authored-layout, and regression evidence, but its kinematic attachedTo object state and degree/mm execution cannot be used as Phase 5A physical authority.',
+  }),
 });
 
 export const SO101_LEGACY_TASK_CLASSIFICATION = Object.freeze({
@@ -40,6 +50,59 @@ export const SO101_LEGACY_TASK_CLASSIFICATION = Object.freeze({
   }),
 });
 
+const OPENARM_PHYSICAL_SCENARIO = Object.freeze({
+  schema: 'robobuddy.physical-workspace.v1',
+  schemaVersion: 1,
+  simulationMode: 'physical_mujoco',
+  workspaceRevision: 'openarm-v2-physical-bimanual-stack-v1',
+  id: 'openarm-04-filtration-workcell',
+  title: 'Bimanual Heater and Ring-Stand Stack',
+  brief: 'Program the OpenArm V2 bimanual robot to physically grasp an empty flask and an empty beaker as true free bodies, move them through one shared MuJoCo world, release the flask onto an unpowered hotplate and the beaker onto a ring-stand wire-gauze support, and retreat after stable support is observed. This is a dry rigid-body simulator benchmark, not heating, liquid, payload, or hardware validation.',
+  robotId: OPENARM_PHASE5A_MODEL_PACKAGE.robotId,
+  legacyTaskId: 'openarm-04-filtration-workcell',
+  physicalSceneId: OPENARM_PHASE5A_SCENE.id,
+  modelPackage: OPENARM_PHASE5A_MODEL_PACKAGE.id,
+  modelId: OPENARM_PHASE5A_MODEL_PACKAGE.modelId,
+  physicalApi: Object.freeze({ version: 'robobuddy.sim.v1', angleUnit: 'rad', timeUnit: 's', lengthUnit: 'm', timestepSeconds: 0.001 }),
+  canonicalModel: Object.freeze({
+    repository: 'jivishov/RoboBuddy_AI',
+    revision: UNITREE_G1_VISUAL_REVISION,
+    module: 'simulator/js/robot-mesh-data-openarm-v2.js',
+    sourceModel: 'OpenArm V2 canonical RoboBuddy presentation mesh',
+    authority: 'presentation-only; MuJoCo PhysicsSession is authoritative',
+  }),
+  frames: Object.freeze({
+    physics: 'MuJoCo right-handed Z-up world, metres/radians',
+    rendering: 'Three.js Y-up millimetres; the canonical OpenArm rig is aligned to the pinned V2 cell mount and consumes MuJoCo joint observations only',
+    mount: 'Pinned OpenArm V2 cell home mount x=0.185 m, z=1.340 m with source lifter fixed at q=0 for Phase 5A',
+  }),
+  portablePython: Object.freeze({
+    referenceActions: Object.freeze(OPENARM_PHASE5A_CONTROLLER.stages.map((stage) => Object.freeze({
+      label: stage.name,
+      hold_seconds: stage.durationSeconds,
+      targetsRad: stage.targetsRad,
+    }))),
+  }),
+  taskEvaluation: Object.freeze({
+    source: 'MuJoCo free-body poses/velocities and named finger/support geometry contacts',
+    requires: Object.freeze(['left flask grasp', 'left held lift/transport', 'hotplate support/release/stable rest/retreat', 'right beaker grasp after left completion', 'right held lift/transport', 'wire-gauze support/release/stable rest/retreat', 'both objects remain supported in final shared state']),
+    syntheticSuccessEvents: false,
+  }),
+  limitations: Object.freeze([...OPENARM_PHASE5A_MODEL_PACKAGE.limitations]),
+});
+
+export const OPENARM_PHYSICAL_TASKS = Object.freeze([
+  Object.freeze({
+    profileId: 'openarm',
+    id: OPENARM_PHYSICAL_SCENARIO.id,
+    title: OPENARM_PHYSICAL_SCENARIO.title,
+    robotId: OPENARM_PHYSICAL_SCENARIO.robotId,
+    simulationMode: OPENARM_PHYSICAL_SCENARIO.simulationMode,
+    physicalSceneId: OPENARM_PHYSICAL_SCENARIO.physicalSceneId,
+    modelPackage: OPENARM_PHYSICAL_SCENARIO.modelPackage,
+  }),
+]);
+
 const SO101_PHYSICAL_SCENARIO = Object.freeze({
   schema: 'robobuddy.physical-workspace.v1',
   schemaVersion: 1,
@@ -52,7 +115,7 @@ const SO101_PHYSICAL_SCENARIO = Object.freeze({
   physicalSceneId: 'p4-so101-benchmark-transfer',
   modelPackage: 'so101-manipulation-menagerie-8161bba-v1',
   modelId: 'robobuddy-so101-manipulation-v1',
-  physicalApi: Object.freeze({ version: 'robobuddy.sim.v1', angleUnit: 'rad', timeUnit: 's', lengthUnit: 'm' }),
+  physicalApi: Object.freeze({ version: 'robobuddy.sim.v1', angleUnit: 'rad', timeUnit: 's', lengthUnit: 'm', timestepSeconds: 0.005 }),
   canonicalModel: Object.freeze({
     repository: 'jivishov/RoboBuddy_AI',
     revision: UNITREE_G1_VISUAL_REVISION,
@@ -96,6 +159,7 @@ export const SO101_PHYSICAL_TASKS = Object.freeze([
     robotId: SO101_PHYSICAL_SCENARIO.robotId,
     simulationMode: SO101_PHYSICAL_SCENARIO.simulationMode,
     physicalSceneId: SO101_PHYSICAL_SCENARIO.physicalSceneId,
+    modelPackage: SO101_PHYSICAL_SCENARIO.modelPackage,
   }),
 ]);
 
@@ -123,48 +187,14 @@ const UNITREE_G1_RIG_SCENARIO = Object.freeze({
   }),
   portablePython: Object.freeze({
     referenceActions: Object.freeze([
-      Object.freeze({
-        label: 'Upper-body joint-pose inspection',
-        hold_seconds: 0.35,
-        action: Object.freeze({
-          waist_pitch_joint: 8,
-          left_shoulder_pitch_joint: -35, left_shoulder_roll_joint: 28, left_elbow_joint: 45, left_wrist_pitch_joint: -10,
-          right_shoulder_pitch_joint: -35, right_shoulder_roll_joint: -28, right_elbow_joint: 45, right_wrist_pitch_joint: -10,
-        }),
-      }),
-      Object.freeze({
-        label: 'Lower-body joint-pose inspection (root fixed)',
-        hold_seconds: 0.35,
-        action: Object.freeze({
-          left_hip_roll_joint: 8, left_knee_joint: 22, left_ankle_pitch_joint: -10,
-          right_hip_roll_joint: -8, right_knee_joint: 22, right_ankle_pitch_joint: -10,
-        }),
-      }),
-      Object.freeze({
-        label: 'Return inspected joints to neutral',
-        hold_seconds: 0.35,
-        action: Object.freeze({
-          waist_pitch_joint: 0,
-          left_shoulder_pitch_joint: 0, left_shoulder_roll_joint: 0, left_elbow_joint: 0, left_wrist_pitch_joint: 0,
-          right_shoulder_pitch_joint: 0, right_shoulder_roll_joint: 0, right_elbow_joint: 0, right_wrist_pitch_joint: 0,
-          left_hip_roll_joint: 0, left_knee_joint: 0, left_ankle_pitch_joint: 0,
-          right_hip_roll_joint: 0, right_knee_joint: 0, right_ankle_pitch_joint: 0,
-        }),
-      }),
+      Object.freeze({ label: 'Upper-body joint-pose inspection', hold_seconds: 0.35, action: Object.freeze({ waist_pitch_joint: 8, left_shoulder_pitch_joint: -35, left_shoulder_roll_joint: 28, left_elbow_joint: 45, left_wrist_pitch_joint: -10, right_shoulder_pitch_joint: -35, right_shoulder_roll_joint: -28, right_elbow_joint: 45, right_wrist_pitch_joint: -10 }) }),
+      Object.freeze({ label: 'Lower-body joint-pose inspection (root fixed)', hold_seconds: 0.35, action: Object.freeze({ left_hip_roll_joint: 8, left_knee_joint: 22, left_ankle_pitch_joint: -10, right_hip_roll_joint: -8, right_knee_joint: 22, right_ankle_pitch_joint: -10 }) }),
+      Object.freeze({ label: 'Return inspected joints to neutral', hold_seconds: 0.35, action: Object.freeze({ waist_pitch_joint: 0, left_shoulder_pitch_joint: 0, left_shoulder_roll_joint: 0, left_elbow_joint: 0, left_wrist_pitch_joint: 0, right_shoulder_pitch_joint: 0, right_shoulder_roll_joint: 0, right_elbow_joint: 0, right_wrist_pitch_joint: 0, left_hip_roll_joint: 0, left_knee_joint: 0, left_ankle_pitch_joint: 0, right_hip_roll_joint: 0, right_knee_joint: 0, right_ankle_pitch_joint: 0 }) }),
     ]),
   }),
 });
 
-export const UNITREE_G1_RIG_TASKS = Object.freeze([
-  Object.freeze({
-    profileId: 'unitree',
-    id: UNITREE_G1_RIG_SCENARIO.id,
-    title: UNITREE_G1_RIG_SCENARIO.title,
-    robotId: UNITREE_G1_RIG_SCENARIO.robotId,
-    simulationMode: 'kinematic_pose',
-    source: `RoboBuddy_AI@${UNITREE_G1_VISUAL_REVISION}/simulator/js/robot-mesh-data-unitree-g1.js`,
-  }),
-]);
+export const UNITREE_G1_RIG_TASKS = Object.freeze([Object.freeze({ profileId: 'unitree', id: UNITREE_G1_RIG_SCENARIO.id, title: UNITREE_G1_RIG_SCENARIO.title, robotId: UNITREE_G1_RIG_SCENARIO.robotId, simulationMode: 'kinematic_pose', source: `RoboBuddy_AI@${UNITREE_G1_VISUAL_REVISION}/simulator/js/robot-mesh-data-unitree-g1.js` })]);
 
 const MICRODUCK_SCENARIO = Object.freeze({
   schema: 'robobuddy.microduck-workspace.v1', simulationMode: 'policy_sim', workspaceRevision: 'microduck-cycle04-live-python-v1',
@@ -177,37 +207,26 @@ const MICRODUCK_SCENARIO = Object.freeze({
 const MICRODUCK_TASKS = Object.freeze([Object.freeze({ profileId:'microduck', id:MICRODUCK_SCENARIO.id, title:MICRODUCK_SCENARIO.title, robotId:MICRODUCK_SCENARIO.robotId, simulationMode:'policy_sim' })]);
 
 const cache = new Map();
+const physicalScenarioFor = (profileId) => profileId === 'openarm' ? OPENARM_PHYSICAL_SCENARIO : profileId === 'so101' ? SO101_PHYSICAL_SCENARIO : null;
 
 export function tasksForProfile(profileId) {
+  if (profileId === 'openarm') return OPENARM_PHYSICAL_TASKS;
   if (profileId === 'so101') return SO101_PHYSICAL_TASKS;
   if (profileId === 'unitree') return UNITREE_G1_RIG_TASKS;
   if (profileId === 'microduck') return MICRODUCK_TASKS;
   return PATCH_TASKS[profileId] || [];
 }
+export function defaultTaskId(profileId) { return tasksForProfile(profileId)[0]?.id || ''; }
+export function taskDescriptor(profileId, taskId) { return tasksForProfile(profileId).find((item) => item.id === taskId) || tasksForProfile(profileId)[0] || null; }
 
-export function defaultTaskId(profileId) {
-  return tasksForProfile(profileId)[0]?.id || '';
-}
-
-export function taskDescriptor(profileId, taskId) {
-  return tasksForProfile(profileId).find((item) => item.id === taskId) || tasksForProfile(profileId)[0] || null;
-}
-
-export async function loadPatchedScenario(profileId, taskId) {
-  // Hidden legacy SO-101 definitions remain loadable by exact ID for regression/provenance
-  // checks, but taskDescriptor()/tasksForProfile() never expose them in the physical UI.
-  const legacySo101 = profileId === 'so101' ? PATCH_TASKS.so101.find((item) => item.id === taskId) : null;
-  const descriptor = legacySo101 || taskDescriptor(profileId, taskId);
-  if (!descriptor) return null;
-  if (descriptor.simulationMode === 'physical_mujoco') return structuredClone(SO101_PHYSICAL_SCENARIO);
-  if (descriptor.simulationMode === 'kinematic_pose') return structuredClone(UNITREE_G1_RIG_SCENARIO);
-  if (descriptor.simulationMode === 'policy_sim') return structuredClone(MICRODUCK_SCENARIO);
+async function loadLegacyDescriptor(descriptor) {
   if (cache.has(descriptor.id)) return structuredClone(cache.get(descriptor.id));
   const response = await fetch(descriptor.url, { cache: 'force-cache' });
   if (!response.ok) throw new Error(`Pinned task ${descriptor.id} returned HTTP ${response.status}.`);
   const scenario = await response.json();
   if (scenario?.schema !== 'robobuddy.lab-scenario.v2') throw new Error(`${descriptor.id}: unexpected scenario schema.`);
-  if (scenario.id !== descriptor.id) throw new Error(`${descriptor.id}: pinned task id mismatch (${scenario.id || 'missing'}).`);
+  const expectedScenarioId = descriptor.sourceScenarioId || descriptor.id;
+  if (scenario.id !== expectedScenarioId) throw new Error(`${descriptor.id}: pinned task id mismatch (${scenario.id || 'missing'}; expected ${expectedScenarioId}).`);
   if (scenario.robotId !== descriptor.robotId) throw new Error(`${descriptor.id}: robot id mismatch (${scenario.robotId || 'missing'}).`);
   if (scenario.title !== descriptor.title) throw new Error(`${descriptor.id}: reviewed title mismatch; refusing silent task drift.`);
   const actions = scenario?.portablePython?.referenceActions;
@@ -220,37 +239,28 @@ export async function loadPatchedScenario(profileId, taskId) {
   return structuredClone(scenario);
 }
 
+export async function loadLegacyPatchedScenario(profileId, taskId) {
+  const descriptor = PATCH_TASKS[profileId]?.find((item) => item.id === taskId) || null;
+  return descriptor ? loadLegacyDescriptor(descriptor) : null;
+}
+
+export async function loadPatchedScenario(profileId, taskId) {
+  const legacySo101 = profileId === 'so101' ? PATCH_TASKS.so101.find((item) => item.id === taskId) : null;
+  const legacyOpenArm = profileId === 'openarm' && taskId === 'openarm-04-filtration-workcell-legacy' ? PATCH_TASKS.openarm[0] : null;
+  const descriptor = legacySo101 || legacyOpenArm || taskDescriptor(profileId, taskId);
+  if (!descriptor) return null;
+  if (descriptor.simulationMode === 'physical_mujoco') return structuredClone(physicalScenarioFor(profileId));
+  if (descriptor.simulationMode === 'kinematic_pose') return structuredClone(UNITREE_G1_RIG_SCENARIO);
+  if (descriptor.simulationMode === 'policy_sim') return structuredClone(MICRODUCK_SCENARIO);
+  return loadLegacyDescriptor(descriptor);
+}
+
 export function taskPatchProvenance(descriptor) {
   if (descriptor?.simulationMode === 'physical_mujoco') {
-    return {
-      repository: 'jivishov/RoboBuddy_IDE_v020',
-      scenarioId: descriptor.id,
-      physicalSceneId: descriptor.physicalSceneId,
-      modelPackage: SO101_PHYSICAL_SCENARIO.modelPackage,
-      simulationMode: 'physical_mujoco',
-    };
+    return { repository: 'jivishov/RoboBuddy_IDE_v020', scenarioId: descriptor.id, physicalSceneId: descriptor.physicalSceneId, modelPackage: descriptor.modelPackage || physicalScenarioFor(descriptor.profileId)?.modelPackage || null, simulationMode: 'physical_mujoco' };
   }
-  if (descriptor?.simulationMode === 'kinematic_pose') {
-    return {
-      repository: 'jivishov/RoboBuddy_AI',
-      revision: UNITREE_G1_VISUAL_REVISION,
-      scenarioId: descriptor.id,
-      source: descriptor.source,
-      simulationMode: 'kinematic_pose',
-    };
-  }
-  return descriptor ? {
-    repository: TASK_PATCH_SOURCE,
-    revision: TASK_PATCH_REVISION,
-    scenarioId: descriptor.id,
-    source: descriptor.url,
-  } : null;
+  if (descriptor?.simulationMode === 'kinematic_pose') return { repository: 'jivishov/RoboBuddy_AI', revision: UNITREE_G1_VISUAL_REVISION, scenarioId: descriptor.id, source: descriptor.source, simulationMode: 'kinematic_pose' };
+  return descriptor ? { repository: TASK_PATCH_SOURCE, revision: TASK_PATCH_REVISION, scenarioId: descriptor.id, source: descriptor.url } : null;
 }
-
-export function isPhysicalMujocoScenario(scenario) {
-  return scenario?.simulationMode === 'physical_mujoco';
-}
-
-export function isKinematicRigScenario(scenario) {
-  return scenario?.simulationMode === 'kinematic_pose';
-}
+export function isPhysicalMujocoScenario(scenario) { return scenario?.simulationMode === 'physical_mujoco'; }
+export function isKinematicRigScenario(scenario) { return scenario?.simulationMode === 'kinematic_pose'; }
