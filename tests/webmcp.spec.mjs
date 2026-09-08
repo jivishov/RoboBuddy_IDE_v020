@@ -74,6 +74,7 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
     'focus_robobuddy_workspace',
     'run_robobuddy_program',
     'draft_robobuddy_cooperative_edit',
+    'control_openarm_simulation',
   ]);
   expect(registered.every(({ annotations }) => annotations.untrustedContentHint)).toBe(true);
   expect(registered.slice(0, 3).every(({ annotations }) => annotations.readOnlyHint)).toBe(true);
@@ -83,8 +84,9 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   const task = await callTool(page, 'describe_robobuddy_task');
   expect(task).toMatchObject({
     taskId: 'openarm-04-filtration-workcell',
-    simulationMode: 'source_plant',
-    sourcePlantAvailable: true,
+    simulationMode: 'physical_mujoco',
+    sourcePlantAvailable: false,
+    physicalSimulationAvailable: true,
     hardwareValidated: false,
   });
   expect(JSON.stringify(task)).not.toContain('referenceActions');
@@ -101,8 +103,9 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   const state = await callTool(page, 'inspect_robobuddy_simulation');
   expect(state).toMatchObject({
     executionState: 'idle',
-    simulationMode: 'source_plant',
-    stateKind: 'modeled_source_plant',
+    simulationMode: 'physical_mujoco',
+    stateKind: 'mujoco_physical_state',
+    physicalSimulationAvailable: true,
     untrustedContent: true,
   });
 
@@ -150,7 +153,8 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
 
   await page.evaluate(() => window.__robobuddyCi.app.editor.cm.setValue('print("webmcp run smoke")\n'));
   const run = await callTool(page, 'run_robobuddy_program');
-  expect(run).toMatchObject({ completed: true, simulation: { executionState: 'idle', status: 'Run complete' } });
+  expect(run).toMatchObject({ completed: true, simulation: { executionState: 'idle' } });
+  expect(run.simulation.status).toContain('physical task criteria');
 
   const cancelled = await callTool(page, 'run_robobuddy_program', {}, { aborted: true });
   expect(cancelled).toMatchObject({ ok: false, error: { code: 'OPERATION_CANCELLED', retryable: true } });

@@ -33,7 +33,7 @@ export class PhysicalPythonRuntime {
   isPaused() { return Boolean(this.active?.externallyPaused); }
   getRunEpoch() { return this.active?.runEpoch ?? this.runEpoch; }
 
-  start(files, { workspaceEpoch, robotId = 'so101_follower' } = {}) {
+  start(files, { workspaceEpoch, robotId = '' } = {}) {
     void this.cancel('REPLACED_RUN', { silent: true, immediate: true });
     const workspace = boundedWorkspace(files);
     if (!Number.isInteger(workspaceEpoch) || workspaceEpoch < 0) return Promise.reject(runtimeError('INVALID_ARGUMENT', 'workspaceEpoch must be a non-negative integer'));
@@ -43,7 +43,7 @@ export class PhysicalPythonRuntime {
     const bridge = this.bridgeFactory();
     const completion = deferred();
     const active = {
-      runEpoch, workerEpoch, workspaceEpoch, robotId: String(robotId), worker, bridge, completion,
+      runEpoch, workerEpoch, workspaceEpoch, robotId: String(robotId || ''), worker, bridge, completion,
       connected: false, pendingRequestId: null, stdout: '', stderr: '', completed: false,
       externallyPaused: false, pauseWaiters: [],
     };
@@ -139,16 +139,10 @@ export class PhysicalPythonRuntime {
         const result = await this.#executeBoundary(active, String(message.method || ''), boundedClone(message.args || {}));
         if (!this.#isCurrent(active)) return;
         active.pendingRequestId = null;
-        active.worker.postMessage(boundedClone({
-          type: 'bridge-response', runEpoch: active.runEpoch, workspaceEpoch: active.workspaceEpoch,
-          requestId: message.requestId, ok: true, result,
-        }));
+        active.worker.postMessage(boundedClone({ type: 'bridge-response', runEpoch: active.runEpoch, workspaceEpoch: active.workspaceEpoch, requestId: message.requestId, ok: true, result }));
       } catch (error) {
         active.pendingRequestId = null;
-        if (this.#isCurrent(active)) active.worker.postMessage({
-          type: 'bridge-response', runEpoch: active.runEpoch, workspaceEpoch: active.workspaceEpoch,
-          requestId: message.requestId, ok: false, error: serializeError(error),
-        });
+        if (this.#isCurrent(active)) active.worker.postMessage({ type: 'bridge-response', runEpoch: active.runEpoch, workspaceEpoch: active.workspaceEpoch, requestId: message.requestId, ok: false, error: serializeError(error) });
       }
       return;
     }
@@ -162,9 +156,13 @@ export class PhysicalPythonRuntime {
     if (!['pause', 'resume', 'disconnect'].includes(method)) await this.#waitIfExternallyPaused(active);
     switch (method) {
       case 'connect': {
-        const requested = String(args.robot_id || active.robotId);
-        if (requested !== active.robotId) throw runtimeError('PROFILE_MISMATCH', `Python requested ${requested}; active physical runtime is ${active.robotId}`);
+        // The app-level runtime hint can be stale when a new physical robot is added.
+        // The live bridge, which owns the current PhysicsSession diagnostics, is the
+        // authority for robot identity and rejects any actual profile mismatch.
+        const requested = String(args.robot_id || active.robotId || '');
+        if (!requested) throw runtimeError('INVALID_ARGUMENT', 'connect() requires an explicit physical robot id');
         const result = await active.bridge.connect(requested);
+        active.robotId = String(result?.robotId || requested);
         active.connected = true;
         if (active.externallyPaused) await active.bridge.pause();
         return result;
@@ -183,11 +181,7 @@ export class PhysicalPythonRuntime {
         return active.bridge.getObservation({ view: String(args.view || 'ground_truth') });
       case 'wait_for_goal':
         this.#assertConnected(active);
-        return active.bridge.waitForGoal(args.targets, {
-          toleranceRad: Number(args.tolerance_rad),
-          timeoutSeconds: Number(args.timeout_seconds),
-          controllerPeriodSeconds: Number(args.controller_period_seconds),
-        });
+        return active.bridge.waitForGoal(args.targets, { toleranceRad: Number(args.tolerance_rad), timeoutSeconds: Number(args.timeout_seconds), controllerPeriodSeconds: Number(args.controller_period_seconds) });
       case 'pause':
         this.#assertConnected(active);
         return active.bridge.pause();
@@ -206,7 +200,6 @@ export class PhysicalPythonRuntime {
     if (!active.externallyPaused) return Promise.resolve();
     return new Promise((resolve, reject) => active.pauseWaiters.push({ resolve, reject }));
   }
-
   #releasePauseWaiters(active, error = null) {
     for (const waiter of active.pauseWaiters || []) {
       if (error) waiter.reject(error);
@@ -214,11 +207,7 @@ export class PhysicalPythonRuntime {
     }
     active.pauseWaiters = [];
   }
-
-  #assertConnected(active) {
-    if (!active.connected) throw runtimeError('SIMULATION_NOT_READY', 'Call await connect(...) before using the physical simulation API');
-  }
-
+  #assertConnected(active) { if (!active.connected) throw runtimeError('SIMULATION_NOT_READY', 'Call await connect(...) before using the physical simulation API'); }
   #complete(active, result) {
     if (!this.#isCurrent(active)) return;
     this.active = null;
@@ -232,7 +221,6 @@ export class PhysicalPythonRuntime {
     active.completion.resolve(result);
     this.onState({ state: 'idle', reason: 'complete', runEpoch: active.runEpoch });
   }
-
   #fail(active, error) {
     if (!this.#isCurrent(active)) return;
     this.active = null;
@@ -245,7 +233,6 @@ export class PhysicalPythonRuntime {
     active.completion.reject(error);
     this.onState({ state: 'idle', reason: error.code || 'error', runEpoch: active.runEpoch });
   }
-
   #isCurrent(active) { return this.active === active && this.worker === active.worker; }
 }
 
@@ -260,4 +247,4 @@ function byteLength(value) { return new TextEncoder().encode(String(value)).byte
 function deferred() { let resolve; let reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function runtimeError(code, message, details = {}) { const error = new Error(message); error.code = code; Object.assign(error, details); return error; }
 function serializeError(error) { return { code: error?.code || 'PYTHON_BRIDGE', message: String(error?.message || error).slice(0, 4096) }; }
-function cancellationMessage(reason) { return ({ STOP: 'The physical Python run was stopped.', WORKSPACE_CHANGED: 'The physical workspace changed during execution.', PROFILE_CHANGED: 'The robot profile changed during execution.', RESET: 'The physical simulation reset cancelled the active Python run.', MANUAL_PREEMPTION: 'Manual control preempted the physical Python run.', REPLACED_RUN: 'A newer physical Python run replaced this run.', PROGRAM_TIMEOUT: 'The physical Python run exceeded its deadline.' })[reason] || 'The physical Python operation was cancelled.'; }
+function cancellationMessage(reason) { return ({ STOP: 'The physical Python run was stopped.', WORKSPACE_CHANGED: 'The physical workspace changed during execution.', PROFILE_CHANGED: 'The robot profile changed during execution.', RESET: 'The physical simulation reset cancelled the active Python run.', MANUAL_PREEMPTION: 'Manual control preempted the active Python run.', REPLACED_RUN: 'A newer physical Python run replaced this run.', PROGRAM_TIMEOUT: 'The physical Python run exceeded its deadline.' })[reason] || 'The physical Python operation was cancelled.'; }
