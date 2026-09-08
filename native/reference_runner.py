@@ -80,6 +80,16 @@ def _finite_state(data: mujoco.MjData) -> bool:
     )
 
 
+def _joint_snapshot(data: mujoco.MjData, joint_meta: dict[str, dict[str, object]]) -> dict[str, dict[str, float]]:
+    return {
+        name: {
+            "positionRad": float(data.qpos[int(meta["qpos_addr"])]),
+            "velocityRadS": float(data.qvel[int(meta["dof_addr"])]),
+        }
+        for name, meta in joint_meta.items()
+    }
+
+
 def run(
     target_rad: float,
     steps: int,
@@ -136,6 +146,9 @@ def run(
             "joint_range": [joint_min, joint_max],
         }
 
+    mujoco.mj_forward(model, data)
+    initial = _joint_snapshot(data, joint_meta)
+
     requested_targets = dict(targets or {selected_joint: target_rad})
     for name, target in requested_targets.items():
         if name not in joint_meta:
@@ -151,21 +164,25 @@ def run(
             raise ValueError(f"target_rad {target} is outside joint {name} range {joint_min}..{joint_max}")
         data.ctrl[int(meta["actuator_id"])] = target
 
-    mujoco.mj_forward(model, data)
-    initial = {
-        name: {
-            "positionRad": float(data.qpos[int(meta["qpos_addr"])]),
-            "velocityRadS": float(data.qvel[int(meta["dof_addr"])]),
-        }
-        for name, meta in joint_meta.items()
-    }
-
-    for _ in range(steps):
+    sample_steps = sorted({max(1, steps // 4), max(1, steps // 2), max(1, (3 * steps) // 4), steps})
+    trajectory: list[dict[str, object]] = []
+    selected_meta = joint_meta[selected_joint]
+    for step_index in range(1, steps + 1):
         mujoco.mj_step(model, data)
         if not _finite_state(data):
             raise RuntimeError("MuJoCo produced non-finite joint state")
+        if step_index in sample_steps:
+            trajectory.append(
+                {
+                    "step": step_index,
+                    "simulationTimeSeconds": float(data.time),
+                    "positionRad": float(data.qpos[int(selected_meta["qpos_addr"])]),
+                    "velocityRadS": float(data.qvel[int(selected_meta["dof_addr"])]),
+                }
+            )
 
     contacts = _contacts(model, data)
+    final_simulation_time = float(data.time)
     joints: dict[str, dict[str, object]] = {}
     for name, meta in joint_meta.items():
         actuator_id = int(meta["actuator_id"])
@@ -185,8 +202,18 @@ def run(
             "positionM": [float(value) for value in data.xpos[body_id]],
         }
 
+    finite_final = _finite_state(data)
+    mujoco.mj_resetData(model, data)
+    mujoco.mj_forward(model, data)
+    reset = _joint_snapshot(data, joint_meta)
+    reset_matches_initial = all(
+        abs(reset[name][key] - initial[name][key]) <= 1e-12
+        for name in joint_names
+        for key in ("positionRad", "velocityRadS")
+    )
+
     return {
-        "simulationTimeSeconds": float(data.time),
+        "simulationTimeSeconds": final_simulation_time,
         "frames": {
             "world": {
                 "id": "mujoco_world",
@@ -209,12 +236,15 @@ def run(
         },
         "selectedJoint": selected_joint,
         "initialJoints": initial,
+        "resetJoints": reset,
+        "resetMatchesInitial": reset_matches_initial,
+        "trajectory": trajectory,
         "joints": joints,
         "bodies": bodies,
-        "contactCount": int(data.ncon),
+        "contactCount": len(contacts),
         "contactsReadable": True,
         "contacts": contacts,
-        "finiteState": _finite_state(data),
+        "finiteState": finite_final,
     }
 
 
