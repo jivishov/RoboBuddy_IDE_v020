@@ -57,10 +57,24 @@ def all_contact_pairs(model, data):
 
 
 def apply_test_profile(model, trial, block_body, gripper_act):
-    profile = {"trial": trial, "lowGripForceNm": None, "payloadMassKg": float(model.body_mass[block_body])}
+    profile = {
+        "trial": trial,
+        "lowGripForceNm": None,
+        "lowGripForceRangeNm": None,
+        "lowGripForceLimited": None,
+        "payloadMassKg": float(model.body_mass[block_body]),
+    }
     if trial == "low-grip":
-        model.actuator_forcerange[2 * gripper_act : 2 * gripper_act + 2] = (-LOW_GRIP_FORCE_NM, LOW_GRIP_FORCE_NM)
+        # actuator_forcerange is shaped (nu, 2): index the gripper actuator row,
+        # not a flattened pair. Explicitly enable force limiting for this negative-only profile.
+        model.actuator_forcerange[gripper_act, :] = (-LOW_GRIP_FORCE_NM, LOW_GRIP_FORCE_NM)
+        model.actuator_forcelimited[gripper_act] = 1
+        actual_range = np.array(model.actuator_forcerange[gripper_act, :], dtype=float)
+        assert np.allclose(actual_range, [-LOW_GRIP_FORCE_NM, LOW_GRIP_FORCE_NM], atol=0.0, rtol=0.0)
+        assert int(model.actuator_forcelimited[gripper_act]) == 1
         profile["lowGripForceNm"] = LOW_GRIP_FORCE_NM
+        profile["lowGripForceRangeNm"] = actual_range.tolist()
+        profile["lowGripForceLimited"] = True
     if trial == "heavy":
         factor = 37.5
         model.body_mass[block_body] *= factor
