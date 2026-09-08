@@ -36,6 +36,8 @@ class FakeBackend {
   dispose() { this.calls.push(['dispose']); }
 }
 
+assert.throws(() => new PhysicsSession(new FakeBackend(), { observationBatchSteps: 0 }), /positive integer/);
+
 const fake = new FakeBackend(); const session = new PhysicsSession(fake, { sessionId: 'phase1-test-session' });
 await assert.rejects(() => session.loadScene({ revision: 'partial', robotId: 'phase1_articulated_joint' }), /schemaVersion/);
 const loaded = await session.loadScene(structuredClone(PHASE1_SCENE)); assert.equal(loaded.apiVersion, PHYSICS_BACKEND_API_VERSION); assert.equal(loaded.epoch, 1); assert.equal(fake.calls.at(-1)[2].epoch, 1);
@@ -45,6 +47,21 @@ const envelope = fake.calls.at(-1)[1]; assert.equal(envelope.sessionId, 'phase1-
 await session.reset(); assert.equal(session.epoch, 2); assert.equal(fake.calls.at(-1)[1].epoch, 2); await session.advanceSteps(10); assert.equal(fake.calls.at(-1)[2].epoch, 2);
 const cancelled = await session.cancelRun('test-cancel'); assert.deepEqual(cancelled, { cancelled: true, reloadRequired: true }); assert.equal(session.robotId, null); assert.equal(session.sceneRevision, null);
 await assert.rejects(() => session.sendCommand({ type: 'set_joint_target', targetRad: 0 }), /No physical scene loaded/);
+
+const sampledFake = new FakeBackend();
+const sampledSession = new PhysicsSession(sampledFake, { sessionId: 'sampled-advance-session', observationBatchSteps: 3 });
+await sampledSession.loadScene(structuredClone(PHASE1_SCENE));
+const sampledEvents = [];
+const unsubscribeSampled = sampledSession.subscribe((event) => sampledEvents.push(event));
+const sampledFinal = await sampledSession.advanceSteps(8);
+const sampledCalls = sampledFake.calls.filter(([type]) => type === 'advanceSteps');
+assert.deepEqual(sampledCalls.map(([, steps]) => steps), [3, 3, 2], 'long advances must be executed as deterministic physics-step observation batches');
+assert.equal(sampledEvents.length, 3, 'each physics observation batch must publish actual backend state');
+assert.equal(sampledEvents.every((event) => event.source === 'advanceSteps'), true);
+assert.equal(sampledEvents.every((event) => event.sessionId === 'sampled-advance-session' && event.epoch === 1), true);
+assert.deepEqual(sampledFinal, sampledEvents.at(-1).observation, 'advanceSteps must return the final authoritative observation');
+unsubscribeSampled();
+sampledSession.dispose();
 
 class LostAuthorityBackend extends FakeBackend {
   async advanceSteps(steps, context) {
