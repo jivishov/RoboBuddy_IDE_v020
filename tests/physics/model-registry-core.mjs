@@ -44,6 +44,10 @@ assert.ok(
   playwrightConfigSource.includes('so101-physics-browser'),
   'Playwright discovery must include tests/so101-physics-browser.spec.mjs so CI actually executes the Phase 2A browser/WASM acceptance test',
 );
+assert.ok(
+  playwrightConfigSource.includes('physics-load-failure-browser'),
+  'Playwright discovery must include tests/physics-load-failure-browser.spec.mjs so CI actually executes the physical load-failure/no-fallback regression',
+);
 
 assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE), 'registered package root must be immutable');
 assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE.physics), 'registered package physics settings must be immutable');
