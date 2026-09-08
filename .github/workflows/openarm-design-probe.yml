@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
-      - name: Sweep synthetic vessel grasp radii and physically compatible closure targets
+      - name: Probe sustained release and post-settle retreat paths
         run: |
           python - <<'PY'
           import json, shutil, subprocess
@@ -25,44 +25,50 @@ jobs:
 
           root = Path('.').resolve()
           cases = [
-              ('legacy-envelope-moderate', 0.014, 0.025, 0.075, -0.355),
-              ('legacy-envelope-firmer', 0.014, 0.025, 0.050, -0.330),
-              ('legacy-envelope-contact', 0.014, 0.025, 0.100, -0.380),
-              ('smaller-envelope', 0.016, 0.022, 0.100, -0.280),
+              ('transfer-retreat', 'LEFT_TRANSFER', 'RIGHT_TRANSFER'),
+              ('lift-retreat', 'LEFT_LIFT', 'RIGHT_LIFT'),
+              ('park-high-retreat', 'LEFT_PARK', 'RIGHT_PARK'),
           ]
           report = []
-          for name, flask_radius, beaker_radius, left_hold, right_hold in cases:
+          for name, left_retreat, right_retreat in cases:
               case_dir = Path('/tmp') / f'openarm-probe-{name}'
               if case_dir.exists(): shutil.rmtree(case_dir)
               shutil.copytree(root, case_dir)
+
               xml_path = case_dir / 'models/openarm_v2/manipulation.xml'
               xml = xml_path.read_text()
-              xml = xml.replace('size="0.010 0.015" class="vessel"', f'size="{flask_radius:.3f} 0.015" class="vessel"', 1)
+              xml = xml.replace('size="0.010 0.015" class="vessel"', 'size="0.014 0.015" class="vessel"', 1)
               xml = xml.replace('<body name="beaker" pos="0.509 -0.1535 1.120">', '<body name="beaker" pos="0.509 -0.1535 1.105">')
-              xml = xml.replace('size="0.010 0.045" class="vessel"', f'size="{beaker_radius:.3f} 0.030" class="vessel"')
+              xml = xml.replace('size="0.010 0.045" class="vessel"', 'size="0.025 0.030" class="vessel"')
               xml_path.write_text(xml)
 
               runner_path = case_dir / 'native/openarm_v2_reference.py'
               runner = runner_path.read_text()
               runner = runner.replace("'initial_z': 1.120,", "'initial_z': 1.105,")
-              runner = runner.replace("('left_close', {'openarm_left_finger_joint1': 0.0}, 0.50)", f"('left_close', {{'openarm_left_finger_joint1': {left_hold}}}, 0.50)")
-              runner = runner.replace("arm('left', LEFT_LIFT, 0.0)", f"arm('left', LEFT_LIFT, {left_hold})")
-              runner = runner.replace("arm('left', LEFT_TRANSFER, 0.0)", f"arm('left', LEFT_TRANSFER, {left_hold})")
-              runner = runner.replace("arm('left', LEFT_PLACE, 0.0)", f"arm('left', LEFT_PLACE, {left_hold})")
-              runner = runner.replace("('right_close', {'openarm_right_finger_joint1': 0.0}, 0.50)", f"('right_close', {{'openarm_right_finger_joint1': {right_hold}}}, 0.50)")
-              runner = runner.replace("arm('right', RIGHT_LIFT, 0.0)", f"arm('right', RIGHT_LIFT, {right_hold})")
-              runner = runner.replace("arm('right', RIGHT_TRANSFER, 0.0)", f"arm('right', RIGHT_TRANSFER, {right_hold})")
-              runner = runner.replace("arm('right', RIGHT_PLACE, 0.0)", f"arm('right', RIGHT_PLACE, {right_hold})")
+              runner = runner.replace("RIGHT_PLACE = [27.1394, 0, 0, 56.4231, 0, -6.4055, 0]", "RIGHT_PLACE = [27.1394, 0, 0, 56.4231, 0, -6.4055, 0]\nLEFT_PARK = [-25.0, 0, 0, 100.0, 0, 20.0, 0]\nRIGHT_PARK = [25.0, 0, 0, 100.0, 0, -20.0, 0]")
+              runner = runner.replace("('left_close', {'openarm_left_finger_joint1': 0.0}, 0.50)", "('left_close', {'openarm_left_finger_joint1': 0.05}, 0.50)")
+              runner = runner.replace("arm('left', LEFT_LIFT, 0.0)", "arm('left', LEFT_LIFT, 0.05)")
+              runner = runner.replace("arm('left', LEFT_TRANSFER, 0.0)", "arm('left', LEFT_TRANSFER, 0.05)")
+              runner = runner.replace("arm('left', LEFT_PLACE, 0.0)", "arm('left', LEFT_PLACE, 0.05)")
+              runner = runner.replace("('right_close', {'openarm_right_finger_joint1': 0.0}, 0.50)", "('right_close', {'openarm_right_finger_joint1': -0.33}, 0.50)")
+              runner = runner.replace("arm('right', RIGHT_LIFT, 0.0)", "arm('right', RIGHT_LIFT, -0.33)")
+              runner = runner.replace("arm('right', RIGHT_TRANSFER, 0.0)", "arm('right', RIGHT_TRANSFER, -0.33)")
+              runner = runner.replace("arm('right', RIGHT_PLACE, 0.0)", "arm('right', RIGHT_PLACE, -0.33)")
+              runner = runner.replace("('left_retreat', arm('left', LEFT_TRANSFER, 0.65), 0.85)", f"('left_retreat', arm('left', {left_retreat}, 0.65), 0.85)")
+              runner = runner.replace("('right_retreat', arm('right', RIGHT_TRANSFER, -0.65), 0.85)", f"('right_retreat', arm('right', {right_retreat}, -0.65), 0.85)")
+
+              # Mirror the browser evaluator's stricter sustained-release rule.
+              old = """                if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:\n                    st['release'] = True\n                    st['release_time'] = float(data.time)\n"""
+              new = """                if st['release'] and held:\n                    st['release'] = False\n                    st['release_time'] = None\n                    st['settle_candidate'] = None\n                    st['settle_start'] = None\n                    st['settle_drift'] = None\n                    st['settled'] = False\n                    st['settled_ee'] = None\n                    st['settle_time'] = None\n                    st['retreat'] = False\n                    st['retreat_distance'] = 0.0\n                    st['retreat_time'] = None\n                if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:\n                    st['release'] = True\n                    st['release_time'] = float(data.time)\n"""
+              if old not in runner:
+                  raise SystemExit('native release insertion point not found')
+              runner = runner.replace(old, new, 1)
               runner_path.write_text(runner)
 
               output = subprocess.check_output(['python', str(runner_path), '--trial', 'nominal'], cwd=case_dir, text=True)
               result = json.loads(output)
               report.append({
                   'case': name,
-                  'flaskRadiusM': flask_radius,
-                  'beakerRadiusM': beaker_radius,
-                  'leftHoldRad': left_hold,
-                  'rightHoldRad': right_hold,
                   'success': result['metrics']['success'],
                   'flask': result['metrics']['flask'],
                   'beaker': result['metrics']['beaker'],
