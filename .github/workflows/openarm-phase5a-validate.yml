@@ -122,3 +122,12 @@ jobs:
 
       - name: OpenArm browser authority and task gates
         run: npx playwright test tests/openarm-phase5a-browser.spec.mjs --reporter=line
+
+      - name: Preserve OpenArm browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openarm-browser-failure-evidence-${{ github.sha }}
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 14
