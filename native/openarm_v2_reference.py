@@ -64,37 +64,37 @@ LEFT_PLACE = [-27.1394, 0, 0, 56.4231, 0, 6.4055, 0]
 RIGHT_PLACE = [27.1394, 0, 0, 56.4231, 0, -6.4055, 0]
 STAGES = [
     ('settle_initial', {}, 0.40),
-    ('left_close', {'openarm_left_finger_joint1': 0.0}, 0.50),
-    ('left_lift', arm('left', LEFT_LIFT, 0.0), 1.00),
-    ('left_transfer', arm('left', LEFT_TRANSFER, 0.0), 1.20),
-    ('left_lower', arm('left', LEFT_PLACE, 0.0), 0.90),
+    ('left_close', {'openarm_left_finger_joint1': 0.05}, 0.50),
+    ('left_lift', arm('left', LEFT_LIFT, 0.05), 1.00),
+    ('left_transfer', arm('left', LEFT_TRANSFER, 0.05), 1.20),
+    ('left_lower', arm('left', LEFT_PLACE, 0.05), 0.90),
     ('left_release', {'openarm_left_finger_joint1': 0.65}, 0.45),
     ('left_settle', {}, 0.45),
-    ('left_retreat', arm('left', LEFT_TRANSFER, 0.65), 0.85),
-    ('right_close', {'openarm_right_finger_joint1': 0.0}, 0.50),
-    ('right_lift', arm('right', RIGHT_LIFT, 0.0), 1.00),
-    ('right_transfer', arm('right', RIGHT_TRANSFER, 0.0), 1.20),
-    ('right_lower', arm('right', RIGHT_PLACE, 0.0), 0.90),
+    ('left_retreat', arm('left', LEFT_LIFT, 0.65), 0.85),
+    ('right_close', {'openarm_right_finger_joint1': -0.33}, 0.50),
+    ('right_lift', arm('right', RIGHT_LIFT, -0.33), 1.00),
+    ('right_transfer', arm('right', RIGHT_TRANSFER, -0.33), 1.20),
+    ('right_lower', arm('right', RIGHT_PLACE, -0.33), 0.90),
     ('right_release', {'openarm_right_finger_joint1': -0.65}, 0.45),
     ('right_settle', {}, 0.45),
-    ('right_retreat', arm('right', RIGHT_TRANSFER, -0.65), 0.85),
+    ('right_retreat', arm('right', RIGHT_LIFT, -0.65), 0.85),
 ]
 
 TARGETS = {
     'flask': {
         'center': np.array([0.608, 0.1535]),
-        'half': np.array([0.045, 0.045]),
+        'half': np.array([0.017, 0.013]),
         'support': 'left_hotplate',
-        'initial_z': 1.085,
-        'geoms': {'flask_body_geom', 'flask_grip_geom'},
+        'initial_z': 1.092,
+        'geoms': {'flask_body_geom', 'flask_shoulder_geom', 'flask_grip_geom'},
         'fingers': {'left_inner_fingertip', 'left_outer_fingertip'},
         'side': 'left',
     },
     'beaker': {
         'center': np.array([0.608, -0.1535]),
-        'half': np.array([0.040, 0.040]),
+        'half': np.array([0.021, 0.021]),
         'support': 'right_ring_gauze',
-        'initial_z': 1.120,
+        'initial_z': 1.105,
         'geoms': {'beaker_grip_geom'},
         'fingers': {'right_inner_fingertip', 'right_outer_fingertip'},
         'side': 'right',
@@ -298,7 +298,7 @@ def run_trial(trial='nominal', timestep=None):
             break
         actual_targets = dict(targets)
         if trial == 'outside-left' and stage_name in ('left_transfer', 'left_lower', 'left_retreat'):
-            actual_targets = arm('left', [-8.0, 0, 0, 80.0, 0, -2.0, 0], 0.0 if stage_name != 'left_retreat' else 0.65)
+            actual_targets = arm('left', [-8.0, 0, 0, 80.0, 0, -2.0, 0], 0.05 if stage_name != 'left_retreat' else 0.65)
         for joint, value in actual_targets.items():
             data.ctrl[acts[joint]] = float(value)
         command_sequence.append({'stage': stage_name, 'targetsRad': actual_targets, 'durationSeconds': seconds})
@@ -342,6 +342,20 @@ def run_trial(trial='nominal', timestep=None):
                     st['support_while_held'] = True
                     st['support_while_held_time'] = float(data.time)
 
+                # Match the browser evaluator: any post-release gripper re-contact invalidates
+                # release/settle/retreat evidence until a new causal release is observed.
+                if st['release'] and held:
+                    st['release'] = False
+                    st['release_time'] = None
+                    st['settle_candidate'] = None
+                    st['settle_start'] = None
+                    st['settle_drift'] = None
+                    st['settled'] = False
+                    st['settled_ee'] = None
+                    st['settle_time'] = None
+                    st['retreat'] = False
+                    st['retreat_distance'] = 0.0
+                    st['retreat_time'] = None
                 if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:
                     st['release'] = True
                     st['release_time'] = float(data.time)
@@ -481,6 +495,8 @@ def run_trial(trial='nominal', timestep=None):
             'impratio': float(model.opt.impratio),
         },
         'model': {
+            'id': 'robobuddy-openarm-v2-phase5a-v2',
+            'packageId': 'openarm-v2-phase5a-a8c9796-v2',
             'asset': str(MODEL_PATH.relative_to(ROOT)).replace('\\', '/'),
             'sha256': sha256_bytes(MODEL_PATH.read_bytes()),
             'nq': int(model.nq),
@@ -490,6 +506,7 @@ def run_trial(trial='nominal', timestep=None):
             'hasObjectWeld': False,
         },
         'controller': {
+            'id': 'openarm-v2-bimanual-stack-v2',
             'sha256': canonical_json_hash(descriptor),
             'descriptor': descriptor,
         },

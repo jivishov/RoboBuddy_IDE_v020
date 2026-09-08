@@ -91,7 +91,7 @@ const OPENARM_PHYSICAL_SCENARIO = Object.freeze({
     legacyTaskRepository: TASK_PATCH_SOURCE,
     legacyTaskRevision: TASK_PATCH_REVISION,
     legacyTaskPath: 'missions/lab-assistant/v2/definitions/openarm/openarm-04-filtration-workcell.json',
-    authority: 'MuJoCo PhysicsSession; browser primitive presentation consumes MuJoCo body observations',
+    authority: 'MuJoCo PhysicsSession; canonical OpenArm arm mesh and dry-workcell presentation consume MuJoCo observations only',
   }),
   frames: Object.freeze({
     physics: 'MuJoCo right-handed Z-up world, metres/radians; OpenArm mount origin follows the pinned V2 cell relationship',

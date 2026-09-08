@@ -36,9 +36,9 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
     };
   });
   expect(initial.backend).toBe('OpenArmPhysicalSimulator');
-  expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v1' });
-  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v1', asset: 'models/openarm_v2/manipulation.xml' });
-  expect(initial.model.sha256).toBe('323a345733dc45a4b3d7616e83ea5aef48cb099eb29855691530252b167f64b5');
+  expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v2' });
+  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v2', asset: 'models/openarm_v2/manipulation.xml' });
+  expect(initial.model.sha256).toBe('960ecf32c0aa7c8b2b016c6f28a7a8afe8147ce6cb1cdfd9b91f550cd4fc27dc');
   expect(initial.presentation).toMatchObject({
     physicalAuthority: 'MuJoCo PhysicsSession only',
     jointPresentationSource: 'observed MuJoCo joint positions',
@@ -65,6 +65,8 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(initial.trajectories).not.toMatch(/attach|teleport|move_to|grasp\(/i);
   expect(initial.flask.linearVelocityMS).toHaveLength(3);
   expect(initial.beaker.angularVelocityRadS).toHaveLength(3);
+  expect(initial.flask.positionM[2]).toBeCloseTo(1.092, 3);
+  expect(initial.beaker.positionM[2]).toBeCloseTo(1.105, 3);
   expect(initial.leftEe[0]).toBeCloseTo(0.401, 3);
   expect(initial.leftEe[1]).toBeCloseTo(0.1535, 3);
   expect(initial.leftEe[2]).toBeCloseTo(1.12, 3);

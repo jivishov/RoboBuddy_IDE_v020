@@ -371,26 +371,27 @@ export class OpenArmPhysicalSimulator {
     this.workcellRoot.add(mount);
 
     const fixtures = [
-      ['left-source', box(0.07, 0.03, 0.07, supportMaterial), [0.509, 0.1535, 1.020]],
-      ['left-hotplate', box(0.09, 0.03, 0.09, darkMaterial), [0.608, 0.1535, 1.020]],
+      ['left-source', box(0.09, 0.03, 0.09, supportMaterial), [0.509, 0.1535, 1.020]],
+      ['left-hotplate', box(0.116, 0.03, 0.108, darkMaterial), [0.608, 0.1535, 1.020]],
       ['right-source', box(0.07, 0.07, 0.07, supportMaterial), [0.509, -0.1535, 1.040]],
     ];
     for (const [name, mesh, position] of fixtures) { mesh.name = `visual-${name}`; mesh.position.copy(toThreePosition(position)); this.workcellRoot.add(mesh); }
     const post = cylinder(0.006, 0.07, darkMaterial); post.position.copy(toThreePosition([0.608, -0.235, 1.040])); post.name = 'visual-ring-post'; this.workcellRoot.add(post);
-    const gauze = cylinder(0.040, 0.006, supportMaterial); gauze.position.copy(toThreePosition([0.608, -0.1535, 1.072])); gauze.name = 'visual-ring-gauze'; this.workcellRoot.add(gauze);
+    const gauze = cylinder(0.048, 0.006, supportMaterial); gauze.position.copy(toThreePosition([0.608, -0.1535, 1.072])); gauze.name = 'visual-ring-gauze'; this.workcellRoot.add(gauze);
 
     const markerMaterial = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.40, depthWrite: false });
-    for (const [center, size] of [[[0.608, 0.1535, 1.036], [0.09, 0.001, 0.09]], [[0.608, -0.1535, 1.076], [0.08, 0.001, 0.08]]]) {
+    for (const [center, size] of [[[0.608, 0.1535, 1.036], [0.034, 0.001, 0.026]], [[0.608, -0.1535, 1.076], [0.042, 0.001, 0.042]]]) {
       const marker = box(size[0], size[1], size[2], markerMaterial); marker.position.copy(toThreePosition(center)); marker.userData.presentationOnly = true; this.targetMarkers.push(marker); this.workcellRoot.add(marker);
     }
 
     const flaskGroup = new THREE.Group();
     const flaskMaterial = new THREE.MeshStandardMaterial({ color: 0x69b8d8, transparent: true, opacity: 0.80, roughness: 0.28 });
-    const flaskBody = cylinder(0.018, 0.060, flaskMaterial); flaskBody.position.y = -20;
-    const flaskNeck = cylinder(0.010, 0.030, flaskMaterial); flaskNeck.position.y = 35;
-    flaskGroup.add(flaskBody, flaskNeck); this.objectMeshes.set('flask', flaskGroup); this.workcellRoot.add(flaskGroup);
+    const flaskBody = cylinder(0.039, 0.055, flaskMaterial); flaskBody.position.y = -29.5;
+    const flaskShoulder = cylinder(0.031, 0.028, flaskMaterial); flaskShoulder.position.y = 12;
+    const flaskNeck = cylinder(0.015, 0.028, flaskMaterial); flaskNeck.position.y = 40;
+    flaskGroup.add(flaskBody, flaskShoulder, flaskNeck); this.objectMeshes.set('flask', flaskGroup); this.workcellRoot.add(flaskGroup);
     const beakerMaterial = new THREE.MeshStandardMaterial({ color: 0x8dc8e3, transparent: true, opacity: 0.76, roughness: 0.30 });
-    const beaker = cylinder(0.010, 0.090, beakerMaterial); this.objectMeshes.set('beaker', beaker); this.workcellRoot.add(beaker);
+    const beaker = cylinder(0.025, 0.060, beakerMaterial); this.objectMeshes.set('beaker', beaker); this.workcellRoot.add(beaker);
     this.setHighContrastScene(this.highContrast);
   }
   #assertReady() { this.#assertNotDisposed(); if (!this.isReady()) throw new Error('OpenArm physical session is not ready'); }

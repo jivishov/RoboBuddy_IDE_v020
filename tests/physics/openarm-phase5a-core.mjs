@@ -14,6 +14,7 @@ assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.joints.length, 16);
 assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.actuators.length, 16);
 assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.evidence.hardwareAlignment, 'calibration-required');
 assert.equal(OPENARM_V2_PHASE5A_SCENE.modelPackage, OPENARM_V2_PHASE5A_MODEL_PACKAGE.id);
+assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.id, 'openarm-v2-bimanual-stack-v2');
 assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.stages.length, 15);
 assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.stages[0].name, 'settle_initial');
 assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.stages.at(-1).name, 'right_retreat');
@@ -23,6 +24,12 @@ assert.ok(xml.includes('openarm_left_ee_finger_joint_mimic'));
 assert.ok(xml.includes('openarm_right_ee_finger_joint_mimic'));
 assert.equal((xml.match(/<weld\b/g) || []).length, 0, 'task model must contain no weld constraints');
 assert.equal((xml.match(/<freejoint\b/g) || []).length, 2, 'flask and beaker must remain true free bodies');
+assert.equal((xml.match(/size="0.008" class="left_fingertip"/g) || []).length, 2, 'left fingertip surrogate must remain the reviewed 8 mm approximation');
+assert.equal((xml.match(/size="0.008" class="right_fingertip"/g) || []).length, 2, 'right fingertip surrogate must remain the reviewed 8 mm approximation');
+assert.ok(xml.includes('flask_shoulder_geom'), 'source-informed Erlenmeyer shoulder collider must be present');
+assert.ok(xml.includes('size="0.025 0.030" class="vessel"'), '50 mL beaker must use the pinned 50 x 60 mm envelope');
+assert.deepEqual(OPENARM_V2_PHASE5A_SCENE.taskGoal.flask.targetHalfExtentsXYM, [0.017, 0.013]);
+assert.deepEqual(OPENARM_V2_PHASE5A_SCENE.taskGoal.beaker.targetHalfExtentsXYM, [0.021, 0.021]);
 for (const forbidden of ['attachedTo', 'teleport', 'move_to', 'grasp_right', 'grasp_left']) assert.equal(xml.includes(forbidden), false, `forbidden physical shortcut leaked into model: ${forbidden}`);
 
 const schema = createOpenArmPhysicalControlSchema();
@@ -35,8 +42,8 @@ assert.ok(schema.oneOf[0].properties.targets_rad.properties.openarm_right_finger
 
 const obs = ({
   time,
-  flask = [0.509, 0.1535, 1.085],
-  beaker = [0.509, -0.1535, 1.120],
+  flask = [0.509, 0.1535, 1.092],
+  beaker = [0.509, -0.1535, 1.105],
   contacts = [],
   leftEe = [0.40, 0.1535, 1.12],
   rightEe = [0.40, -0.1535, 1.12],
@@ -63,8 +70,8 @@ const beakerSupport = { geom1Name: 'beaker_grip_geom', geom2Name: 'right_ring_ga
 const evaluator = new OpenArmBimanualStackEvaluator();
 evaluator.observe(obs({
   time: 0,
-  flask: [0.608, 0.1535, 1.085],
-  beaker: [0.608, -0.1535, 1.120],
+  flask: [0.608, 0.1535, 1.092],
+  beaker: [0.608, -0.1535, 1.105],
   contacts: [flaskSupport, beakerSupport],
 }));
 assert.equal(evaluator.snapshot().success, false);
@@ -83,28 +90,28 @@ assert.equal(sequentialFingerContact.snapshot().flask.bilateralContactObservatio
 // A vessel dropped before reaching its support may later land in the target, but that is not a controlled placement/release.
 const droppedIntoTarget = new OpenArmBimanualStackEvaluator();
 droppedIntoTarget.observe(obs({ time: 0, contacts: [flaskInner, flaskOuter] }));
-droppedIntoTarget.observe(obs({ time: 0.10, flask: [0.509, 0.1535, 1.110], contacts: [flaskInner, flaskOuter] }));
-droppedIntoTarget.observe(obs({ time: 0.20, flask: [0.579, 0.1535, 1.110], contacts: [flaskInner, flaskOuter] }));
+droppedIntoTarget.observe(obs({ time: 0.10, flask: [0.509, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
+droppedIntoTarget.observe(obs({ time: 0.20, flask: [0.579, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
 assert.equal(droppedIntoTarget.snapshot().flask.carrySeen, true);
-droppedIntoTarget.observe(obs({ time: 0.30, flask: [0.608, 0.1535, 1.085], contacts: [] }));
-droppedIntoTarget.observe(obs({ time: 0.40, flask: [0.608, 0.1535, 1.085], contacts: [flaskSupport] }));
+droppedIntoTarget.observe(obs({ time: 0.30, flask: [0.608, 0.1535, 1.092], contacts: [] }));
+droppedIntoTarget.observe(obs({ time: 0.40, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport] }));
 assert.equal(droppedIntoTarget.snapshot().flask.supportWhileHeldSeen, false);
 assert.equal(droppedIntoTarget.snapshot().flask.releaseSeen, false);
 
 // Retreat evidence is actual post-settle EE displacement; normal EE/object geometry separation cannot satisfy it by itself.
 const noFakeRetreat = new OpenArmBimanualStackEvaluator();
 noFakeRetreat.observe(obs({ time: 0, contacts: [flaskInner, flaskOuter] }));
-noFakeRetreat.observe(obs({ time: 0.10, flask: [0.509, 0.1535, 1.110], contacts: [flaskInner, flaskOuter] }));
-noFakeRetreat.observe(obs({ time: 0.20, flask: [0.579, 0.1535, 1.110], contacts: [flaskInner, flaskOuter] }));
-noFakeRetreat.observe(obs({ time: 0.30, flask: [0.608, 0.1535, 1.085], contacts: [flaskInner, flaskOuter, flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
+noFakeRetreat.observe(obs({ time: 0.10, flask: [0.509, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
+noFakeRetreat.observe(obs({ time: 0.20, flask: [0.579, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
+noFakeRetreat.observe(obs({ time: 0.30, flask: [0.608, 0.1535, 1.092], contacts: [flaskInner, flaskOuter, flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
 assert.equal(noFakeRetreat.snapshot().flask.supportWhileHeldSeen, true);
-noFakeRetreat.observe(obs({ time: 0.31, flask: [0.608, 0.1535, 1.085], contacts: [flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
+noFakeRetreat.observe(obs({ time: 0.31, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
 assert.equal(noFakeRetreat.snapshot().flask.releaseSeen, true);
-noFakeRetreat.observe(obs({ time: 0.51, flask: [0.608, 0.1535, 1.085], contacts: [flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
+noFakeRetreat.observe(obs({ time: 0.51, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
 assert.equal(noFakeRetreat.snapshot().flask.settled, true);
-noFakeRetreat.observe(obs({ time: 0.52, flask: [0.608, 0.1535, 1.085], contacts: [flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
+noFakeRetreat.observe(obs({ time: 0.52, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
 assert.equal(noFakeRetreat.snapshot().flask.retreated, false);
-noFakeRetreat.observe(obs({ time: 0.60, flask: [0.608, 0.1535, 1.085], contacts: [flaskSupport], leftEe: [0.668, 0.1535, 1.155] }));
+noFakeRetreat.observe(obs({ time: 0.60, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.668, 0.1535, 1.155] }));
 assert.equal(noFakeRetreat.snapshot().flask.retreated, true);
 
 console.log('OpenArm V2 Phase 5A package/evaluator/WebMCP core checks: OK');
