@@ -1,5 +1,6 @@
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
+import { CanonicalRobotRig, canonicalVisualProvenance } from '../canonical-rig.js';
 import { BrowserMuJoCoBackend } from './browser-mujoco-backend.js';
 import { PhysicsSession } from './session.js';
 import { OPENARM_V2_PHASE5A_MODEL_PACKAGE } from './openarm-model-package.js';
@@ -9,6 +10,15 @@ import { OpenArmBimanualStackEvaluator } from './openarm-task-evaluator.js';
 const MAX_WEBMCP_ADVANCE_SECONDS = 2;
 const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
 const PRESENTATION_GROUND_COLOR = 0x687378;
+const CANONICAL_OPENARM_MOUNT_TRANSLATION_MM = Object.freeze([185, 790, 0]);
+const NONPHYSICAL_CANONICAL_PARTS = new Set([
+  'turntable_pedestal',
+  'turntable_bearing',
+  'turntable_disc',
+  'turntable_heading',
+  'openarm_body_link0_low_stand',
+]);
+const PHYSICAL_GRIPPER_MAX_RAD = Math.PI / 4;
 
 function toThreePosition(positionM = [0, 0, 0]) {
   return new THREE.Vector3(Number(positionM[0]) * 1000, Number(positionM[2]) * 1000, -Number(positionM[1]) * 1000);
@@ -42,27 +52,23 @@ function box(widthM, heightM, depthM, material) {
 function cylinder(radiusM, heightM, material) {
   return new THREE.Mesh(new THREE.CylinderGeometry(radiusM * 1000, radiusM * 1000, heightM * 1000, 32), material);
 }
-function setSegment(mesh, start, end) {
-  const a = toThreePosition(start);
-  const b = toThreePosition(end);
-  const delta = b.clone().sub(a);
-  const length = delta.length();
-  mesh.position.copy(a).add(b).multiplyScalar(0.5);
-  mesh.scale.set(1, Math.max(0.001, length), 1);
-  if (length > 1e-9) mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize());
+function canonicalStateFromObservation(observation) {
+  const state = {};
+  for (const side of ['left', 'right']) {
+    for (let index = 1; index <= 7; index += 1) {
+      const joint = observation?.joints?.[`openarm_${side}_joint${index}`];
+      const positionRad = Number(joint?.positionRad);
+      if (Number.isFinite(positionRad)) state[`${side}_joint_${index}.pos`] = THREE.MathUtils.radToDeg(positionRad);
+    }
+    const fingerRad = Math.abs(Number(observation?.joints?.[`openarm_${side}_finger_joint1`]?.positionRad));
+    if (Number.isFinite(fingerRad)) {
+      // Canonical presentation adapter uses the legacy public gripper scale only as
+      // a visual conversion. It is not a physical command or hardware claim.
+      state[`${side}_gripper.pos`] = -Math.min(65, (fingerRad / PHYSICAL_GRIPPER_MAX_RAD) * 65);
+    }
+  }
+  return state;
 }
-
-const ROBOT_SEGMENTS = Object.freeze(['left', 'right'].flatMap((side) => [
-  [`openarm_${side}_base_link`, `openarm_${side}_link1`],
-  [`openarm_${side}_link1`, `openarm_${side}_link2`],
-  [`openarm_${side}_link2`, `openarm_${side}_link3`],
-  [`openarm_${side}_link3`, `openarm_${side}_link4`],
-  [`openarm_${side}_link4`, `openarm_${side}_link5`],
-  [`openarm_${side}_link5`, `openarm_${side}_link6`],
-  [`openarm_${side}_link6`, `openarm_${side}_ee_base_link`],
-  [`openarm_${side}_ee_base_link`, `openarm_${side}_ee_inner_finger`],
-  [`openarm_${side}_ee_base_link`, `openarm_${side}_ee_outer_finger`],
-]));
 
 export class OpenArmPhysicalSimulator {
   constructor(canvas) {
@@ -70,13 +76,13 @@ export class OpenArmPhysicalSimulator {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xb9c1c4);
     this.camera = new THREE.PerspectiveCamera(42, 1, 1, 6000);
-    this.camera.position.set(1200, 980, 1250);
+    this.camera.position.set(1900, 1500, 0);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
-    this.controls.target.set(500, 1080, 0);
+    this.controls.target.set(420, 1160, 0);
 
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.35));
     const key = new THREE.DirectionalLight(0xffffff, 2.0);
@@ -94,10 +100,10 @@ export class OpenArmPhysicalSimulator {
     this.workcellRoot.name = 'openarm-v2-physical-workcell-presentation';
     this.scene.add(this.workcellRoot);
     this.robotRoot = new THREE.Group();
-    this.robotRoot.name = 'openarm-v2-physical-proxy-presentation';
+    this.robotRoot.name = 'openarm-v2-source-aligned-canonical-arm-presentation';
     this.scene.add(this.robotRoot);
-    this.segmentMeshes = new Map();
-    this.bodyMarkers = new Map();
+    this.canonicalRig = null;
+    this.hiddenCanonicalParts = [];
     this.objectMeshes = new Map();
     this.targetMarkers = [];
     this.session = null;
@@ -118,6 +124,7 @@ export class OpenArmPhysicalSimulator {
     if (scenario?.simulationMode !== 'physical_mujoco' || scenario?.physicalSceneId !== OPENARM_V2_PHASE5A_SCENE.id) {
       throw new Error('OpenArm physical simulator requires the Phase 5A V2 bimanual scene');
     }
+    await this.#ensureCanonicalPresentation();
     await this.#disposeSession();
     this.evaluator = new OpenArmBimanualStackEvaluator();
     await this.#createSession();
@@ -127,6 +134,8 @@ export class OpenArmPhysicalSimulator {
     this.canvas.dataset.physicalSceneId = OPENARM_V2_PHASE5A_SCENE.id;
     this.canvas.dataset.modelPackageId = OPENARM_V2_PHASE5A_SCENE.modelPackage;
     this.canvas.dataset.presentationGroundColor = '#687378';
+    this.canvas.dataset.openarmVisualSource = 'canonical-v2-arm-mesh-source-aligned';
+    this.canvas.dataset.openarmLegacyBaseYawRendered = 'false';
     this.fit();
     return true;
   }
@@ -164,8 +173,8 @@ export class OpenArmPhysicalSimulator {
     return true;
   }
   fit() {
-    this.controls.target.set(500, 1090, 0);
-    this.camera.position.set(1220, 1020, 1280);
+    this.controls.target.set(420, 1160, 0);
+    this.camera.position.set(1900, 1500, 0);
     this.camera.near = 1;
     this.camera.far = 6000;
     this.camera.updateProjectionMatrix();
@@ -188,6 +197,23 @@ export class OpenArmPhysicalSimulator {
     return Object.freeze({ sessionId: this.session.sessionId, epoch: this.session.epoch, sceneRevision: this.session.sceneRevision, robotId: this.session.robotId, simulationTimeSeconds: this.lastObservation.simulationTimeSeconds });
   }
   getTaskEvaluation() { return this.evaluator?.snapshot?.() || null; }
+  getPresentationAudit() {
+    const mountPositionsMm = {};
+    for (const side of ['left', 'right']) {
+      const position = this.canonicalRig?.getWorldPosition?.(`${side}_mount`);
+      mountPositionsMm[side] = position ? position.toArray() : null;
+    }
+    return Object.freeze({
+      source: canonicalVisualProvenance('openarm'),
+      physicalAuthority: 'MuJoCo PhysicsSession only',
+      jointPresentationSource: 'observed MuJoCo joint positions',
+      mountTranslationMm: [...CANONICAL_OPENARM_MOUNT_TRANSLATION_MM],
+      canonicalMountPositionsMm: mountPositionsMm,
+      hiddenNonphysicalParts: [...this.hiddenCanonicalParts],
+      legacyBaseYawControlled: false,
+      legacyBaseYawRendered: false,
+    });
+  }
   getTelemetry() {
     const observation = this.lastObservation;
     if (!observation) return {};
@@ -210,8 +236,10 @@ export class OpenArmPhysicalSimulator {
     return {
       contact_count: Number(observation.contactCount || 0),
       flask_grasp_seen: evaluation.flask.graspSeen,
+      flask_support_while_held_seen: evaluation.flask.supportWhileHeldSeen,
       flask_support_contact: evaluation.flask.currentSupportContact,
       beaker_grasp_seen: evaluation.beaker.graspSeen,
+      beaker_support_while_held_seen: evaluation.beaker.supportWhileHeldSeen,
       beaker_support_contact: evaluation.beaker.currentSupportContact,
       order_violation: evaluation.orderViolation,
       task_success: evaluation.success,
@@ -261,10 +289,33 @@ export class OpenArmPhysicalSimulator {
     this.disposed = true;
     this.ready = false;
     void this.#disposeSession();
+    if (this.canonicalRig) {
+      this.robotRoot.remove(this.canonicalRig.root);
+      this.canonicalRig.dispose();
+      this.canonicalRig = null;
+    }
     this.controls?.dispose?.();
     this.renderer?.dispose?.();
   }
 
+  async #ensureCanonicalPresentation() {
+    if (this.canonicalRig) return this.canonicalRig;
+    const rig = await CanonicalRobotRig.load('openarm');
+    const hidden = [];
+    rig.root.traverse((node) => {
+      if (node.isMesh && NONPHYSICAL_CANONICAL_PARTS.has(node.name)) {
+        node.visible = false;
+        hidden.push(node.name);
+      }
+    });
+    rig.root.position.fromArray(CANONICAL_OPENARM_MOUNT_TRANSLATION_MM);
+    rig.root.userData.presentationAuthority = 'observed MuJoCo joints only';
+    rig.root.userData.legacyBaseYawPhysical = false;
+    this.robotRoot.add(rig.root);
+    this.canonicalRig = rig;
+    this.hiddenCanonicalParts = hidden.sort();
+    return rig;
+  }
   async #createSession() {
     const session = new PhysicsSession(new BrowserMuJoCoBackend({ workerUrl: new URL('./openarm-mujoco-worker.js', import.meta.url) }), { sessionId: `ide-openarm-v2-${++this.sessionSequence}` });
     this.session = session;
@@ -293,15 +344,10 @@ export class OpenArmPhysicalSimulator {
     this.canvas.dataset.physicalTaskSettled = String(Boolean(evaluation?.flask?.settled && evaluation?.beaker?.settled));
   }
   #applyObservation(observation) {
-    for (const [key, mesh] of this.segmentMeshes) {
-      const [startId, endId] = key.split('>');
-      const start = observation.bodies?.[startId]?.positionM;
-      const end = observation.bodies?.[endId]?.positionM;
-      if (start && end) setSegment(mesh, start, end);
-    }
-    for (const [bodyId, marker] of this.bodyMarkers) {
-      const body = observation.bodies?.[bodyId];
-      if (body?.positionM) marker.position.copy(toThreePosition(body.positionM));
+    if (this.canonicalRig) {
+      this.canonicalRig.applyPhysicalState(canonicalStateFromObservation(observation));
+      this.canonicalRig.root.position.fromArray(CANONICAL_OPENARM_MOUNT_TRANSLATION_MM);
+      this.canonicalRig.root.updateMatrixWorld(true);
     }
     for (const [objectId, mesh] of this.objectMeshes) {
       const body = observation.bodies?.[objectId];
@@ -319,6 +365,11 @@ export class OpenArmPhysicalSimulator {
     table.name = 'visual-cell-table';
     this.workcellRoot.add(table);
 
+    const mount = box(0.08, 0.08, 0.12, darkMaterial);
+    mount.position.copy(toThreePosition([0.185, 0, 1.31]));
+    mount.name = 'visual-openarm-source-mount';
+    this.workcellRoot.add(mount);
+
     const fixtures = [
       ['left-source', box(0.07, 0.03, 0.07, supportMaterial), [0.509, 0.1535, 1.020]],
       ['left-hotplate', box(0.09, 0.03, 0.09, darkMaterial), [0.608, 0.1535, 1.020]],
@@ -331,25 +382,6 @@ export class OpenArmPhysicalSimulator {
     const markerMaterial = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.40, depthWrite: false });
     for (const [center, size] of [[[0.608, 0.1535, 1.036], [0.09, 0.001, 0.09]], [[0.608, -0.1535, 1.076], [0.08, 0.001, 0.08]]]) {
       const marker = box(size[0], size[1], size[2], markerMaterial); marker.position.copy(toThreePosition(center)); marker.userData.presentationOnly = true; this.targetMarkers.push(marker); this.workcellRoot.add(marker);
-    }
-
-    const leftMaterial = new THREE.MeshStandardMaterial({ color: 0xd95d47, roughness: 0.50, metalness: 0.18 });
-    const rightMaterial = new THREE.MeshStandardMaterial({ color: 0x4f78c4, roughness: 0.50, metalness: 0.18 });
-    for (const [startId, endId] of ROBOT_SEGMENTS) {
-      const material = startId.includes('_left_') ? leftMaterial : rightMaterial;
-      const segment = new THREE.Mesh(new THREE.CylinderGeometry(10, 10, 1, 12), material);
-      segment.castShadow = true;
-      segment.name = `visual-segment-${startId}-${endId}`;
-      this.segmentMeshes.set(`${startId}>${endId}`, segment);
-      this.robotRoot.add(segment);
-    }
-    for (const side of ['left', 'right']) {
-      for (const bodyId of [`openarm_${side}_ee_base_link`, `openarm_${side}_ee_inner_finger`, `openarm_${side}_ee_outer_finger`]) {
-        const marker = new THREE.Mesh(new THREE.SphereGeometry(bodyId.includes('finger') ? 8 : 12, 12, 8), side === 'left' ? leftMaterial : rightMaterial);
-        marker.name = `visual-body-${bodyId}`;
-        this.bodyMarkers.set(bodyId, marker);
-        this.robotRoot.add(marker);
-      }
     }
 
     const flaskGroup = new THREE.Group();
