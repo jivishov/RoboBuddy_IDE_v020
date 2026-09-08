@@ -13,6 +13,7 @@ let data = null;
 let paused = false;
 let descriptor = null;
 let jointState = new Map();
+let couplingState = new Map();
 let actuatorState = new Map();
 let bodyState = new Map();
 let modelInfo = null;
@@ -28,7 +29,7 @@ function validatedModelUrl(asset) { if (!MODEL_ASSET_RE.test(asset || '') || Str
 function assertNumericArrayClose(actual, expected, label, tolerance = MODEL_VALUE_TOLERANCE) { if (!Array.isArray(expected) || actual.length !== expected.length) throw new Error(`${label} descriptor shape mismatch`); for (let index = 0; index < actual.length; index += 1) { const delta = Math.abs(Number(actual[index]) - Number(expected[index])); if (!Number.isFinite(delta) || delta > tolerance) throw new Error(`${label} mismatch at index ${index}: compiled ${actual[index]}, descriptor ${expected[index]}`); } }
 
 function resolveModelAddresses(modelSha256) {
-  jointState = new Map(); actuatorState = new Map(); bodyState = new Map();
+  jointState = new Map(); couplingState = new Map(); actuatorState = new Map(); bodyState = new Map();
   for (const joint of descriptor.joints) {
     const id = idFor('mjOBJ_JOINT', joint.id);
     const qpos = Number(model.jnt_qposadr[id]);
@@ -38,6 +39,19 @@ function resolveModelAddresses(modelSha256) {
     if (joint.rangeRad) assertNumericArrayClose(range, joint.rangeRad, `Joint ${joint.id} range`);
     if (joint.axis) assertNumericArrayClose(axis, joint.axis, `Joint ${joint.id} axis`);
     jointState.set(joint.id, { id, qpos, dof, range, axis });
+  }
+  for (const coupling of descriptor.mechanicalCouplings || []) {
+    const driver = jointState.get(coupling.driverJointId);
+    if (!driver) throw new Error(`Mechanical coupling ${coupling.id} references unknown driver ${coupling.driverJointId}`);
+    if (jointState.has(coupling.followerJointId)) throw new Error(`Mechanical coupling follower ${coupling.followerJointId} collides with a declared command joint`);
+    const id = idFor('mjOBJ_JOINT', coupling.followerJointId);
+    const qpos = Number(model.jnt_qposadr[id]);
+    const dof = Number(model.jnt_dofadr[id]);
+    const range = [Number(model.jnt_range[id * 2]), Number(model.jnt_range[id * 2 + 1])];
+    const axis = [Number(model.jnt_axis[id * 3]), Number(model.jnt_axis[id * 3 + 1]), Number(model.jnt_axis[id * 3 + 2])];
+    const resolved = { ...coupling, driver, id, qpos, dof, range, axis, passiveCoupled: true };
+    couplingState.set(coupling.id, resolved);
+    jointState.set(coupling.followerJointId, { id, qpos, dof, range, axis, passiveCoupled: true });
   }
   for (const actuator of descriptor.actuators) {
     const id = idFor('mjOBJ_ACTUATOR', actuator.id);
@@ -136,11 +150,18 @@ function applyDeclaredInitialState() {
     data.qpos[joint.qpos] = value;
     if (actuator) data.ctrl[actuator.id] = value;
   }
+  for (const coupling of couplingState.values()) {
+    const driverValue = Number(data.qpos[coupling.driver.qpos]);
+    const followerValue = driverValue * Number(coupling.multiplier ?? 1) + Number(coupling.offsetRad ?? 0);
+    if (!Number.isFinite(followerValue)) throw new Error(`Mechanical coupling ${coupling.id} produced a non-finite setup value`);
+    if (coupling.range.every(Number.isFinite) && (followerValue < coupling.range[0] || followerValue > coupling.range[1])) throw new RangeError(`Mechanical coupling ${coupling.id} setup value ${followerValue} is outside follower range ${coupling.range[0]}..${coupling.range[1]}`);
+    data.qpos[coupling.qpos] = followerValue;
+  }
   paused = false;
   mujoco.mj_forward(model, data);
   return observation();
 }
-function disposeModel() { try { data?.delete?.(); } catch {} try { model?.delete?.(); } catch {} data = null; model = null; descriptor = null; jointState = new Map(); actuatorState = new Map(); bodyState = new Map(); modelInfo = null; paused = false; }
+function disposeModel() { try { data?.delete?.(); } catch {} try { model?.delete?.(); } catch {} data = null; model = null; descriptor = null; jointState = new Map(); couplingState = new Map(); actuatorState = new Map(); bodyState = new Map(); modelInfo = null; paused = false; }
 async function load(modelPackage) {
   if (!modelPackage?.id || !modelPackage?.asset || !modelPackage?.sha256 || !Array.isArray(modelPackage.joints) || !Array.isArray(modelPackage.actuators)) throw new Error('Worker requires a validated registered model package descriptor');
   const modelUrl = validatedModelUrl(modelPackage.asset);
