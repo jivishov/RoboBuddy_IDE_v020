@@ -38,6 +38,7 @@ jobs:
           node --check src/physics/capabilities.js
           node --check src/physics/model-registry.js
           node --check src/physics/mujoco-worker.js
+          node --check src/physics/phase1-scene.js
           node --check src/physics/session.js
           node --check src/physics/ui-status.js
           node --check src/runtime/live-python-bridge.js
@@ -109,6 +110,7 @@ jobs:
           assert 'id="taskSelect"' in Path('index.html').read_text()
           assert './src/app-v2.js' in Path('index.html').read_text()
           assert './src/physics/session.js' in Path('physics-slice.html').read_text()
+          assert './src/physics/phase1-scene.js' in Path('physics-slice.html').read_text()
           print('HTML parse: OK')
           PY
       - name: Install browser fidelity harness
