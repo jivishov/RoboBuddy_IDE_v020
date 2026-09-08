@@ -64,7 +64,10 @@ RoboBuddy executes the pinned Menagerie joint constraint. Commands are validated
 - Menagerie STS3215 simulation gains/effort behavior when interpreted as physical hardware behavior;
 - box-derived inertia distribution used to restore the camera-mount mass;
 - benchmark block dimensions, `0.020 kg` mass, inertia, friction, support-pad dimensions/positions, and target region;
-- benchmark work-surface contact parameters.
+- benchmark work-surface contact parameters;
+- task-evaluator acceptance thresholds: `0.030 m` lift clearance above the block's nominal support height, `0.050 m` horizontal carried travel, `0.012 m` final support-height tolerance, at least `0.20 s` of post-release target-support dwell, and at most `0.0005 m` positional drift during that dwell.
+
+The evaluator thresholds are declared acceptance criteria for this synthetic benchmark. They are chosen to reject contactless lift, free-body travel after a lost grasp, transient support contact, and visibly continuing translation while remaining comfortably inside the already validated P4 nominal behavior. They are not measured SO-101 hardware performance tolerances.
 
 These parameters support a controlled simulator benchmark. They are not measured laboratory geometry or installed-hardware calibration.
 
@@ -82,7 +85,7 @@ The supported SO-101 workspace is `SO-101 Physical Block Transfer` (`so101-physi
 - Python and WebMCP route to the same current PhysicsSession and reject stale session/epoch ownership.
 - The Three.js canonical SO-101 rig is presentation-only. MuJoCo radians are converted at the rendering boundary; the benchmark block is rendered directly from the MuJoCo body observation.
 - Rendering does not advance physics.
-- Task evaluation consumes the same MuJoCo observations. Success requires observed gripper contact, lift, carried contact, release, target inclusion, post-release target-support contact after elapsed simulation settling time, and final rest. Program completion or a commanded endpoint is not success.
+- Task evaluation consumes the same MuJoCo observations. Success requires observed gripper contact, lift while gripper contact is present, horizontal carry measured from a continuous lifted-contact anchor, release, target inclusion, sustained post-release target-support contact with bounded positional drift, and final rest. Program completion or a commanded endpoint is not success.
 - Reset is deterministic initial-condition creation. It clears task evidence and does not count as recovery of a failed manipulation.
 
 ## Supported and deferred SO-101 tasks
