@@ -2,7 +2,7 @@ name: Validate OpenArm Phase 5A
 
 on:
   push:
-    branches: ["fix/openarm-phase5a"]
+    branches: [main, "fix/**"]
   pull_request:
     branches: [main]
 
@@ -60,13 +60,28 @@ jobs:
           print('OpenArm nominal metrics:', json.dumps(nominal['metrics'], sort_keys=True))
           print('OpenArm negative success:', {r['trial']: r['metrics']['success'] for r in (miss, weak, blocked, outside, budget)})
           print('OpenArm tight metrics:', json.dumps(tight['metrics'], sort_keys=True))
+          assert nominal['classification'].startswith('native/browser model implementation comparison')
           assert nominal['engine']['version']=='3.11.0', nominal['engine']
           assert abs(nominal['engine']['timestepSeconds']-0.001)<1e-12
+          assert nominal['engine']['iterations'] > 0
+          assert len(nominal['model']['sha256']) == 64, nominal['model']
+          assert len(nominal['controller']['sha256']) == 64, nominal['controller']
           assert nominal['model']['neq']==2, nominal['model']
           assert nominal['model']['hasObjectWeld'] is False, nominal['model']
+          assert nominal['initialState']['simulationTimeSeconds'] == 0.0
+          assert len(nominal['commandSequence']) == 15
+          assert len(nominal['objectTrajectories']) > 10
+          assert nominal['taskVerdict'] == 'success', nominal['metrics']
           assert nominal['metrics']['success'] is True, nominal['metrics']
-          assert nominal['metrics']['flask']['settled'] is True, nominal['metrics']['flask']
-          assert nominal['metrics']['beaker']['settled'] is True, nominal['metrics']['beaker']
+          for obj in ('flask','beaker'):
+              metric=nominal['metrics'][obj]
+              assert metric['bilateralContact'] is True, metric
+              assert metric['supportWhileHeld'] is True, metric
+              assert metric['released'] is True, metric
+              assert metric['settled'] is True, metric
+              assert metric['retreated'] is True, metric
+              assert metric['retreatDistanceM'] >= 0.05, metric
+              assert metric['settleDriftM'] is not None and metric['settleDriftM'] <= 0.001, metric
           for result in (miss, weak, blocked, outside, budget):
               assert result['metrics']['success'] is False, (result['trial'], result['metrics'])
           assert tight['metrics']['success'] is True, tight['metrics']
