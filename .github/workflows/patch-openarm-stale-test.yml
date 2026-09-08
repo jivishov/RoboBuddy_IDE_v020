@@ -1,4 +1,4 @@
-name: One-shot OpenArm stale test patch
+name: One-shot OpenArm grip surrogate repair
 
 on:
   push:
@@ -9,27 +9,63 @@ permissions:
 
 jobs:
   patch:
-    if: ${{ !contains(github.event.head_commit.message, '[stale-test-patched]') }}
+    if: ${{ !contains(github.event.head_commit.message, '[grip-surrogate-patched]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Replace the obsolete legacy OpenArm backend expectation
+      - name: Refine the estimated fingertip collision surrogate and refresh the model hash
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path('tests/microduck-browser-smoke.spec.mjs')
-          text = path.read_text()
-          old = "await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulator-backend', 'source-robot');"
-          new = "await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulator-backend', 'browser-mujoco');\n  await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulation-authority', 'physics-session');"
-          count = text.count(old)
-          if count != 1:
-              raise SystemExit(f'expected exactly one stale OpenArm backend assertion, found {count}')
-          path.write_text(text.replace(old, new))
+          import hashlib
+
+          xml_path = Path('models/openarm_v2/manipulation.xml')
+          text = xml_path.read_text()
+          replacements = {
+              'size="0.008" class="left_fingertip"': 'size="0.009" class="left_fingertip"',
+              'size="0.008" class="right_fingertip"': 'size="0.009" class="right_fingertip"',
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 2:
+                  raise SystemExit(f'expected exactly two {old!r} fingertip surrogates, found {count}')
+              text = text.replace(old, new)
+          xml_path.write_text(text)
+
+          old_hash = 'db15fa4b4a9c120ec09762ff1f4e00d995675453ade1738707258f6f5bbc883f'
+          new_hash = hashlib.sha256(xml_path.read_bytes()).hexdigest()
+          if new_hash == old_hash:
+              raise SystemExit('model hash did not change after fingertip refinement')
+
+          updated = []
+          for path in Path('.').rglob('*'):
+              if not path.is_file() or '.git' in path.parts or path == xml_path:
+                  continue
+              try:
+                  payload = path.read_text()
+              except UnicodeDecodeError:
+                  continue
+              if old_hash in payload:
+                  path.write_text(payload.replace(old_hash, new_hash))
+                  updated.append(str(path))
+          if not updated:
+              raise SystemExit('no hard-coded model hash references were refreshed')
+
+          provenance = Path('models/openarm_v2/PROVENANCE.md')
+          p = provenance.read_text()
+          needle = 'Those primitive collision shapes are an approximation and are not equivalent to the upstream mesh contact geometry.'
+          addition = (' The fingertip capsule surrogate uses a 9 mm radius in this benchmark so a fully closed opposed-finger pose produces a small bilateral contact preload instead of an exactly tangent, numerically fragile 20 mm gap; this remains an estimated browser collision surrogate, not a source or hardware dimension.')
+          if addition.strip() not in p:
+              if needle not in p:
+                  raise SystemExit('provenance insertion point missing')
+              provenance.write_text(p.replace(needle, needle + addition))
+          print('refreshed model sha256', new_hash)
+          print('updated hash references', updated)
           PY
-      - name: Commit the one-line test correction
+      - name: Commit the physical grip-surrogate refinement
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tests/microduck-browser-smoke.spec.mjs
-          git commit -m "test(openarm): expect physical backend during MicroDuck switch [stale-test-patched]"
+          git add models/openarm_v2/manipulation.xml models/openarm_v2/PROVENANCE.md src/ tests/
+          git commit -m "fix(openarm): make bilateral pinch physically robust [grip-surrogate-patched]"
           git push
