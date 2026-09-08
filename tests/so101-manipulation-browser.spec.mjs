@@ -7,6 +7,7 @@ const BLOCK_HALF_Z = 0.007;
 const TARGET_CENTER = [0.358, -0.156];
 const TARGET_HALF = [0.020, 0.030];
 const CONTACT_RICH_PARITY_M = 0.02;
+const OBSERVATION_SAMPLE_STEPS = 20;
 
 function distance3(a, b) {
   return Math.sqrt(a.reduce((sum, value, index) => sum + ((Number(value) - Number(b[index])) ** 2), 0));
@@ -17,7 +18,7 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
   await page.goto('/physics-slice.html', { waitUntil: 'domcontentloaded' });
 
-  const result = await page.evaluate(async ({ supportZ, blockHalfZ, targetCenter, targetHalf }) => {
+  const result = await page.evaluate(async ({ supportZ, blockHalfZ, targetCenter, targetHalf, observationSampleSteps }) => {
     const [{ PhysicsSession }, { BrowserMuJoCoBackend }, { SO101_MANIPULATION_SCENE, SO101_BENCHMARK_TRANSFER_CONTROLLER }] = await Promise.all([
       import('/src/physics/session.js'),
       import('/src/physics/browser-mujoco-backend.js'),
@@ -42,25 +43,42 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
       let gripperContactSamples = 0;
       let carriedContactSamples = 0;
       const stageEnds = [];
-      const settleTail = [];
+      const settleSamples = [];
       let commandIndex = 0;
       const physicsDt = loaded.observation.engine.timestepSeconds;
       const controllerPeriod = SO101_BENCHMARK_TRANSFER_CONTROLLER.controllerPeriodSeconds;
       const stepsPerControllerPeriod = Math.round(controllerPeriod / physicsDt);
       if (Math.abs((stepsPerControllerPeriod * physicsDt) - controllerPeriod) > 1e-12) throw new Error('P4 controller period does not align with physics timestep');
+      if (observationSampleSteps % stepsPerControllerPeriod !== 0) throw new Error('P4 observation sampling must be an integer multiple of the controller interval');
 
-      for (const stage of SO101_BENCHMARK_TRANSFER_CONTROLLER.stages) {
+      const stages = SO101_BENCHMARK_TRANSFER_CONTROLLER.stages;
+      for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) {
+        const stage = stages[stageIndex];
+        const stageSteps = Math.round(stage.durationSeconds / physicsDt);
+        if (Math.abs((stageSteps * physicsDt) - stage.durationSeconds) > 1e-12) throw new Error(`P4 stage ${stage.name} does not align with physics timestep`);
+        const controllerIntervals = Math.round(stage.durationSeconds / controllerPeriod);
+        if (Math.abs((controllerIntervals * controllerPeriod) - stage.durationSeconds) > 1e-12) throw new Error(`P4 stage ${stage.name} does not align with controller period`);
+
         if (Object.keys(stage.targetsRad).length) {
           commandIndex += 1;
+          // Keep one bounded command alive through any following no-command settle stages.
+          // This changes only the command budget; the stage-constant target and exact physics steps are unchanged.
+          let commandBudgetSteps = stageSteps;
+          for (let futureIndex = stageIndex + 1; futureIndex < stages.length; futureIndex += 1) {
+            const future = stages[futureIndex];
+            if (Object.keys(future.targetsRad).length) break;
+            commandBudgetSteps += Math.round(future.durationSeconds / physicsDt);
+          }
           await session.sendCommand(
             { type: 'set_joint_targets', targetsRad: { ...stage.targetsRad } },
-            { commandId: `p4-stage-${commandIndex}-${stage.name}`, maxSteps: Math.round(stage.durationSeconds / physicsDt) },
+            { commandId: `p4-stage-${commandIndex}-${stage.name}`, maxSteps: commandBudgetSteps },
           );
         }
-        const intervals = Math.round(stage.durationSeconds / controllerPeriod);
-        if (Math.abs((intervals * controllerPeriod) - stage.durationSeconds) > 1e-12) throw new Error(`P4 stage ${stage.name} does not align with controller period`);
-        for (let interval = 0; interval < intervals; interval += 1) {
-          observation = await session.advanceSteps(stepsPerControllerPeriod);
+
+        for (let advancedSteps = 0; advancedSteps < stageSteps;) {
+          const chunkSteps = Math.min(observationSampleSteps, stageSteps - advancedSteps);
+          observation = await session.advanceSteps(chunkSteps);
+          advancedSteps += chunkSteps;
           const position = blockPosition(observation);
           maxBlockZM = Math.max(maxBlockZM, position[2]);
           const contacting = blockGripperContact(observation);
@@ -68,7 +86,7 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
             gripperContactSamples += 1;
             if (position[2] > supportZ + blockHalfZ + 0.020) carriedContactSamples += 1;
           }
-          if (stage.name === 'settle_final' && interval >= intervals - 5) settleTail.push(position);
+          if (stage.name === 'settle_final') settleSamples.push(position);
         }
         stageEnds.push({
           name: stage.name,
@@ -84,6 +102,7 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
       const inTarget = Math.abs(finalPositionM[0] - targetCenter[0]) <= targetHalf[0]
         && Math.abs(finalPositionM[1] - targetCenter[1]) <= targetHalf[1];
       const released = !blockGripperContact(observation);
+      const settleTail = settleSamples.slice(-3);
       const settleMotionM = settleTail.length >= 2
         ? Math.sqrt(settleTail[0].reduce((sum, value, index) => sum + ((value - settleTail.at(-1)[index]) ** 2), 0))
         : Number.POSITIVE_INFINITY;
@@ -106,11 +125,19 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
         resting,
         settleMotionM,
         stageEnds,
+        observationSampleSteps,
+        stepsPerControllerPeriod,
       };
     } finally {
       session.dispose();
     }
-  }, { supportZ: SUPPORT_Z, blockHalfZ: BLOCK_HALF_Z, targetCenter: TARGET_CENTER, targetHalf: TARGET_HALF });
+  }, {
+    supportZ: SUPPORT_Z,
+    blockHalfZ: BLOCK_HALF_Z,
+    targetCenter: TARGET_CENTER,
+    targetHalf: TARGET_HALF,
+    observationSampleSteps: OBSERVATION_SAMPLE_STEPS,
+  });
 
   expect(result.model.id).toBe('robobuddy-so101-manipulation-v1');
   expect(result.model.asset).toBe('models/so101/manipulation.xml');
@@ -118,6 +145,8 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
   expect(result.engine.version).toBe('3.11.0');
   expect(result.engine.timestepSeconds).toBeCloseTo(0.005, 12);
   expect(result.diagnostics.modelPackageId).toBe('so101-manipulation-menagerie-8161bba-v1');
+  expect(result.stepsPerControllerPeriod).toBe(4);
+  expect(result.observationSampleSteps).toBe(20);
   expect(result.simulationTimeSeconds).toBeCloseTo(5.1, 9);
   expect(result.gripperContactSamples).toBeGreaterThanOrEqual(4);
   expect(result.carriedContactSamples).toBeGreaterThanOrEqual(4);
