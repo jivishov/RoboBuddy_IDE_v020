@@ -39,6 +39,12 @@ assert.ok(
   'Phase 2A diagnostic base proxy must remain visual-only and non-colliding',
 );
 
+const playwrightConfigSource = readFileSync(new URL('../../playwright.config.mjs', import.meta.url), 'utf8');
+assert.ok(
+  playwrightConfigSource.includes('so101-physics-browser'),
+  'Playwright discovery must include tests/so101-physics-browser.spec.mjs so CI actually executes the Phase 2A browser/WASM acceptance test',
+);
+
 assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE), 'registered package root must be immutable');
 assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE.physics), 'registered package physics settings must be immutable');
 assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE.joints), 'registered package joint list must be immutable');
