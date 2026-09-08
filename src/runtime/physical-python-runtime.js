@@ -30,6 +30,7 @@ export class PhysicalPythonRuntime {
   }
 
   isActive() { return Boolean(this.active); }
+  isPaused() { return Boolean(this.active?.externallyPaused); }
   getRunEpoch() { return this.active?.runEpoch ?? this.runEpoch; }
 
   start(files, { workspaceEpoch, robotId = 'so101_follower' } = {}) {
@@ -44,6 +45,7 @@ export class PhysicalPythonRuntime {
     const active = {
       runEpoch, workerEpoch, workspaceEpoch, robotId: String(robotId), worker, bridge, completion,
       connected: false, pendingRequestId: null, stdout: '', stderr: '', completed: false,
+      externallyPaused: false, pauseWaiters: [],
     };
     this.worker = worker;
     this.active = active;
@@ -57,12 +59,37 @@ export class PhysicalPythonRuntime {
     return completion.promise;
   }
 
+  async pause() {
+    const active = this.active;
+    if (!active || active.externallyPaused) return false;
+    active.externallyPaused = true;
+    try {
+      if (active.connected) await active.bridge.pause();
+    } catch (error) {
+      active.externallyPaused = false;
+      throw error;
+    }
+    this.onState({ state: 'paused', runEpoch: active.runEpoch, apiVersion: LIVE_SIM_API_VERSION });
+    return true;
+  }
+
+  async resume() {
+    const active = this.active;
+    if (!active || !active.externallyPaused) return false;
+    if (active.connected) await active.bridge.resume();
+    active.externallyPaused = false;
+    this.#releasePauseWaiters(active);
+    this.onState({ state: 'running', runEpoch: active.runEpoch, apiVersion: LIVE_SIM_API_VERSION });
+    return true;
+  }
+
   async cancel(reason = 'OPERATION_CANCELLED', { error = null, silent = false, immediate = false } = {}) {
     const active = this.active;
     if (!active) return false;
     this.runEpoch += 1;
     this.active = null;
     clearTimeout(active.timeout);
+    this.#releasePauseWaiters(active);
     const cancellation = error || runtimeError('OPERATION_CANCELLED', cancellationMessage(reason), { reason });
     try { await active.bridge.cancel(reason); } catch {}
     active.bridge.dispose?.();
@@ -132,12 +159,14 @@ export class PhysicalPythonRuntime {
   }
 
   async #executeBoundary(active, method, args) {
+    if (!['pause', 'resume', 'disconnect'].includes(method)) await this.#waitIfExternallyPaused(active);
     switch (method) {
       case 'connect': {
         const requested = String(args.robot_id || active.robotId);
         if (requested !== active.robotId) throw runtimeError('PROFILE_MISMATCH', `Python requested ${requested}; active physical runtime is ${active.robotId}`);
         const result = await active.bridge.connect(requested);
         active.connected = true;
+        if (active.externallyPaused) await active.bridge.pause();
         return result;
       }
       case 'disconnect':
@@ -173,6 +202,19 @@ export class PhysicalPythonRuntime {
     }
   }
 
+  #waitIfExternallyPaused(active) {
+    if (!active.externallyPaused) return Promise.resolve();
+    return new Promise((resolve, reject) => active.pauseWaiters.push({ resolve, reject }));
+  }
+
+  #releasePauseWaiters(active, error = null) {
+    for (const waiter of active.pauseWaiters || []) {
+      if (error) waiter.reject(error);
+      else waiter.resolve();
+    }
+    active.pauseWaiters = [];
+  }
+
   #assertConnected(active) {
     if (!active.connected) throw runtimeError('SIMULATION_NOT_READY', 'Call await connect(...) before using the physical simulation API');
   }
@@ -181,6 +223,7 @@ export class PhysicalPythonRuntime {
     if (!this.#isCurrent(active)) return;
     this.active = null;
     clearTimeout(active.timeout);
+    this.#releasePauseWaiters(active);
     active.completed = true;
     active.bridge.disconnect?.();
     active.bridge.dispose?.();
@@ -194,6 +237,7 @@ export class PhysicalPythonRuntime {
     if (!this.#isCurrent(active)) return;
     this.active = null;
     clearTimeout(active.timeout);
+    this.#releasePauseWaiters(active, error);
     void active.bridge.cancel?.(error.code || 'PYTHON_FAILURE').catch?.(() => {});
     active.bridge.dispose?.();
     active.worker?.terminate?.();
@@ -216,4 +260,4 @@ function byteLength(value) { return new TextEncoder().encode(String(value)).byte
 function deferred() { let resolve; let reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function runtimeError(code, message, details = {}) { const error = new Error(message); error.code = code; Object.assign(error, details); return error; }
 function serializeError(error) { return { code: error?.code || 'PYTHON_BRIDGE', message: String(error?.message || error).slice(0, 4096) }; }
-function cancellationMessage(reason) { return ({ STOP: 'The physical Python run was stopped.', WORKSPACE_CHANGED: 'The physical workspace changed during execution.', PROFILE_CHANGED: 'The robot profile changed during execution.', REPLACED_RUN: 'A newer physical Python run replaced this run.', PROGRAM_TIMEOUT: 'The physical Python run exceeded its deadline.' })[reason] || 'The physical Python operation was cancelled.'; }
+function cancellationMessage(reason) { return ({ STOP: 'The physical Python run was stopped.', WORKSPACE_CHANGED: 'The physical workspace changed during execution.', PROFILE_CHANGED: 'The robot profile changed during execution.', RESET: 'The physical simulation reset cancelled the active Python run.', MANUAL_PREEMPTION: 'Manual control preempted the physical Python run.', REPLACED_RUN: 'A newer physical Python run replaced this run.', PROGRAM_TIMEOUT: 'The physical Python run exceeded its deadline.' })[reason] || 'The physical Python operation was cancelled.'; }
