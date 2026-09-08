@@ -22,7 +22,7 @@ INITIAL = {
     "gripper": 0.60,
 }
 TARGET_CENTER = np.array([0.358, -0.156], dtype=float)
-TARGET_HALF = np.array([0.030, 0.030], dtype=float)
+TARGET_HALF = np.array([0.020, 0.030], dtype=float)
 SUPPORT_Z = 0.227
 BLOCK_HALF_Z = 0.007
 
@@ -102,7 +102,7 @@ def block_state(model, data, block_body, free_joint, block_geom):
         "positionM": pos.tolist(),
         "speedNorm": float(np.linalg.norm(vel)),
         "contacts": contacts,
-        "gripperContact": is_gripper_contact(contacts),
+        "gripperContact": bool(is_gripper_contact(contacts)),
     }
 
 
@@ -148,7 +148,7 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
         stages.append({
             "name": name,
             "targetsRad": dict(targets),
-            "seconds": seconds,
+            "seconds": float(seconds),
             "start": start,
             "end": end,
             "actualJointsRad": joint_positions(model, data, joints),
@@ -173,14 +173,14 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
     stage("settle_final", {}, 0.80)
 
     final = block_state(model, data, block_body, free_joint, block_geom)
-    initial_pos = np.array(stages[0]["start"]["positionM"])
-    final_pos = np.array(final["positionM"])
-    lifted = max_z > SUPPORT_Z + BLOCK_HALF_Z + 0.030
+    initial_pos = np.array(stages[0]["start"]["positionM"], dtype=float)
+    final_pos = np.array(final["positionM"], dtype=float)
+    lifted = bool(max_z > SUPPORT_Z + BLOCK_HALF_Z + 0.030)
     horizontal_travel = float(np.linalg.norm(final_pos[:2] - initial_pos[:2]))
     in_target = bool(np.all(np.abs(final_pos[:2] - TARGET_CENTER) <= TARGET_HALF))
-    resting = abs(final_pos[2] - (SUPPORT_Z + BLOCK_HALF_Z)) < 0.012 and final["speedNorm"] < 0.08
-    released = not final["gripperContact"]
-    physically_carried = lifted and carried_contact_samples >= 4 and horizontal_travel > 0.05
+    resting = bool(abs(float(final_pos[2]) - (SUPPORT_Z + BLOCK_HALF_Z)) < 0.012 and final["speedNorm"] < 0.08)
+    released = bool(not final["gripperContact"])
+    physically_carried = bool(lifted and carried_contact_samples >= 4 and horizontal_travel > 0.05)
     success = bool(gripper_contact_samples >= 4 and physically_carried and in_target and resting and released)
     return {
         "trial": trial,
@@ -188,7 +188,7 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
         "engine": {"version": mujoco.__version__, "timestepSeconds": float(model.opt.timestep), "iterations": int(model.opt.iterations), "lsIterations": int(model.opt.ls_iterations)},
         "controller": {"type": "bounded position-target stage controller", "ordinaryControlWrites": "data.ctrl only", "initialJointPositionsRad": INITIAL},
         "benchmark": {"blockMassKg": profile["payloadMassKg"], "blockHalfExtentsM": [0.008, 0.006, 0.007], "surfaceFriction": 0.8, "targetCenterXYM": TARGET_CENTER.tolist(), "targetHalfExtentsXYM": TARGET_HALF.tolist()},
-        "metrics": {"success": success, "lifted": lifted, "physicallyCarried": physically_carried, "inTarget": in_target, "resting": resting, "released": released, "maxBlockZM": max_z, "horizontalTravelM": horizontal_travel, "gripperContactSamples": gripper_contact_samples, "carriedContactSamples": carried_contact_samples, "finalPositionM": final["positionM"], "finalSpeedNorm": final["speedNorm"], "stageDiagnostics": stages},
+        "metrics": {"success": success, "lifted": lifted, "physicallyCarried": physically_carried, "inTarget": in_target, "resting": resting, "released": released, "maxBlockZM": float(max_z), "horizontalTravelM": horizontal_travel, "gripperContactSamples": int(gripper_contact_samples), "carriedContactSamples": int(carried_contact_samples), "finalPositionM": final["positionM"], "finalSpeedNorm": final["speedNorm"], "stageDiagnostics": stages},
         "stages": stages,
     }
 
