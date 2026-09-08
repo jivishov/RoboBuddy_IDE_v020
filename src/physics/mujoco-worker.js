@@ -4,6 +4,8 @@ const MUJOCO_BASE_URL = new URL('../../assets/microduck/runtime/mujoco/', import
 const EXPECTED_MUJOCO_VERSION = '3.11.0';
 const MAX_STEP_BATCH = 100000;
 const MODEL_ASSET_RE = /^models\/[A-Za-z0-9._/-]+\.xml$/;
+const MODEL_VALUE_TOLERANCE = 1e-9;
+const INTEGRATOR_CODES = Object.freeze({ Euler: 0, RK4: 1, implicit: 2, implicitfast: 3 });
 
 let mujoco = null; let model = null; let data = null; let paused = false; let descriptor = null;
 let jointState = new Map(); let actuatorState = new Map(); let bodyState = new Map(); let modelInfo = null;
@@ -16,23 +18,38 @@ function idFor(typeName, name) { const id = Number(mujoco.mj_name2id(model, enum
 function nameForGeom(id) { if (!Number.isInteger(id) || id < 0 || typeof mujoco?.mj_id2name !== 'function') return null; try { return mujoco.mj_id2name(model, enumValue('mjOBJ_GEOM'), id) || null; } catch { return null; } }
 function runtimeVersionEvidence() { if (typeof mujoco?.mj_versionString !== 'function') return { version: EXPECTED_MUJOCO_VERSION, evidence: 'bundled asset manifest and repository hash gate' }; const version = String(mujoco.mj_versionString()); if (version !== EXPECTED_MUJOCO_VERSION) throw new Error(`Bundled MuJoCo runtime reports ${version}; expected ${EXPECTED_MUJOCO_VERSION}`); return { version, evidence: 'mj_versionString runtime introspection' }; }
 function validatedModelUrl(asset) { if (!MODEL_ASSET_RE.test(asset || '') || String(asset).includes('..')) throw new Error('Worker rejected non-registry model asset path'); const url = new URL(`../../${asset}`, import.meta.url); if (url.origin !== self.location.origin) throw new Error('Worker model asset must be same-origin'); return url.href; }
+function assertNumericArrayClose(actual, expected, label, tolerance = MODEL_VALUE_TOLERANCE) { if (!Array.isArray(expected) || actual.length !== expected.length) throw new Error(`${label} descriptor shape mismatch`); for (let index = 0; index < actual.length; index += 1) { const delta = Math.abs(Number(actual[index]) - Number(expected[index])); if (!Number.isFinite(delta) || delta > tolerance) throw new Error(`${label} mismatch at index ${index}: compiled ${actual[index]}, descriptor ${expected[index]}`); } }
 
 function resolveModelAddresses(modelSha256) {
   jointState = new Map(); actuatorState = new Map(); bodyState = new Map();
   for (const joint of descriptor.joints) {
     const id = idFor('mjOBJ_JOINT', joint.id); const qpos = Number(model.jnt_qposadr[id]); const dof = Number(model.jnt_dofadr[id]);
     if (![qpos, dof].every(Number.isInteger)) throw new Error(`MuJoCo address table is invalid for joint ${joint.id}`);
-    const offset = id * 2; jointState.set(joint.id, { id, qpos, dof, range: [Number(model.jnt_range[offset]), Number(model.jnt_range[offset + 1])] });
+    const rangeOffset = id * 2; const range = [Number(model.jnt_range[rangeOffset]), Number(model.jnt_range[rangeOffset + 1])];
+    const axisOffset = id * 3; const axis = [Number(model.jnt_axis[axisOffset]), Number(model.jnt_axis[axisOffset + 1]), Number(model.jnt_axis[axisOffset + 2])];
+    if (joint.rangeRad) assertNumericArrayClose(range, joint.rangeRad, `Joint ${joint.id} range`);
+    if (joint.axis) assertNumericArrayClose(axis, joint.axis, `Joint ${joint.id} axis`);
+    jointState.set(joint.id, { id, qpos, dof, range, axis });
   }
   for (const actuator of descriptor.actuators) {
     const id = idFor('mjOBJ_ACTUATOR', actuator.id); const joint = jointState.get(actuator.jointId);
     if (!joint) throw new Error(`Actuator ${actuator.id} references unknown descriptor joint ${actuator.jointId}`);
     if (model.actuator_trnid?.length && Number(model.actuator_trnid[id * 2]) !== joint.id) throw new Error(`Actuator ${actuator.id} is not mapped to joint ${actuator.jointId}`);
-    const offset = id * 2; actuatorState.set(actuator.id, { ...actuator, id, controlRange: [Number(model.actuator_ctrlrange[offset]), Number(model.actuator_ctrlrange[offset + 1])] });
+    const offset = id * 2; const controlRange = [Number(model.actuator_ctrlrange[offset]), Number(model.actuator_ctrlrange[offset + 1])];
+    if (actuator.controlRangeRad) assertNumericArrayClose(controlRange, actuator.controlRangeRad, `Actuator ${actuator.id} control range`);
+    actuatorState.set(actuator.id, { ...actuator, id, controlRange });
   }
   for (const body of descriptor.bodies || []) bodyState.set(body.id, { id: idFor('mjOBJ_BODY', body.id) });
+
   const timestepSeconds = Number(model.opt?.timestep);
   if (!Number.isFinite(timestepSeconds) || Math.abs(timestepSeconds - Number(descriptor.physics.timestepSeconds)) > 1e-12) throw new Error(`Unexpected timestep ${timestepSeconds}; expected ${descriptor.physics.timestepSeconds}`);
+  const expectedIntegrator = INTEGRATOR_CODES[descriptor.physics.integrator]; const compiledIntegrator = Number(model.opt?.integrator);
+  if (!Number.isInteger(expectedIntegrator) || compiledIntegrator !== expectedIntegrator) throw new Error(`Unexpected integrator ${compiledIntegrator}; expected ${descriptor.physics.integrator} (${expectedIntegrator})`);
+  const compiledIterations = Number(model.opt?.iterations);
+  if (descriptor.physics.iterations != null && compiledIterations !== Number(descriptor.physics.iterations)) throw new Error(`Unexpected solver iterations ${compiledIterations}; expected ${descriptor.physics.iterations}`);
+  const compiledLsIterations = Number(model.opt?.ls_iterations ?? model.opt?.lsIterations);
+  if (descriptor.physics.lsIterations != null && compiledLsIterations !== Number(descriptor.physics.lsIterations)) throw new Error(`Unexpected solver line-search iterations ${compiledLsIterations}; expected ${descriptor.physics.lsIterations}`);
+
   const version = runtimeVersionEvidence(); modelInfo = { modelSha256, engineVersion: version.version, engineVersionEvidence: version.evidence, timestepSeconds };
 }
 
@@ -49,10 +66,15 @@ function readContacts() {
   return { count, readable, contacts };
 }
 
-function actuatorForJoint(jointId) { const matches = [...actuatorState.values()].filter((actuator) => actuator.jointId === jointId && actuator.command === 'position-rad'); if (matches.length !== 1) throw new Error(`Joint ${jointId} does not have exactly one position actuator`); return matches[0]; }
+function positionActuatorForJoint(jointId, { required = false } = {}) {
+  const matches = [...actuatorState.values()].filter((actuator) => actuator.jointId === jointId && actuator.command === 'position-rad');
+  if (matches.length > 1 || (required && matches.length !== 1)) throw new Error(`Joint ${jointId} does not have exactly one position actuator`);
+  return matches[0] || null;
+}
+function actuatorForJoint(jointId) { return positionActuatorForJoint(jointId, { required: true }); }
 function observation() {
   if (!model || !data || !descriptor || !modelInfo) return { simulationTime: 0, model: null, engine: null, joints: {}, bodies: {}, contactCount: 0, contactsReadable: false, contacts: [] };
-  const joints = {}; for (const [name, joint] of jointState) { const actuator = actuatorForJoint(name); joints[name] = { positionRad: Number(data.qpos[joint.qpos]), velocityRadS: Number(data.qvel[joint.dof]), targetRad: Number(data.ctrl[actuator.id]), controlRangeRad: [...actuator.controlRange], jointRangeRad: [...joint.range] }; }
+  const joints = {}; for (const [name, joint] of jointState) { const actuator = positionActuatorForJoint(name); joints[name] = { positionRad: Number(data.qpos[joint.qpos]), velocityRadS: Number(data.qvel[joint.dof]), targetRad: actuator ? Number(data.ctrl[actuator.id]) : null, controlRangeRad: actuator ? [...actuator.controlRange] : null, jointRangeRad: [...joint.range] }; }
   const bodies = {}; for (const [name, body] of bodyState) { const offset = body.id * 3; bodies[name] = { frame: 'mujoco_world', positionM: [Number(data.xpos[offset]), Number(data.xpos[offset + 1]), Number(data.xpos[offset + 2])] }; }
   const contactState = readContacts();
   return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts };
