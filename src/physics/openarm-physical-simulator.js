@@ -9,7 +9,7 @@ import { OpenArmBimanualStackEvaluator } from './openarm-task-evaluator.js';
 
 const MAX_WEBMCP_ADVANCE_SECONDS = 2;
 const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
-const OPENARM_OBSERVATION_BATCH_STEPS = 20; // 20 ms at the pinned 0.001 s timestep.
+const OPENARM_OBSERVATION_BATCH_STEPS = 50; // 50 ms at the pinned 0.001 s timestep; matches native evidence sampling cadence.
 const PRESENTATION_GROUND_COLOR = 0x687378;
 const CANONICAL_OPENARM_MOUNT_TRANSLATION_MM = Object.freeze([185, 790, 0]);
 const NONPHYSICAL_CANONICAL_PARTS = new Set([
