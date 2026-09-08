@@ -156,13 +156,12 @@ class App {
     $('robotSelect').value = id;
     const p = PROFILES[id];
     $('robotLabel').textContent = p.label;
-    const migratedPhysical = id === 'so101' || id === 'openarm';
-    const visibleDriver = migratedPhysical ? 'robobuddy.sim.v1 · browser MuJoCo' : p.driver;
+    const visibleDriver = id === 'so101' ? 'robobuddy.sim.v1 · browser MuJoCo' : p.driver;
     $('driverLabel').textContent = visibleDriver;
     $('driverStatus').textContent = visibleDriver;
     this.updateSimulationPresentation(p);
     this.updateExecutionControls();
-    this.setStatus(migratedPhysical ? `Loading ${p.shortLabel} MuJoCo physical workspace…` : p.simulationMode === 'policy_sim' ? 'Loading local MicroDuck runtime visual…' : p.simulationMode === 'kinematic_pose' ? 'Loading Unitree canonical pose workspace…' : 'Loading reviewed mission and source plant…');
+    this.setStatus(id === 'so101' ? 'Loading SO-101 MuJoCo physical workspace…' : p.simulationMode === 'policy_sim' ? 'Loading local MicroDuck runtime visual…' : p.simulationMode === 'kinematic_pose' ? 'Loading Unitree canonical pose workspace…' : 'Loading reviewed mission and source plant…');
     try {
       const selectedTaskId = this.taskId;
       const scenario = await loadPatchedScenario(id, selectedTaskId);
@@ -204,8 +203,8 @@ class App {
       this.files = { 'main.py': `# RoboBuddy workspace failed to load.\n# ${String(error.message || error)}\n` };
       this.renderFiles();
       this.openFile('main.py');
-      this.problem('error', migratedPhysical ? 'PHYSICAL_WORKSPACE' : p.simulationMode === 'policy_sim' ? 'MICRODUCK_RIG' : p.simulationMode === 'kinematic_pose' ? 'RIG_WORKSPACE' : 'SOURCE_TASK', String(error.message || error));
-      this.setStatus(migratedPhysical ? `${p.shortLabel} physical workspace unavailable` : p.simulationMode === 'policy_sim' ? 'MicroDuck runtime visual unavailable' : p.simulationMode === 'kinematic_pose' ? 'Unitree rig workspace unavailable' : 'Pinned source task unavailable');
+      this.problem('error', id === 'so101' ? 'PHYSICAL_WORKSPACE' : p.simulationMode === 'policy_sim' ? 'MICRODUCK_RIG' : p.simulationMode === 'kinematic_pose' ? 'RIG_WORKSPACE' : 'SOURCE_TASK', String(error.message || error));
+      this.setStatus(id === 'so101' ? 'SO-101 physical workspace unavailable' : p.simulationMode === 'policy_sim' ? 'MicroDuck runtime visual unavailable' : p.simulationMode === 'kinematic_pose' ? 'Unitree rig workspace unavailable' : 'Pinned source task unavailable');
       this.updateExecutionControls();
       this.emitAgentContextChange();
     }
@@ -290,7 +289,7 @@ class App {
       : `RoboBuddy_AI@${TASK_PATCH_REVISION.slice(0, 12)}`;
     $('taskPanel').innerHTML = `<h2>${escapeHtml(scenario?.title || p.task.title)}</h2><p>${escapeHtml(scenario?.brief || p.source)}</p><p><strong>${sourceLabel}:</strong> ${escapeHtml(sourceText)}</p><ol>${labels.map((label, index) => `<li class="${index === 0 ? 'task-current' : ''}">${escapeHtml(label)}</li>`).join('')}</ol><details><summary>Fidelity boundary</summary><p>${escapeHtml(physical ? scenario.limitations.join(' ') : p.task.limitations)}</p></details>`;
     $('fidelityText').textContent = physical
-      ? `${p.shortLabel} uses one authoritative browser MuJoCo PhysicsSession. Rendering, live Python, WebMCP, and task evaluation consume that same state. ${scenario.limitations.join(' ')}`
+      ? `SO-101 uses one authoritative browser MuJoCo PhysicsSession. Rendering, live Python, WebMCP, and task evaluation consume that same state. ${scenario.limitations.join(' ')}`
       : policy
       ? `${fidelityNoticeFor(this.profileId)} ${p.task.limitations}`
       : kinematic
@@ -317,7 +316,7 @@ class App {
   async resetWorkspace() {
     if (!this.workspaceMutationEnabled || this.workspaceStatus !== 'ready') return;
     const prompt = this.isPhysicalWorkspace()
-      ? 'Reset all files for this physical MuJoCo workspace to the live async starter?'
+      ? 'Reset all files for this SO-101 physical workspace to the live async MuJoCo starter?'
       : this.isKinematicPoseWorkspace()
       ? 'Reset all files for this Unitree workspace to its browser-only kinematic-pose starter?'
       : this.isPolicyWorkspace()
@@ -337,7 +336,7 @@ class App {
   }
 
   async prepare() {
-    if (this.isPhysicalWorkspace()) throw new Error('Physical MuJoCo workspaces execute live async Python and do not compile to replay events.');
+    if (this.isPhysicalWorkspace()) throw new Error('SO-101 physical workspaces execute live async Python and do not compile to replay events.');
     this.setStatus('Preparing Python…');
     this.problems = [];
     this.commands = [];
@@ -413,7 +412,7 @@ class App {
     pauseButton.setAttribute('aria-pressed', String(paused));
     $('runBtn').disabled = active || !executableWorkspace;
     $('stepBtn').disabled = physical || (!this.isPolicyWorkspace() && active) || !executableWorkspace || (this.isPolicyWorkspace() && active && !paused);
-    $('stepBtn').title = physical ? 'Physical MuJoCo Python uses live async execution; edit code and use Run.' : 'Step physical action (F10)';
+    $('stepBtn').title = physical ? 'SO-101 physical Python uses live async execution; edit code and use Run.' : 'Step physical action (F10)';
     $('cursorBtn').disabled = physical || active || !executableWorkspace;
     $('cursorBtn').title = physical ? 'Run to Cursor is not exposed for the live physical worker; use Run.' : 'Run to Cursor (Ctrl+F10)';
     $('resetBtn').disabled = !workspaceReady;
@@ -464,12 +463,12 @@ class App {
         this.executionState = 'running';
         void this.physicalRuntime.resume().catch((error) => this.problem('error', error.code || 'PHYSICAL_PAUSE', error.message));
         this.updateExecutionControls();
-        this.setStatus(`${PROFILES[this.profileId].shortLabel} live Python and MuJoCo resumed`);
+        this.setStatus('SO-101 live Python and MuJoCo resumed');
       } else if (this.executionState === 'running') {
         this.executionState = 'paused';
         void this.physicalRuntime.pause().catch((error) => this.problem('error', error.code || 'PHYSICAL_PAUSE', error.message));
         this.updateExecutionControls();
-        this.setStatus(`${PROFILES[this.profileId].shortLabel} live Python and MuJoCo paused`);
+        this.setStatus('SO-101 live Python and MuJoCo paused');
       }
       return;
     }
@@ -558,7 +557,7 @@ class App {
 
   async run() {
     if (this.workspaceStatus !== 'ready') return false;
-    if (this.isPhysicalWorkspace()) return this.runPhysicalMujoco();
+    if (this.isPhysicalWorkspace()) return this.runPhysicalSo101();
     if (this.isPolicyWorkspace()) return this.runMicroDuck('run');
     const token = this.beginExecution();
     if (token === null) return false;
@@ -589,7 +588,7 @@ class App {
     return completed;
   }
 
-  async runPhysicalMujoco() {
+  async runPhysicalSo101() {
     const token = this.beginExecution();
     if (token === null) return false;
     this.physicalExecutionToken = token;
@@ -599,24 +598,24 @@ class App {
     let completed = false;
     try {
       if (!(await this.resetSimulation({ cancel: false }))) return false;
-      this.setStatus(`Running live ${PROFILES[this.profileId].shortLabel} physical Python against the authoritative MuJoCo session…`);
+      this.setStatus('Running live SO-101 physical Python against the authoritative MuJoCo session…');
       const result = await this.physicalRuntime.start(this.files, {
         workspaceEpoch: this.workspaceGeneration,
-        robotId: this.scenario.robotId,
+        robotId: 'so101_follower',
       });
       if (token !== this.runToken) return false;
       this.console = { stdout: result.stdout || '', stderr: result.stderr || '' };
       const evaluation = this.sim.getTaskEvaluation();
       this.editor.highlightLine(null);
       $('simActionLabel').textContent = evaluation?.success ? 'Physical task complete' : 'Run complete · task incomplete';
-      this.setStatus(evaluation?.success ? `Run complete · ${PROFILES[this.profileId].shortLabel} physical task succeeded` : 'Run complete · physical task criteria not yet satisfied');
+      this.setStatus(evaluation?.success ? 'Run complete · SO-101 physical block transfer succeeded' : 'Run complete · physical task criteria not yet satisfied');
       this.renderPanels();
       completed = true;
       return true;
     } catch (error) {
       if (token === this.runToken && error.code !== 'OPERATION_CANCELLED') {
         this.problem('error', error.code || 'PYTHON', error.message);
-        this.setStatus(`${PROFILES[this.profileId].shortLabel} live physical Python run failed`);
+        this.setStatus('SO-101 live physical Python run failed');
       }
       return false;
     } finally {
@@ -628,7 +627,7 @@ class App {
 
   async step() {
     if (this.workspaceStatus !== 'ready') return false;
-    if (this.isPhysicalWorkspace()) { this.setStatus(`${PROFILES[this.profileId].shortLabel} physical Python is live async; use Run after editing the program.`); return false; }
+    if (this.isPhysicalWorkspace()) { this.setStatus('SO-101 physical Python is live async; use Run after editing the program.'); return false; }
     if (this.isPolicyWorkspace()) return this.stepMicroDuck();
     if (this.executionState !== 'idle') return;
     if (!this.prepared) {
@@ -783,13 +782,13 @@ class App {
 
   renderPanels() {
     const problems = $('problemsPanel');
-    problems.innerHTML = this.problems.length ? this.problems.map((item) => `<div class="problem ${item.level}"><strong>${item.code}</strong><div>${escapeHtml(item.message).replace(/\n/g, '<br>')}</div></div>`).join('') : this.isPhysicalWorkspace() ? '<div class="problem info"><strong>PHYSICAL</strong><div>Physical state, contacts, object motion, and task evidence are read from the authoritative MuJoCo PhysicsSession. This is simulator evidence, not hardware calibration.</div></div>' : this.isPolicyWorkspace() ? '<div class="problem info"><strong>MODELED</strong><div>No simulator faults. Camera imagery, frame-derived IMUs, 8×8 ToF, contacts, dynamics, and generated audio are browser models—not calibrated hardware signals.</div></div>' : '<div class="empty-state">No problems.</div>';
+    problems.innerHTML = this.problems.length ? this.problems.map((item) => `<div class="problem ${item.level}"><strong>${item.code}</strong><div>${escapeHtml(item.message).replace(/\n/g, '<br>')}</div></div>`).join('') : this.isPhysicalWorkspace() ? '<div class="problem info"><strong>PHYSICAL</strong><div>SO-101 state, contacts, block motion, and task evidence are read from the authoritative MuJoCo PhysicsSession. This is simulator evidence, not hardware calibration.</div></div>' : this.isPolicyWorkspace() ? '<div class="problem info"><strong>MODELED</strong><div>No simulator faults. Camera imagery, frame-derived IMUs, 8×8 ToF, contacts, dynamics, and generated audio are browser models—not calibrated hardware signals.</div></div>' : '<div class="empty-state">No problems.</div>';
     if (this.console.stdout || this.console.stderr) problems.innerHTML += `<div class="console-block">${this.console.stdout.split('\n').filter(Boolean).map((line) => `<div class="console-line">${escapeHtml(line)}</div>`).join('')}${this.console.stderr.split('\n').filter(Boolean).map((line) => `<div class="console-line stderr">${escapeHtml(line)}</div>`).join('')}</div>`;
     const kinematic = this.isKinematicPoseWorkspace();
     const physical = this.isPhysicalWorkspace();
     const telemetry = this.sim.getTelemetry();
     const telemetryNote = physical
-      ? 'ACTUAL MUJOCO GROUND-TRUTH STATE — SI units/radians from the single authoritative PhysicsSession; not commanded targets and not hardware telemetry.'
+      ? 'ACTUAL MUJOCO GROUND-TRUTH STATE — SI units/radians from the single SO-101 PhysicsSession; not commanded targets and not hardware telemetry.'
       : this.isPolicyWorkspace()
       ? 'MODELED MICRODUCK POLICY-SIM STATE — exact pinned ONNX inference over original approximate browser dynamics; not hardware telemetry or RL-environment parity.'
       : kinematic

@@ -34,7 +34,7 @@ test('normal SO-101 IDE workspace uses one MuJoCo authority for live Python, ren
   expect(initial.prepared).toBeNull();
 
   await page.locator('#runBtn').click();
-  await expect(page.locator('#statusMessage')).toHaveText('Run complete · SO-101 physical task succeeded', { timeout: 150_000 });
+  await expect(page.locator('#statusMessage')).toHaveText('Run complete · SO-101 physical block transfer succeeded', { timeout: 150_000 });
 
   const completed = await page.evaluate(() => {
     const app = window.__robobuddyCi.app;

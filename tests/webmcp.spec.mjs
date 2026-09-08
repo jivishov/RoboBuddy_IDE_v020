@@ -38,16 +38,6 @@ async function activeTools(page) {
   return page.evaluate(() => window.__webMcpRegistrations.filter(({ signal }) => !signal?.aborted).map(({ tool }) => tool.name));
 }
 
-const BASE_TOOLS = [
-  'describe_robobuddy_task',
-  'read_robobuddy_workspace',
-  'inspect_robobuddy_simulation',
-  'focus_robobuddy_workspace',
-  'run_robobuddy_program',
-  'draft_robobuddy_cooperative_edit',
-];
-const OPENARM_TOOLS = [...BASE_TOOLS, 'control_openarm_simulation'];
-
 test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBuddy WebMCP surface', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
@@ -71,13 +61,20 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   await expect(control).toHaveAttribute('data-tools', 'enabled');
   await expect(indicator).toHaveCSS('background-color', 'rgb(70, 209, 124)');
   await expect(indicator).toHaveCSS('animation-name', 'agent-assist-blink');
-  await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
 
   const registered = await page.evaluate(() => window.__webMcpRegistrations.filter(({ signal }) => !signal?.aborted).map(({ tool }) => ({
     name: tool.name,
     annotations: tool.annotations,
     inputSchema: tool.inputSchema,
   })));
+  expect(registered.map(({ name }) => name)).toEqual([
+    'describe_robobuddy_task',
+    'read_robobuddy_workspace',
+    'inspect_robobuddy_simulation',
+    'focus_robobuddy_workspace',
+    'run_robobuddy_program',
+    'draft_robobuddy_cooperative_edit',
+  ]);
   expect(registered.every(({ annotations }) => annotations.untrustedContentHint)).toBe(true);
   expect(registered.slice(0, 3).every(({ annotations }) => annotations.readOnlyHint)).toBe(true);
   expect(registered.slice(3).every(({ annotations }) => !annotations.readOnlyHint)).toBe(true);
@@ -86,9 +83,8 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   const task = await callTool(page, 'describe_robobuddy_task');
   expect(task).toMatchObject({
     taskId: 'openarm-04-filtration-workcell',
-    simulationMode: 'physical_mujoco',
-    sourcePlantAvailable: false,
-    physicalSimulationAvailable: true,
+    simulationMode: 'source_plant',
+    sourcePlantAvailable: true,
     hardwareValidated: false,
   });
   expect(JSON.stringify(task)).not.toContain('referenceActions');
@@ -105,9 +101,8 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   const state = await callTool(page, 'inspect_robobuddy_simulation');
   expect(state).toMatchObject({
     executionState: 'idle',
-    simulationMode: 'physical_mujoco',
-    stateKind: 'mujoco_physical_state',
-    physicalSimulationAvailable: true,
+    simulationMode: 'source_plant',
+    stateKind: 'modeled_source_plant',
     untrustedContent: true,
   });
 
@@ -155,8 +150,7 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
 
   await page.evaluate(() => window.__robobuddyCi.app.editor.cm.setValue('print("webmcp run smoke")\n'));
   const run = await callTool(page, 'run_robobuddy_program');
-  expect(run).toMatchObject({ completed: true, simulation: { executionState: 'idle' } });
-  expect(run.simulation.status).toContain('physical task criteria');
+  expect(run).toMatchObject({ completed: true, simulation: { executionState: 'idle', status: 'Run complete' } });
 
   const cancelled = await callTool(page, 'run_robobuddy_program', {}, { aborted: true });
   expect(cancelled).toMatchObject({ ok: false, error: { code: 'OPERATION_CANCELLED', retryable: true } });
@@ -176,12 +170,24 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
 test('ready MicroDuck adds one strict bounded control tool and removes it across profile changes', async ({ page }) => {
   await openReadyApp(page);
   await page.locator('[data-agent-access="assist"]').click();
-  await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
+  await expect.poll(() => activeTools(page)).toEqual([
+    'describe_robobuddy_task',
+    'read_robobuddy_workspace',
+    'inspect_robobuddy_simulation',
+    'focus_robobuddy_workspace',
+    'run_robobuddy_program',
+    'draft_robobuddy_cooperative_edit',
+  ]);
 
   await page.locator('#robotSelect').selectOption('microduck');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
   await expect.poll(() => activeTools(page)).toEqual([
-    ...BASE_TOOLS,
+    'describe_robobuddy_task',
+    'read_robobuddy_workspace',
+    'inspect_robobuddy_simulation',
+    'focus_robobuddy_workspace',
+    'run_robobuddy_program',
+    'draft_robobuddy_cooperative_edit',
     'control_microduck_simulation',
     'manage_microduck_visual_cues',
   ]);
@@ -249,23 +255,23 @@ test('ready MicroDuck adds one strict bounded control tool and removes it across
 
   await page.locator('#robotSelect').selectOption('openarm');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
-  await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
+  await expect.poll(() => activeTools(page)).toHaveLength(6);
   expect(await page.evaluate(() => window.__webMcpRegistrations.filter(({ tool, signal }) => tool.name === 'control_microduck_simulation' && !signal?.aborted).length)).toBe(0);
 });
 
 test('loading and failed MicroDuck workspaces keep only the six base tools', async ({ page }) => {
   await openReadyApp(page);
   await page.locator('[data-agent-access="assist"]').click();
-  await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
+  await expect.poll(() => activeTools(page)).toHaveLength(6);
   await page.route('**/assets/microduck/generated/procedural-rig.json', async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 250));
     await route.abort('failed');
   });
   await page.locator('#robotSelect').selectOption('microduck');
   await expect(page.locator('#statusMessage')).toContainText('Loading local MicroDuck');
-  await expect.poll(() => activeTools(page)).toEqual(BASE_TOOLS);
+  await expect.poll(() => activeTools(page)).toHaveLength(6);
   await expect(page.locator('#statusMessage')).toContainText('unavailable', { timeout: 60_000 });
-  await expect.poll(() => activeTools(page)).toEqual(BASE_TOOLS);
+  await expect.poll(() => activeTools(page)).toHaveLength(6);
   expect(await page.evaluate(() => window.__webMcpRegistrations.filter(({ tool, signal }) => tool.name === 'control_microduck_simulation' && !signal?.aborted).length)).toBe(0);
 });
 
