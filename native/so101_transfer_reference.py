@@ -35,8 +35,9 @@ def ids(model):
     free_joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "benchmark_block_free")
     fixed_tip = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "fixed_jaw_sph_tip1")
     moving_tip = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "moving_jaw_sph_tip1")
-    assert min(*joints.values(), *acts.values(), block_body, block_geom, free_joint, fixed_tip, moving_tip) >= 0
-    return joints, acts, block_body, block_geom, free_joint, fixed_tip, moving_tip
+    camera_box2 = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "camera_box2")
+    assert min(*joints.values(), *acts.values(), block_body, block_geom, free_joint, fixed_tip, moving_tip, camera_box2) >= 0
+    return joints, acts, block_body, block_geom, free_joint, fixed_tip, moving_tip, camera_box2
 
 
 def geom_name(model, geom_id):
@@ -116,7 +117,7 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
     if iterations is not None:
         model.opt.iterations = int(iterations)
     data = mujoco.MjData(model)
-    joints, acts, block_body, block_geom, free_joint, fixed_tip, moving_tip = ids(model)
+    joints, acts, block_body, block_geom, free_joint, fixed_tip, moving_tip, camera_box2 = ids(model)
     profile = apply_test_profile(model, trial, block_body, acts["gripper"])
     setup(model, data, joints, acts)
 
@@ -153,6 +154,7 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
             "actualJointsRad": joint_positions(model, data, joints),
             "fixedTipPositionM": np.array(data.geom_xpos[fixed_tip], dtype=float).tolist(),
             "movingTipPositionM": np.array(data.geom_xpos[moving_tip], dtype=float).tolist(),
+            "cameraBox2PositionM": np.array(data.geom_xpos[camera_box2], dtype=float).tolist(),
             "blockContacts": end["contacts"],
             "allContacts": all_contact_pairs(model, data),
         })
