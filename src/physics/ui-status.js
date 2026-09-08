@@ -9,12 +9,10 @@ export function applyPhysicsPreviewStatus(profileId) {
     backendBadge.textContent = capabilityLabel(capability);
     backendBadge.title = `${capability.capability} ${capability.limitations.join(' ')}`;
   }
-  if (modeChip && capability.backend === 'legacy') {
-    modeChip.textContent = 'PHYSICS MIGRATION · LEGACY BACKEND ACTIVE';
-  }
-  if (simBadge && capability.backend === 'legacy') {
-    simBadge.textContent = 'PHYSICS PREVIEW · LEGACY MODEL ACTIVE · NOT HARDWARE VALIDATION';
-  }
+  // Legacy profiles already receive truthful robot-specific presentation from
+  // App.updateSimulationPresentation(). Do not replace those boundaries with a
+  // generic migration label. Only the migrated physical SO-101 workspace needs
+  // the physics-status layer to override the mode/simulation presentation.
   if (modeChip && capability.backend === 'browser-mujoco') {
     modeChip.textContent = 'SO-101 PHYSICAL WORKSPACE · MUJOCO AUTHORITY';
   }
