@@ -47,7 +47,7 @@ export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
   },
   license: 'Apache-2.0',
   asset: 'models/so101/model.xml',
-  sha256: 'ebac47fac296cddff086c513bc1c7e50ca2ddc3dce0c774c388a13f24e3178b9',
+  sha256: 'e23653717a5cc44f0c706cf73098398f3ea1fac167e0560eef5d2f579834bdd0',
   physics: { timestepSeconds: 0.005, integrator: 'implicitfast', iterations: 10, lsIterations: 20 },
   controllers: ['so101_position'],
   joints: SO101_JOINTS.map(([id, rangeRad]) => ({ id, rangeRad, axis: [0, 0, 1], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED })),

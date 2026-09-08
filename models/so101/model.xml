@@ -1,5 +1,5 @@
 <mujoco model="robobuddy_so101_phase2a">
-  <compiler angle="radian" coordinate="local" autolimits="true"/>
+  <compiler angle="radian" autolimits="true"/>
   <option integrator="implicitfast" timestep="0.005" cone="elliptic" iterations="10" ls_iterations="20" impratio="10" gravity="0 0 -9.81"/>
   <default>
     <default class="so101">
