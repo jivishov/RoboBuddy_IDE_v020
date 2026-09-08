@@ -39,7 +39,17 @@ test('SO-101 Phase 2A loads, resets deterministically, and moves through bounded
       );
       const acceptancePosition = accepted.observation.joints.shoulder_pan.positionRad;
       const acceptanceTarget = accepted.observation.joints.shoulder_pan.targetRad;
-      const moved = await session.advanceSteps(100);
+      const singleJointTrajectory = [];
+      let moved = null;
+      for (let checkpoint = 1; checkpoint <= 4; checkpoint += 1) {
+        moved = await session.advanceSteps(25);
+        singleJointTrajectory.push({
+          step: checkpoint * 25,
+          simulationTimeSeconds: moved.simulationTimeSeconds,
+          positionRad: moved.joints.shoulder_pan.positionRad,
+          velocityRadS: moved.joints.shoulder_pan.velocityRadS,
+        });
+      }
 
       let outOfRangeError = null;
       try {
@@ -84,6 +94,7 @@ test('SO-101 Phase 2A loads, resets deterministically, and moves through bounded
         diagnostics,
         acceptancePosition,
         acceptanceTarget,
+        singleJointTrajectory,
         moved,
         outOfRangeError,
         reset1,
@@ -110,6 +121,7 @@ test('SO-101 Phase 2A loads, resets deterministically, and moves through bounded
   expect(Object.keys(result.loaded.joints)).toEqual(JOINTS);
   expect(result.acceptanceTarget).toBeCloseTo(0.4, 12);
   expect(Math.abs(result.acceptancePosition - 0.4)).toBeGreaterThan(0.05);
+  expect(result.singleJointTrajectory.map(({ step }) => step)).toEqual([25, 50, 75, 100]);
   expect(result.moved.simulationTimeSeconds).toBeCloseTo(0.5, 9);
   expect(Math.abs(result.moved.joints.shoulder_pan.positionRad - result.acceptancePosition)).toBeGreaterThan(1e-4);
   expect(Number.isFinite(result.moved.joints.shoulder_pan.velocityRadS)).toBe(true);
@@ -134,12 +146,22 @@ test('SO-101 Phase 2A loads, resets deterministically, and moves through bounded
     expect(native.model.sha256).toBe(result.loaded.model.sha256);
     expect(native.model.id).toBe(result.loaded.model.id);
     expect(native.engine.version).toBe('3.11.0');
-    const deltas = {
-      simulationTimeSeconds: expectNear('SO-101 simulation time', result.moved.simulationTimeSeconds, native.simulationTimeSeconds, PARITY.simulationTimeSeconds),
-      shoulderPanPosition: expectNear('SO-101 shoulder_pan position', result.moved.joints.shoulder_pan.positionRad, native.joints.shoulder_pan.positionRad, PARITY.jointPositionRad),
-      shoulderPanVelocity: expectNear('SO-101 shoulder_pan velocity', result.moved.joints.shoulder_pan.velocityRadS, native.joints.shoulder_pan.velocityRadS, PARITY.jointVelocityRadS),
-    };
-    console.log('SO-101 Phase 2A browser/native deltas', deltas);
+    expect(native.resetMatchesInitial).toBe(true);
+    expect(native.trajectory).toHaveLength(result.singleJointTrajectory.length);
+    const trajectoryDeltas = result.singleJointTrajectory.map((browserPoint, index) => {
+      const nativePoint = native.trajectory[index];
+      expect(nativePoint.step).toBe(browserPoint.step);
+      return {
+        step: browserPoint.step,
+        simulationTimeSeconds: expectNear(`SO-101 trajectory time at step ${browserPoint.step}`, browserPoint.simulationTimeSeconds, nativePoint.simulationTimeSeconds, PARITY.simulationTimeSeconds),
+        shoulderPanPosition: expectNear(`SO-101 shoulder_pan position at step ${browserPoint.step}`, browserPoint.positionRad, nativePoint.positionRad, PARITY.jointPositionRad),
+        shoulderPanVelocity: expectNear(`SO-101 shoulder_pan velocity at step ${browserPoint.step}`, browserPoint.velocityRadS, nativePoint.velocityRadS, PARITY.jointVelocityRadS),
+      };
+    });
+    expectNear('SO-101 final simulation time', result.moved.simulationTimeSeconds, native.simulationTimeSeconds, PARITY.simulationTimeSeconds);
+    expectNear('SO-101 final shoulder_pan position', result.moved.joints.shoulder_pan.positionRad, native.joints.shoulder_pan.positionRad, PARITY.jointPositionRad);
+    expectNear('SO-101 final shoulder_pan velocity', result.moved.joints.shoulder_pan.velocityRadS, native.joints.shoulder_pan.velocityRadS, PARITY.jointVelocityRadS);
+    console.log('SO-101 Phase 2A browser/native trajectory deltas', trajectoryDeltas);
   }
 
   expect(pageErrors, pageErrors.join('\n\n')).toEqual([]);
