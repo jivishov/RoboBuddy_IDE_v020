@@ -1,6 +1,7 @@
 import { TASK_PATCH_REVISION, TASK_PATCH_SOURCE } from './task-catalog.js';
 
 const isKinematicPoseScenario = (scenario) => scenario?.simulationMode === 'kinematic_pose';
+const isPhysicalMujocoScenario = (scenario) => scenario?.simulationMode === 'physical_mujoco';
 
 function py(value, depth = 0) {
   if (value === null || value === undefined) return 'None';
@@ -45,6 +46,33 @@ function trajectoryModule(scenario) {
     action: record.action,
   }));
   return `${header}REFERENCE_ACTIONS = ${py(rows)}\n`;
+}
+
+function physicalSo101Workspace(scenario) {
+  const stages = scenario.portablePython.referenceActions.map((record, index) => ({
+    index: index + 1,
+    label: String(record.label),
+    duration_seconds: Number(record.hold_seconds),
+    targets_rad: record.targetsRad,
+  }));
+  return {
+    'main.py': `# SO-101 physical MuJoCo benchmark.\n# This uses robobuddy.sim.v1 directly: SI units, radians, simulation time.\n# send_action() acknowledges a latched target; it does NOT mean the joint reached it.\nfrom robobuddy.sim import connect\nfrom robot_config import ROBOT_ID\nfrom trajectories import STAGES\n\nrobot = await connect(ROBOT_ID)\n\ntry:\n    for stage in STAGES:\n        targets = stage["targets_rad"]\n        duration = stage["duration_seconds"]\n        if targets:\n            # max_steps is a hard command budget. The release budget also covers\n            # the final no-new-command settling interval.\n            max_steps = stage.get("max_steps", max(1, round(duration / 0.005)))\n            accepted = await robot.send_action(targets, max_steps=max_steps)\n            print(f'{stage["index"]:02d} {stage["label"]} accepted', accepted["status"])\n        observation = await robot.advance(duration)\n        block = observation["bodies"]["benchmark_block"]["positionM"]\n        print(f'{stage["index"]:02d} actual t={observation["simulationTimeSeconds"]:.3f}s block={block}')\n\n    final_observation = await robot.get_observation()\n    print("final actual block", final_observation["bodies"]["benchmark_block"]["positionM"])\nfinally:\n    await robot.disconnect()\n`,
+    'trajectories.py': `# Validated P4 controller stages for the synthetic rigid-body benchmark.\n# Joint targets are radians. Durations are simulation seconds, not wall-clock sleeps.\n# The block is never attached, snapped, parented, welded, or teleported.\nSTAGES = ${py(stages.map((stage) => ({
+      ...stage,
+      max_steps: stage.index === 7 ? 260 : Math.max(1, Math.round(stage.duration_seconds / 0.005)),
+    }))}\n`,
+    'robot_config.py': `# Browser-only physical simulation identity. No serial transport is opened.\nROBOT_ID = "so101_follower"\nPHYSICAL_API_VERSION = "robobuddy.sim.v1"\nANGLE_UNIT = "rad"\nTIME_UNIT = "s"\n`,
+    'workcell.py': `# Synthetic benchmark metadata. These are declared simulation parameters,\n# not measured laboratory hardware dimensions or hardware calibration.\nWORKCELL = ${py({
+      scenario_id: scenario.id,
+      title: scenario.title,
+      simulation_mode: scenario.simulationMode,
+      physical_scene_id: scenario.physicalSceneId,
+      model_package: scenario.modelPackage,
+      model_id: scenario.modelId,
+      evaluator: scenario.taskEvaluation,
+      limitations: scenario.limitations,
+    })}\n`,
+  };
 }
 
 function openArmConfig() {
@@ -108,6 +136,7 @@ function workcellFile(scenario) {
 
 export function buildPatchedWorkspace(profileId, scenario) {
   if (!scenario) throw new Error('A scenario is required to build the workspace.');
+  if (isPhysicalMujocoScenario(scenario)) return physicalSo101Workspace(scenario);
   if (scenario.simulationMode === 'policy_sim') return microduckWorkspace(scenario);
   const configs = { openarm: openArmConfig, so101: so101Config, lekiwi: lekiwiConfig, unitree: unitreeConfig };
   const configFactory = configs[profileId];
