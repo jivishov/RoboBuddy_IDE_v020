@@ -1,0 +1,136 @@
+import { PARAMETER_EVIDENCE, registerModelPackage } from './model-registry.js';
+
+export const OPENARM_V2_UPSTREAM_REVISION = 'a8c979629f2591ad035d99d338ce114969e6cddc';
+export const OPENARM_PHASE5A_MODEL_SHA256 = '5959055a559bdc2d68b494f678242d5b2d166b76483ede7008e9ea8ade238101';
+
+const S = PARAMETER_EVIDENCE.SOURCE_DERIVED;
+const E = PARAMETER_EVIDENCE.ESTIMATED;
+const C = PARAMETER_EVIDENCE.CALIBRATION_REQUIRED;
+
+const joints = [
+  ['openarm_left_joint1', [-3.4907, 1.3963], [0, 1, 0]],
+  ['openarm_left_joint2', [-3.3161, 0.17453], [-1, 0, 0]],
+  ['openarm_left_joint3', [-1.5708, 1.5708], [0, 0, -1]],
+  ['openarm_left_joint4', [0, 2.4435], [0, -1, 0]],
+  ['openarm_left_joint5', [-1.5708, 1.5708], [0, 0, -1]],
+  ['openarm_left_joint6', [-0.7854, 0.7854], [0, -1, 0]],
+  ['openarm_left_joint7', [-1.5708, 1.5708], [1, 0, 0]],
+  ['openarm_left_finger_joint1', [0, 0.7854], [-1, 0, 0]],
+  ['openarm_left_finger_joint2', [0, 0.7854], [1, 0, 0]],
+  ['openarm_right_joint1', [-1.3963, 3.4907], [0, -1, 0]],
+  ['openarm_right_joint2', [-0.17453, 3.3161], [-1, 0, 0]],
+  ['openarm_right_joint3', [-1.5708, 1.5708], [0, 0, -1]],
+  ['openarm_right_joint4', [0, 2.4435], [0, -1, 0]],
+  ['openarm_right_joint5', [-1.5708, 1.5708], [0, 0, -1]],
+  ['openarm_right_joint6', [-0.7854, 0.7854], [0, 1, 0]],
+  ['openarm_right_joint7', [-1.5708, 1.5708], [1, 0, 0]],
+  ['openarm_right_finger_joint1', [-0.7854, 0], [-1, 0, 0]],
+  ['openarm_right_finger_joint2', [-0.7854, 0], [1, 0, 0]],
+].map(([id, rangeRad, axis]) => ({ id, rangeRad, axis, evidence: S }));
+
+const actuators = [
+  ['left_joint1_ctrl', 'openarm_left_joint1', [-3.49066, 1.39626]],
+  ['left_joint2_ctrl', 'openarm_left_joint2', [-3.31613, 0.174533]],
+  ['left_joint3_ctrl', 'openarm_left_joint3', [-1.5708, 1.5708]],
+  ['left_joint4_ctrl', 'openarm_left_joint4', [0, 2.44346]],
+  ['left_joint5_ctrl', 'openarm_left_joint5', [-1.5708, 1.5708]],
+  ['left_joint6_ctrl', 'openarm_left_joint6', [-0.785398, 0.785398]],
+  ['left_joint7_ctrl', 'openarm_left_joint7', [-1.5708, 1.5708]],
+  ['left_finger1_ctrl', 'openarm_left_finger_joint1', [0, 0.7854]],
+  ['right_joint1_ctrl', 'openarm_right_joint1', [-1.39626, 3.49066]],
+  ['right_joint2_ctrl', 'openarm_right_joint2', [-0.174533, 3.31613]],
+  ['right_joint3_ctrl', 'openarm_right_joint3', [-1.5708, 1.5708]],
+  ['right_joint4_ctrl', 'openarm_right_joint4', [0, 2.44346]],
+  ['right_joint5_ctrl', 'openarm_right_joint5', [-1.5708, 1.5708]],
+  ['right_joint6_ctrl', 'openarm_right_joint6', [-0.785398, 0.785398]],
+  ['right_joint7_ctrl', 'openarm_right_joint7', [-1.5708, 1.5708]],
+  ['right_finger1_ctrl', 'openarm_right_finger_joint1', [-0.7854, 0]],
+].map(([id, jointId, controlRangeRad]) => ({ id, jointId, controllerId: 'openarm_v2_position', command: 'position-rad', controlRangeRad, evidence: S }));
+
+export const OPENARM_PHASE5A_MODEL_PACKAGE = registerModelPackage({
+  id: 'openarm-v2-phase5a-enactic-a8c9796-v1',
+  robotId: 'openarm_v2_bimanual',
+  modelId: 'robobuddy-openarm-v2-phase5a-v1',
+  source: {
+    url: `https://github.com/enactic/openarm_mujoco/blob/${OPENARM_V2_UPSTREAM_REVISION}/v2/openarm_bimanual.xml`,
+    revision: OPENARM_V2_UPSTREAM_REVISION,
+    variant: 'Self-contained browser adaptation of OpenArm V2 bimanual mounted at the pinned V2 cell home pose; source robot meshes replaced by declared primitive collision surrogates',
+  },
+  license: 'Apache-2.0 for OpenArm-derived model; repository-authored benchmark workcell is MIT',
+  asset: 'models/openarm_v2/phase5a.xml',
+  sha256: OPENARM_PHASE5A_MODEL_SHA256,
+  physics: { timestepSeconds: 0.001, integrator: 'Euler' },
+  controllers: ['openarm_v2_position'],
+  joints,
+  actuators,
+  bodies: [
+    { id: 'openarm_mount' },
+    { id: 'openarm_left_ee_base_link' },
+    { id: 'openarm_right_ee_base_link' },
+    { id: 'openarm_left_ee_inner_finger' },
+    { id: 'openarm_left_ee_outer_finger' },
+    { id: 'openarm_right_ee_inner_finger' },
+    { id: 'openarm_right_ee_outer_finger' },
+    { id: 'phase5a_flask', freeJointId: 'phase5a_flask_free' },
+    { id: 'phase5a_beaker', freeJointId: 'phase5a_beaker_free' },
+  ],
+  initialJointPositionsRad: {
+    openarm_left_joint1: 0.15,
+    openarm_left_joint2: 0,
+    openarm_left_joint3: 0,
+    openarm_left_joint4: Math.PI / 2,
+    openarm_left_joint5: 0,
+    openarm_left_joint6: 0,
+    openarm_left_joint7: 0,
+    openarm_left_finger_joint1: 0.45,
+    openarm_left_finger_joint2: 0.45,
+    openarm_right_joint1: -0.15,
+    openarm_right_joint2: 0,
+    openarm_right_joint3: 0,
+    openarm_right_joint4: Math.PI / 2,
+    openarm_right_joint5: 0,
+    openarm_right_joint6: 0,
+    openarm_right_joint7: 0,
+    openarm_right_finger_joint1: -0.45,
+    openarm_right_finger_joint2: -0.45,
+  },
+  sceneConstraints: {
+    fixtures: ['cell_table_col', 'hotplate_top', 'wire_gauze_support'],
+    objects: ['phase5a_flask', 'phase5a_beaker'],
+  },
+  benchmark: {
+    sourceWorktopTopZM: 1.005,
+    objectHalfHeightM: 0.0307,
+    flask: {
+      id: 'phase5a_flask', geom: 'phase5a_flask_geom', sourcePositionM: [0.41954, 0.1535, 1.0357],
+      targetCenterXYM: [0.4318, 0.2397], supportGeom: 'hotplate_top', supportTopZM: 1.028,
+      fingerGeoms: ['left_inner_finger_pad', 'left_outer_finger_pad'], eeBody: 'openarm_left_ee_base_link',
+    },
+    beaker: {
+      id: 'phase5a_beaker', geom: 'phase5a_beaker_geom', sourcePositionM: [0.41954, -0.1535, 1.0357],
+      targetCenterXYM: [0.4771, -0.2397], supportGeom: 'wire_gauze_support', supportTopZM: 1.075,
+      fingerGeoms: ['right_inner_finger_pad', 'right_outer_finger_pad'], eeBody: 'openarm_right_ee_base_link',
+    },
+    targetHalfExtentsXYM: [0.030, 0.030],
+    controllerVersion: 'openarm-phase5a-sequential-stack-v1',
+  },
+  evidence: {
+    kinematicsAndJointLimits: S,
+    rigidBodyInertias: S,
+    motorDampingArmatureFrictionloss: S,
+    positionControllerGainsAndEffortLimits: S,
+    fingerMechanicalCoupling: S,
+    fixedCellHomeMountRelationship: S,
+    primitiveRobotCollisionSurrogates: E,
+    benchmarkGlasswareMassGeometryAndFriction: E,
+    benchmarkHotplateAndRingStandGeometry: E,
+    hardwareAlignment: C,
+  },
+  limitations: [
+    'The OpenArm V2 robot kinematic tree, rigid-body inertias, joint limits, motor damping/armature/friction-loss, source position-controller gains/effort limits, and mirrored finger coupling are derived from the pinned enactic/openarm_mujoco V2 model.',
+    'The V2 cell lifter is fixed at its source home q=0 mount pose for Phase 5A; it is not exposed as a task actuator and cannot provide hidden reachability motion.',
+    'Upstream mesh collision geometry is replaced by explicit primitive collision surrogates for the self-contained browser package; manipulation conclusions apply to these declared surrogates, not exact mesh collision parity.',
+    'Flask, beaker, hotplate, ring stand, wire-gauze, mass, friction, and target dimensions are declared dry rigid-body benchmark parameters rather than measured laboratory equipment.',
+    'No liquid, heating, temperature, glass compliance, tactile/force sensing, payload certification, CAN timing, backlash, or installed-hardware calibration is claimed.',
+  ],
+});
