@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Native MuJoCo implementation-comparison reference for RoboBuddy OpenArm V2 Phase 5A.
 
-Setup writes only the declared initial robot qpos/ctrl values. Ordinary task
-execution writes actuator controls and advances MuJoCo. Free flask/beaker qpos
-are never written in the nominal run. Negative profiles explicitly alter test
-parameters before execution and are reported as such.
+Setup writes only the declared initial robot qpos/ctrl values plus the passive
+finger qpos required to place the source-defined mechanical coupling on its
+constraint manifold. Ordinary task execution writes actuator controls and
+advances MuJoCo. Free flask/beaker qpos are never written in the nominal run.
+Negative profiles explicitly alter test parameters before execution and are
+reported as such.
 
 This is native/browser model-implementation evidence, not hardware validation.
 """
@@ -25,6 +27,10 @@ JOINTS = [
     *(f'openarm_left_joint{i}' for i in range(1, 8)), 'openarm_left_finger_joint1',
     *(f'openarm_right_joint{i}' for i in range(1, 8)), 'openarm_right_finger_joint1',
 ]
+PASSIVE_COUPLED_JOINTS = {
+    'openarm_left_finger_joint2': 'openarm_left_finger_joint1',
+    'openarm_right_finger_joint2': 'openarm_right_finger_joint1',
+}
 ACTUATORS = [
     *(f'left_joint{i}_ctrl' for i in range(1, 8)), 'left_finger1_ctrl',
     *(f'right_joint{i}_ctrl' for i in range(1, 8)), 'right_finger1_ctrl',
@@ -118,6 +124,7 @@ def canonical_json_hash(value) -> str:
 def controller_descriptor():
     return {
         'initialJointPositionsRad': INITIAL,
+        'passiveMechanicalCouplings': PASSIVE_COUPLED_JOINTS,
         'stages': [
             {'name': name, 'targetsRad': targets, 'durationSeconds': duration}
             for name, targets, duration in STAGES
@@ -159,6 +166,14 @@ def setup(model, data, joints, acts, trial):
     for joint, value in INITIAL.items():
         data.qpos[int(model.jnt_qposadr[joints[joint]])] = value
         data.ctrl[acts[joint]] = value
+    # Source equality constraints mechanically couple finger2 to finger1. Setup
+    # must begin on that constraint manifold; the passive followers remain
+    # non-commandable during ordinary execution.
+    for follower, driver in PASSIVE_COUPLED_JOINTS.items():
+        follower_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, follower)
+        assert follower_id >= 0
+        driver_value = float(data.qpos[int(model.jnt_qposadr[joints[driver]])])
+        data.qpos[int(model.jnt_qposadr[follower_id])] = driver_value
     # Explicit negative setup intervention only; nominal free-object qpos is untouched.
     if trial == 'miss-left':
         free_joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, 'flask_free')
@@ -198,12 +213,17 @@ def body_position(data, body_id):
 
 
 def initial_evidence(model, data, joints, bodies):
+    passive = {}
+    for follower in PASSIVE_COUPLED_JOINTS:
+        follower_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, follower)
+        passive[follower] = float(data.qpos[int(model.jnt_qposadr[follower_id])])
     return {
         'simulationTimeSeconds': float(data.time),
         'jointsRad': {
             joint: float(data.qpos[int(model.jnt_qposadr[joint_id])])
             for joint, joint_id in joints.items()
         },
+        'passiveCoupledJointsRad': passive,
         'bodiesM': {body: body_position(data, body_id).tolist() for body, body_id in bodies.items()},
     }
 
