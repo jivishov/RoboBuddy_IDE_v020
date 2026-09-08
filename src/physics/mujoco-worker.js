@@ -72,10 +72,14 @@ function positionActuatorForJoint(jointId, { required = false } = {}) {
   return matches[0] || null;
 }
 function actuatorForJoint(jointId) { return positionActuatorForJoint(jointId, { required: true }); }
+function actuatorEffortNm(actuator) {
+  const value = Number(data?.actuator_force?.[actuator?.id]);
+  return Number.isFinite(value) ? value : null;
+}
 function observation() {
   if (!model || !data || !descriptor || !modelInfo) return { simulationTime: 0, model: null, engine: null, joints: {}, bodies: {}, contactCount: 0, contactsReadable: false, contacts: [] };
-  const joints = {}; for (const [name, joint] of jointState) { const actuator = positionActuatorForJoint(name); joints[name] = { positionRad: Number(data.qpos[joint.qpos]), velocityRadS: Number(data.qvel[joint.dof]), targetRad: actuator ? Number(data.ctrl[actuator.id]) : null, controlRangeRad: actuator ? [...actuator.controlRange] : null, jointRangeRad: [...joint.range] }; }
-  const bodies = {}; for (const [name, body] of bodyState) { const offset = body.id * 3; bodies[name] = { frame: 'mujoco_world', positionM: [Number(data.xpos[offset]), Number(data.xpos[offset + 1]), Number(data.xpos[offset + 2])] }; }
+  const joints = {}; for (const [name, joint] of jointState) { const actuator = positionActuatorForJoint(name); joints[name] = { positionRad: Number(data.qpos[joint.qpos]), velocityRadS: Number(data.qvel[joint.dof]), targetRad: actuator ? Number(data.ctrl[actuator.id]) : null, effortNm: actuator ? actuatorEffortNm(actuator) : null, controlRangeRad: actuator ? [...actuator.controlRange] : null, jointRangeRad: [...joint.range] }; }
+  const bodies = {}; for (const [name, body] of bodyState) { const posOffset = body.id * 3; const quatOffset = body.id * 4; bodies[name] = { frame: 'mujoco_world', positionM: [Number(data.xpos[posOffset]), Number(data.xpos[posOffset + 1]), Number(data.xpos[posOffset + 2])], quaternionWxyz: [Number(data.xquat[quatOffset]), Number(data.xquat[quatOffset + 1]), Number(data.xquat[quatOffset + 2]), Number(data.xquat[quatOffset + 3])] }; }
   const contactState = readContacts();
   return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts };
 }
@@ -91,13 +95,27 @@ async function load(modelPackage) {
 }
 function reset() { if (!model || !data) throw new Error('No MuJoCo model is loaded'); mujoco.mj_resetData(model, data); paused = false; mujoco.mj_forward(model, data); return observation(); }
 function step(count = 1) { if (!model || !data) throw new Error('No MuJoCo model is loaded'); if (paused) return observation(); if (!Number.isInteger(count) || count < 1 || count > MAX_STEP_BATCH) throw new RangeError(`step count must be an integer from 1 to ${MAX_STEP_BATCH}`); for (let index = 0; index < count; index += 1) mujoco.mj_step(model, data); return observation(); }
-function command(payload = {}) {
-  if (!model || !data || !descriptor || !modelInfo) throw new Error('No MuJoCo model is loaded'); if (payload.type !== 'set_joint_target') throw new Error(`Unsupported physical command: ${payload.type}`);
-  const jointId = payload.jointId || (descriptor.joints.length === 1 ? descriptor.joints[0].id : null); if (!jointId || !jointState.has(jointId)) throw new Error('set_joint_target requires a declared jointId for this model');
-  const actuator = actuatorForJoint(jointId); const target = Number(payload.targetRad); if (!Number.isFinite(target)) throw new TypeError('targetRad must be finite'); const [minimum, maximum] = actuator.controlRange;
+function validatedJointTarget(jointId, targetValue) {
+  if (!jointId || !jointState.has(jointId)) throw new Error(`Unknown declared joint ${jointId || '<missing>'}`);
+  const actuator = actuatorForJoint(jointId); const target = Number(targetValue); if (!Number.isFinite(target)) throw new TypeError(`targetRad for ${jointId} must be finite`); const [minimum, maximum] = actuator.controlRange;
   if (target < minimum || target > maximum) throw new RangeError(`targetRad ${target} is outside the actuator control range ${minimum}..${maximum}`);
   const jointRange = jointState.get(jointId).range; if (jointRange.every(Number.isFinite) && (target < jointRange[0] || target > jointRange[1])) throw new RangeError(`targetRad ${target} is outside joint ${jointId} range ${jointRange[0]}..${jointRange[1]}`);
-  data.ctrl[actuator.id] = target; return observation();
+  return { actuator, target };
+}
+function command(payload = {}) {
+  if (!model || !data || !descriptor || !modelInfo) throw new Error('No MuJoCo model is loaded');
+  let targets;
+  if (payload.type === 'set_joint_target') {
+    const jointId = payload.jointId || (descriptor.joints.length === 1 ? descriptor.joints[0].id : null); if (!jointId) throw new Error('set_joint_target requires a declared jointId for this model');
+    targets = { [jointId]: payload.targetRad };
+  } else if (payload.type === 'set_joint_targets') {
+    if (!payload.targetsRad || typeof payload.targetsRad !== 'object' || Array.isArray(payload.targetsRad) || !Object.keys(payload.targetsRad).length) throw new Error('set_joint_targets requires a non-empty targetsRad object');
+    targets = payload.targetsRad;
+  } else throw new Error(`Unsupported physical command: ${payload.type}`);
+
+  const validated = Object.entries(targets).map(([jointId, targetRad]) => [jointId, validatedJointTarget(jointId, targetRad)]);
+  for (const [, { actuator, target }] of validated) data.ctrl[actuator.id] = target;
+  return observation();
 }
 
 self.onmessage = async (event) => {

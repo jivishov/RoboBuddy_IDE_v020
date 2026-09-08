@@ -44,6 +44,8 @@ jobs:
           node --check src/physics/session.js
           node --check src/physics/ui-status.js
           node --check src/runtime/live-python-bridge.js
+          node --check src/runtime/live-python-worker.js
+          node --check src/runtime/physical-python-runtime.js
           node --check src/microduck/audio-engine.js
           node --check src/microduck/baked-visual.js
           node --check src/microduck/command-bus.js
@@ -60,9 +62,11 @@ jobs:
           node --check tests/physics/model-registry-core.mjs
           node --check tests/physics/vertical-slice-core.mjs
           node --check tests/physics/live-python-bridge-core.mjs
+          node --check tests/physics/physical-python-runtime-core.mjs
           node --check tests/physics-slice-browser.spec.mjs
           node --check tests/physics-load-failure-browser.spec.mjs
           node --check tests/so101-physics-browser.spec.mjs
+          node --check tests/so101-live-python-browser.spec.mjs
           node --check tests/microduck-starter-timing.mjs
           node --check tests/helpers/microduck-timing.mjs
           node --check tests/microduck-control-timing-core.mjs
@@ -76,10 +80,11 @@ jobs:
         run: node tests/validate_task_patch.mjs
       - name: Phase 1 physics contract checks
         run: node tests/physics/vertical-slice-core.mjs
-      - name: Phase 2A model and timing contract checks
+      - name: Phase 2A model and P3 live timing contract checks
         run: |
           node tests/physics/model-registry-core.mjs
           node tests/physics/live-python-bridge-core.mjs
+          node tests/physics/physical-python-runtime-core.mjs
       - name: MicroDuck asset and policy contracts
         run: |
           node tests/validate_microduck_assets.mjs
