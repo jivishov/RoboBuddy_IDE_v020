@@ -33,8 +33,10 @@ def ids(model):
     block_body = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "benchmark_block")
     block_geom = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "benchmark_block_geom")
     free_joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, "benchmark_block_free")
-    assert min(*joints.values(), *acts.values(), block_body, block_geom, free_joint) >= 0
-    return joints, acts, block_body, block_geom, free_joint
+    fixed_tip = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "fixed_jaw_sph_tip1")
+    moving_tip = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_GEOM, "moving_jaw_sph_tip1")
+    assert min(*joints.values(), *acts.values(), block_body, block_geom, free_joint, fixed_tip, moving_tip) >= 0
+    return joints, acts, block_body, block_geom, free_joint, fixed_tip, moving_tip
 
 
 def geom_name(model, geom_id):
@@ -44,12 +46,10 @@ def geom_name(model, geom_id):
 def apply_test_profile(model, trial, block_body, gripper_act):
     profile = {"trial": trial, "lowGripForceNm": None, "payloadMassKg": float(model.body_mass[block_body])}
     if trial == "low-grip":
-        # Deliberately insufficient synthetic test profile. This never changes the released package's 2.94 N m source-estimate range.
         model.actuator_forcerange[2 * gripper_act : 2 * gripper_act + 2] = (-0.005, 0.005)
         profile["lowGripForceNm"] = 0.005
     if trial == "heavy":
-        # Deliberately excessive test payload; scale inertia with mass before the run to keep the rigid body internally consistent.
-        factor = 37.5  # 0.020 kg -> 0.750 kg
+        factor = 37.5
         model.body_mass[block_body] *= factor
         model.body_inertia[block_body, :] *= factor
         profile["payloadMassKg"] = float(model.body_mass[block_body])
@@ -95,6 +95,10 @@ def block_state(model, data, block_body, free_joint, block_geom):
     }
 
 
+def joint_positions(model, data, joints):
+    return {name: float(data.qpos[int(model.jnt_qposadr[jid])]) for name, jid in joints.items()}
+
+
 def run_trial(trial: str, *, timestep=None, iterations=None):
     model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
     if timestep is not None:
@@ -102,7 +106,7 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
     if iterations is not None:
         model.opt.iterations = int(iterations)
     data = mujoco.MjData(model)
-    joints, acts, block_body, block_geom, free_joint = ids(model)
+    joints, acts, block_body, block_geom, free_joint, fixed_tip, moving_tip = ids(model)
     profile = apply_test_profile(model, trial, block_body, acts["gripper"])
     setup(model, data, joints, acts)
 
@@ -130,9 +134,18 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
                         carried_contact_samples += 1
                 samples.append({"stage": name, **state})
         end = block_state(model, data, block_body, free_joint, block_geom)
-        stages.append({"name": name, "targetsRad": dict(targets), "seconds": seconds, "start": start, "end": end})
+        stages.append({
+            "name": name,
+            "targetsRad": dict(targets),
+            "seconds": seconds,
+            "start": start,
+            "end": end,
+            "actualJointsRad": joint_positions(model, data, joints),
+            "fixedTipPositionM": np.array(data.geom_xpos[fixed_tip], dtype=float).tolist(),
+            "movingTipPositionM": np.array(data.geom_xpos[moving_tip], dtype=float).tolist(),
+            "blockContacts": end["contacts"],
+        })
 
-    # Settle explicit initial condition; no outcome state is overwritten after setup().
     stage("settle_initial", {}, 0.20)
     if trial == "miss":
         stage("approach_misaligned", {"shoulder_pan": 0.20, "shoulder_lift": 0.0}, 0.60)
@@ -162,7 +175,7 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
         "engine": {"version": mujoco.__version__, "timestepSeconds": float(model.opt.timestep), "iterations": int(model.opt.iterations), "lsIterations": int(model.opt.ls_iterations)},
         "controller": {"type": "bounded position-target stage controller", "ordinaryControlWrites": "data.ctrl only", "initialJointPositionsRad": INITIAL},
         "benchmark": {"blockMassKg": profile["payloadMassKg"], "blockHalfExtentsM": [0.008, 0.006, 0.007], "surfaceFriction": 0.8, "targetCenterXYM": TARGET_CENTER.tolist(), "targetHalfExtentsXYM": TARGET_HALF.tolist()},
-        "metrics": {"success": success, "lifted": lifted, "physicallyCarried": physically_carried, "inTarget": in_target, "resting": resting, "released": released, "maxBlockZM": max_z, "horizontalTravelM": horizontal_travel, "gripperContactSamples": gripper_contact_samples, "carriedContactSamples": carried_contact_samples, "finalPositionM": final["positionM"], "finalSpeedNorm": final["speedNorm"]},
+        "metrics": {"success": success, "lifted": lifted, "physicallyCarried": physically_carried, "inTarget": in_target, "resting": resting, "released": released, "maxBlockZM": max_z, "horizontalTravelM": horizontal_travel, "gripperContactSamples": gripper_contact_samples, "carriedContactSamples": carried_contact_samples, "finalPositionM": final["positionM"], "finalSpeedNorm": final["speedNorm"], "stageDiagnostics": stages},
         "stages": stages,
     }
 
