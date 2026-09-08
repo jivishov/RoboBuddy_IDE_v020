@@ -46,6 +46,50 @@ await session.reset(); assert.equal(session.epoch, 2); assert.equal(fake.calls.a
 const cancelled = await session.cancelRun('test-cancel'); assert.deepEqual(cancelled, { cancelled: true, reloadRequired: true }); assert.equal(session.robotId, null); assert.equal(session.sceneRevision, null);
 await assert.rejects(() => session.sendCommand({ type: 'set_joint_target', targetRad: 0 }), /No physical scene loaded/);
 
+class LostAuthorityBackend extends FakeBackend {
+  async advanceSteps(steps, context) {
+    this.calls.push(['advanceSteps', steps, context]);
+    this.loaded = false;
+    throw new Error('runtime plant failure');
+  }
+  async getDiagnostics(context) {
+    this.calls.push(['getDiagnostics', context]);
+    return { backend: 'fake', loaded: this.loaded };
+  }
+}
+
+const lostBackend = new LostAuthorityBackend();
+const lostSession = new PhysicsSession(lostBackend, { sessionId: 'lost-authority-session' });
+await lostSession.loadScene(structuredClone(PHASE1_SCENE));
+await lostSession.sendCommand({ type: 'set_joint_target', targetRad: 0.3 }, { commandId: 'before-runtime-failure', maxSteps: 20 });
+assert.equal(lostSession.activeCommandId, 'before-runtime-failure');
+await assert.rejects(() => lostSession.advanceSteps(1), /runtime plant failure/);
+assert.equal(lostSession.robotId, null, 'fatal backend authority loss must clear the session robot');
+assert.equal(lostSession.sceneRevision, null, 'fatal backend authority loss must clear the session scene revision');
+assert.equal(lostSession.activeCommandId, null, 'fatal backend authority loss must clear the accepted command identity');
+await assert.rejects(() => lostSession.advanceSteps(1), /No physical scene loaded/);
+lostSession.dispose();
+
+class RejectedCommandBackend extends FakeBackend {
+  async acceptCommand(envelope) {
+    this.calls.push(['acceptCommand', envelope]);
+    throw new RangeError('target outside declared range');
+  }
+  async getDiagnostics(context) {
+    this.calls.push(['getDiagnostics', context]);
+    return { backend: 'fake', loaded: this.loaded };
+  }
+}
+
+const rejectedBackend = new RejectedCommandBackend();
+const rejectedSession = new PhysicsSession(rejectedBackend, { sessionId: 'rejected-command-session' });
+await rejectedSession.loadScene(structuredClone(PHASE1_SCENE));
+await assert.rejects(() => rejectedSession.sendCommand({ type: 'set_joint_target', targetRad: 99 }, { commandId: 'rejected-command', maxSteps: 20 }), /outside declared range/);
+assert.equal(rejectedSession.robotId, PHASE1_SCENE.robotId, 'ordinary command rejection must not discard a valid physical plant');
+assert.equal(rejectedSession.sceneRevision, PHASE1_SCENE.revision);
+assert.equal(rejectedSession.activeCommandId, null, 'a rejected command must never become the active accepted command');
+rejectedSession.dispose();
+
 const workerSource = readFileSync(new URL('../../src/physics/mujoco-worker.js', import.meta.url), 'utf8');
 for (const token of ['mj_name2id', 'jnt_qposadr', 'jnt_dofadr', 'actuator_trnid', 'data.xpos', "crypto.subtle.digest('SHA-256'", 'descriptor.joints', 'descriptor.actuators']) assert.ok(workerSource.includes(token), `worker must use named/address/model-descriptor access: ${token}`);
 for (const forbidden of ['data.qpos?.[0]', 'data.qvel?.[0]', 'data.ctrl[0]', "'hinge_position'", "'free_box'", "'models/vertical-slice/model.xml'"]) assert.ok(!workerSource.includes(forbidden), `generic worker must not rely on Phase 1-specific model semantics: ${forbidden}`);
