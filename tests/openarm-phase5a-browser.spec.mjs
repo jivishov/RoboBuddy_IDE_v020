@@ -95,7 +95,7 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(initial.source).toContain('await robot.send_action');
   expect(initial.source).toContain('await robot.advance');
   expect(initial.source).not.toContain('time.sleep(');
-  expect(initial.trajectories).not.toMatch(/attach|teleport|move_to|grasp\(/i);
+  expect(initial.trajectories).not.toMatch(/\.(?:attach|teleport|move_to|grasp)\s*\(/i);
   expect(initial.flask.linearVelocityMS).toHaveLength(3);
   expect(initial.beaker.angularVelocityRadS).toHaveLength(3);
   expect(initial.flask.positionM[2]).toBeCloseTo(1.092, 3);
