@@ -1,4 +1,4 @@
-import { assertPhysicsBackend, makeCommandEnvelope, PHYSICS_BACKEND_API_VERSION } from './backend-contract.js';
+import { assertPhysicalScene, assertPhysicsBackend, makeCommandEnvelope, PHYSICS_BACKEND_API_VERSION } from './backend-contract.js';
 
 function uid(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
@@ -17,9 +17,7 @@ export class PhysicsSession {
 
   async loadScene(scene) {
     this.#assertLive();
-    if (!scene || typeof scene !== 'object' || !scene.revision || !scene.robotId) {
-      throw new TypeError('Physical scene requires revision and robotId');
-    }
+    assertPhysicalScene(scene);
     this.epoch += 1;
     this.activeCommandId = null;
     const result = await this.backend.loadScene(structuredClone(scene), this.#context());
