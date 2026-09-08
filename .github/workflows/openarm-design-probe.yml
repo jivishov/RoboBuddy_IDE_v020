@@ -17,68 +17,64 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
-      - name: Probe sustained release and post-settle retreat paths
+      - name: Probe source-aligned vessels with original 8 mm fingertip surrogate
         run: |
           python - <<'PY'
           import json, shutil, subprocess
           from pathlib import Path
 
           root = Path('.').resolve()
-          cases = [
-              ('transfer-retreat', 'LEFT_TRANSFER', 'RIGHT_TRANSFER'),
-              ('lift-retreat', 'LEFT_LIFT', 'RIGHT_LIFT'),
-              ('park-high-retreat', 'LEFT_PARK', 'RIGHT_PARK'),
-          ]
-          report = []
-          for name, left_retreat, right_retreat in cases:
-              case_dir = Path('/tmp') / f'openarm-probe-{name}'
-              if case_dir.exists(): shutil.rmtree(case_dir)
-              shutil.copytree(root, case_dir)
+          case_dir = Path('/tmp/openarm-probe-source-vessels-8mm')
+          if case_dir.exists(): shutil.rmtree(case_dir)
+          shutil.copytree(root, case_dir)
 
-              xml_path = case_dir / 'models/openarm_v2/manipulation.xml'
-              xml = xml_path.read_text()
-              xml = xml.replace('size="0.010 0.015" class="vessel"', 'size="0.014 0.015" class="vessel"', 1)
-              xml = xml.replace('<body name="beaker" pos="0.509 -0.1535 1.120">', '<body name="beaker" pos="0.509 -0.1535 1.105">')
-              xml = xml.replace('size="0.010 0.045" class="vessel"', 'size="0.025 0.030" class="vessel"')
-              xml_path.write_text(xml)
+          xml_path = case_dir / 'models/openarm_v2/manipulation.xml'
+          xml = xml_path.read_text()
+          # Restore the original browser fingertip surrogate. The governing plan
+          # forbids making a task pass merely by enlarging invisible fingers.
+          xml = xml.replace('size="0.009" class="left_fingertip"', 'size="0.008" class="left_fingertip"')
+          xml = xml.replace('size="0.009" class="right_fingertip"', 'size="0.008" class="right_fingertip"')
+          # Align the dry vessel collision geometry with the pinned legacy task:
+          # flask neck ~28 mm diameter; 50 mL beaker 50 x 60 mm envelope.
+          xml = xml.replace('size="0.010 0.015" class="vessel"', 'size="0.014 0.015" class="vessel"', 1)
+          xml = xml.replace('<body name="beaker" pos="0.509 -0.1535 1.120">', '<body name="beaker" pos="0.509 -0.1535 1.105">')
+          xml = xml.replace('size="0.010 0.045" class="vessel"', 'size="0.025 0.030" class="vessel"')
+          xml_path.write_text(xml)
 
-              runner_path = case_dir / 'native/openarm_v2_reference.py'
-              runner = runner_path.read_text()
-              runner = runner.replace("'initial_z': 1.120,", "'initial_z': 1.105,")
-              runner = runner.replace("RIGHT_PLACE = [27.1394, 0, 0, 56.4231, 0, -6.4055, 0]", "RIGHT_PLACE = [27.1394, 0, 0, 56.4231, 0, -6.4055, 0]\nLEFT_PARK = [-25.0, 0, 0, 100.0, 0, 20.0, 0]\nRIGHT_PARK = [25.0, 0, 0, 100.0, 0, -20.0, 0]")
-              runner = runner.replace("('left_close', {'openarm_left_finger_joint1': 0.0}, 0.50)", "('left_close', {'openarm_left_finger_joint1': 0.05}, 0.50)")
-              runner = runner.replace("arm('left', LEFT_LIFT, 0.0)", "arm('left', LEFT_LIFT, 0.05)")
-              runner = runner.replace("arm('left', LEFT_TRANSFER, 0.0)", "arm('left', LEFT_TRANSFER, 0.05)")
-              runner = runner.replace("arm('left', LEFT_PLACE, 0.0)", "arm('left', LEFT_PLACE, 0.05)")
-              runner = runner.replace("('right_close', {'openarm_right_finger_joint1': 0.0}, 0.50)", "('right_close', {'openarm_right_finger_joint1': -0.33}, 0.50)")
-              runner = runner.replace("arm('right', RIGHT_LIFT, 0.0)", "arm('right', RIGHT_LIFT, -0.33)")
-              runner = runner.replace("arm('right', RIGHT_TRANSFER, 0.0)", "arm('right', RIGHT_TRANSFER, -0.33)")
-              runner = runner.replace("arm('right', RIGHT_PLACE, 0.0)", "arm('right', RIGHT_PLACE, -0.33)")
-              runner = runner.replace("('left_retreat', arm('left', LEFT_TRANSFER, 0.65), 0.85)", f"('left_retreat', arm('left', {left_retreat}, 0.65), 0.85)")
-              runner = runner.replace("('right_retreat', arm('right', RIGHT_TRANSFER, -0.65), 0.85)", f"('right_retreat', arm('right', {right_retreat}, -0.65), 0.85)")
+          runner_path = case_dir / 'native/openarm_v2_reference.py'
+          runner = runner_path.read_text()
+          runner = runner.replace("'initial_z': 1.120,", "'initial_z': 1.105,")
+          runner = runner.replace("('left_close', {'openarm_left_finger_joint1': 0.0}, 0.50)", "('left_close', {'openarm_left_finger_joint1': 0.05}, 0.50)")
+          runner = runner.replace("arm('left', LEFT_LIFT, 0.0)", "arm('left', LEFT_LIFT, 0.05)")
+          runner = runner.replace("arm('left', LEFT_TRANSFER, 0.0)", "arm('left', LEFT_TRANSFER, 0.05)")
+          runner = runner.replace("arm('left', LEFT_PLACE, 0.0)", "arm('left', LEFT_PLACE, 0.05)")
+          runner = runner.replace("('right_close', {'openarm_right_finger_joint1': 0.0}, 0.50)", "('right_close', {'openarm_right_finger_joint1': -0.33}, 0.50)")
+          runner = runner.replace("arm('right', RIGHT_LIFT, 0.0)", "arm('right', RIGHT_LIFT, -0.33)")
+          runner = runner.replace("arm('right', RIGHT_TRANSFER, 0.0)", "arm('right', RIGHT_TRANSFER, -0.33)")
+          runner = runner.replace("arm('right', RIGHT_PLACE, 0.0)", "arm('right', RIGHT_PLACE, -0.33)")
+          runner = runner.replace("('left_retreat', arm('left', LEFT_TRANSFER, 0.65), 0.85)", "('left_retreat', arm('left', LEFT_LIFT, 0.65), 0.85)")
+          runner = runner.replace("('right_retreat', arm('right', RIGHT_TRANSFER, -0.65), 0.85)", "('right_retreat', arm('right', RIGHT_LIFT, -0.65), 0.85)")
 
-              # Mirror the browser evaluator's stricter sustained-release rule.
-              old = """                if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:\n                    st['release'] = True\n                    st['release_time'] = float(data.time)\n"""
-              new = """                if st['release'] and held:\n                    st['release'] = False\n                    st['release_time'] = None\n                    st['settle_candidate'] = None\n                    st['settle_start'] = None\n                    st['settle_drift'] = None\n                    st['settled'] = False\n                    st['settled_ee'] = None\n                    st['settle_time'] = None\n                    st['retreat'] = False\n                    st['retreat_distance'] = 0.0\n                    st['retreat_time'] = None\n                if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:\n                    st['release'] = True\n                    st['release_time'] = float(data.time)\n"""
-              if old not in runner:
-                  raise SystemExit('native release insertion point not found')
-              runner = runner.replace(old, new, 1)
-              runner_path.write_text(runner)
+          old = """                if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:\n                    st['release'] = True\n                    st['release_time'] = float(data.time)\n"""
+          new = """                if st['release'] and held:\n                    st['release'] = False\n                    st['release_time'] = None\n                    st['settle_candidate'] = None\n                    st['settle_start'] = None\n                    st['settle_drift'] = None\n                    st['settled'] = False\n                    st['settled_ee'] = None\n                    st['settle_time'] = None\n                    st['retreat'] = False\n                    st['retreat_distance'] = 0.0\n                    st['retreat_time'] = None\n                if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:\n                    st['release'] = True\n                    st['release_time'] = float(data.time)\n"""
+          if old not in runner: raise SystemExit('native release insertion point not found')
+          runner = runner.replace(old, new, 1)
+          runner_path.write_text(runner)
 
-              output = subprocess.check_output(['python', str(runner_path), '--trial', 'nominal'], cwd=case_dir, text=True)
-              result = json.loads(output)
-              report.append({
-                  'case': name,
-                  'success': result['metrics']['success'],
-                  'flask': result['metrics']['flask'],
-                  'beaker': result['metrics']['beaker'],
-                  'stages': result['stages'],
-              })
-          Path('/tmp/openarm-design-probe.json').write_text(json.dumps(report, indent=2, sort_keys=True))
-          print(json.dumps([{r['case']: {'success': r['success'], 'flask': r['flask'], 'beaker': r['beaker']}} for r in report], indent=2))
+          output = subprocess.check_output(['python', str(runner_path), '--trial', 'nominal'], cwd=case_dir, text=True)
+          result = json.loads(output)
+          concise = {
+              'success': result['metrics']['success'],
+              'flask': result['metrics']['flask'],
+              'beaker': result['metrics']['beaker'],
+              'modelSha256': result['model']['sha256'],
+              'controllerSha256': result['controller']['sha256'],
+          }
+          Path('/tmp/openarm-source-vessels-8mm.json').write_text(json.dumps(concise, indent=2, sort_keys=True))
+          print(json.dumps(concise, indent=2, sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: openarm-design-probe-${{ github.sha }}
-          path: /tmp/openarm-design-probe.json
+          name: openarm-source-vessels-8mm-${{ github.sha }}
+          path: /tmp/openarm-source-vessels-8mm.json
           retention-days: 7
