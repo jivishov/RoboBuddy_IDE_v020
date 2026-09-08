@@ -108,7 +108,6 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(initial.rightEe[2]).toBeCloseTo(1.12, 3);
 
   await page.locator('#runBtn').click();
-  await expect(page.locator('#simCanvas')).toHaveAttribute('data-physical-task-success', 'true', { timeout: 180_000 });
   await expect(page.locator('#statusMessage')).toContainText('Run complete', { timeout: 180_000 });
 
   const completed = await page.evaluate(() => {
@@ -124,16 +123,22 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
       evaluation: app.sim.getTaskEvaluation(),
       authority: app.sim.getPhysicalAuthorityToken(),
       presentation: backend.getPresentationAudit(),
+      observation: state.observation,
+      contacts: app.sim.getContacts(),
       beforeRender, afterRender,
       flaskExpectedMm: [flaskExpected[0] * 1000, flaskExpected[2] * 1000, -flaskExpected[1] * 1000],
       flaskVisual,
       runtimeActive: app.physicalRuntime.isActive(),
       canvasAuthority: document.querySelector('#simCanvas').dataset.simulationAuthority,
+      canvasTaskSuccess: document.querySelector('#simCanvas').dataset.physicalTaskSuccess,
+      statusText: document.querySelector('#statusMessage').textContent,
     };
   });
   const completedPath = testInfo.outputPath('openarm-completed-state.json');
   await writeFile(completedPath, JSON.stringify({ ...completed, pageErrors }, null, 2));
   await testInfo.attach('openarm-completed-state.json', { path: completedPath, contentType: 'application/json' });
+
+  expect(completed.canvasTaskSuccess).toBe('true');
   expect(completed.evaluation.success).toBe(true);
   expect(completed.evaluation.orderViolation).toBe(false);
   for (const object of [completed.evaluation.flask, completed.evaluation.beaker]) {
