@@ -8,10 +8,14 @@ const LEGACY_LIMITS = Object.freeze([
 
 export const PHYSICS_PREVIEW_CAPABILITIES = Object.freeze({
   so101: capabilityRecord({
-    backend: EXECUTION_BACKENDS.LEGACY,
-    capability: 'legacy manipulation preview; SO-101 is the first physical migration target',
-    evidence: MODEL_EVIDENCE.MODEL_DERIVED,
-    limitations: LEGACY_LIMITS,
+    backend: EXECUTION_BACKENDS.BROWSER_MUJOCO,
+    capability: 'single-authority SO-101 rigid-body block-transfer workspace with live async Python and physical task evaluation',
+    evidence: MODEL_EVIDENCE.NUMERICALLY_VERIFIED,
+    limitations: [
+      'The supported task is a synthetic rigid-body benchmark, not a hardware-calibrated laboratory workflow.',
+      'SO-101 model provenance is source-derived from the pinned MuJoCo Menagerie adaptation; servo/controller parameters are simulation estimates and hardware alignment remains calibration-required.',
+      'No liquid, meniscus, vacuum, suction, tactile-sensor, force-sensor, or physical-hardware control capability is claimed.',
+    ],
   }),
   openarm: capabilityRecord({
     backend: EXECUTION_BACKENDS.LEGACY,
