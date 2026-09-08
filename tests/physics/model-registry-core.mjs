@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { assertPhysicalScene } from '../../src/physics/backend-contract.js';
-import { getModelPackage, listModelPackages, requireModelPackage, validateModelPackage } from '../../src/physics/model-registry.js';
+import { PARAMETER_EVIDENCE, getModelPackage, listModelPackages, requireModelPackage, validateModelPackage } from '../../src/physics/model-registry.js';
 import { PHASE1_MODEL_PACKAGE, SO101_PHASE2A_MODEL_PACKAGE } from '../../src/physics/model-packages.js';
 import { SO101_PHASE2A_SCENE } from '../../src/physics/so101-scene.js';
 
@@ -19,6 +19,9 @@ assert.equal(SO101_PHASE2A_MODEL_PACKAGE.physics.timestepSeconds, 0.005);
 assert.equal(SO101_PHASE2A_MODEL_PACKAGE.physics.integrator, 'implicitfast');
 assert.deepEqual(SO101_PHASE2A_MODEL_PACKAGE.joints.map(({ id }) => id), ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper']);
 assert.deepEqual(SO101_PHASE2A_MODEL_PACKAGE.actuators.map(({ jointId }) => jointId), SO101_PHASE2A_MODEL_PACKAGE.joints.map(({ id }) => id));
+assert.ok(SO101_PHASE2A_MODEL_PACKAGE.actuators.every(({ evidence }) => evidence === PARAMETER_EVIDENCE.SOURCE_DERIVED), 'SO-101 actuator names, mappings and control ranges must remain source-derived');
+assert.equal(SO101_PHASE2A_MODEL_PACKAGE.evidence.servoControllerParameters, PARAMETER_EVIDENCE.ESTIMATED, 'hardware-facing servo controller parameters must remain explicitly estimated');
+assert.equal(SO101_PHASE2A_MODEL_PACKAGE.evidence.hardwareAlignment, PARAMETER_EVIDENCE.CALIBRATION_REQUIRED, 'hardware alignment must remain calibration-required');
 assert.doesNotThrow(() => assertPhysicalScene(structuredClone(SO101_PHASE2A_SCENE)));
 assert.equal(SO101_PHASE2A_SCENE.modelPackage, SO101_PHASE2A_MODEL_PACKAGE.id);
 assert.equal(SO101_PHASE2A_SCENE.robotId, SO101_PHASE2A_MODEL_PACKAGE.robotId);
