@@ -11,10 +11,13 @@ function exactStringArray(actual, expected) {
   return Array.isArray(actual) && actual.length === expected.length && actual.every((value, index) => value === expected[index]);
 }
 function objectIds(items) { return Array.isArray(items) ? items.map((item) => item?.id) : []; }
+function exactOptionalNumber(actual, expected) { return (actual ?? null) === (expected ?? null); }
 function assertSceneMatchesPackage(scene, modelPackage) {
   if (scene.robotId !== modelPackage.robotId) throw new Error(`Scene robotId ${scene.robotId} does not match model package ${modelPackage.robotId}`);
   if (Math.abs(Number(scene.physics.timestepSeconds) - Number(modelPackage.physics.timestepSeconds)) > 1e-12) throw new Error(`Scene timestep ${scene.physics.timestepSeconds} does not match model package ${modelPackage.physics.timestepSeconds}`);
   if (scene.physics.integrator !== modelPackage.physics.integrator) throw new Error(`Scene integrator ${scene.physics.integrator} does not match model package ${modelPackage.physics.integrator}`);
+  if (!exactOptionalNumber(scene.physics.iterations, modelPackage.physics.iterations)) throw new Error(`Scene solver iterations ${scene.physics.iterations ?? 'default'} do not match model package ${modelPackage.physics.iterations ?? 'default'}`);
+  if (!exactOptionalNumber(scene.physics.lsIterations, modelPackage.physics.lsIterations)) throw new Error(`Scene solver line-search iterations ${scene.physics.lsIterations ?? 'default'} do not match model package ${modelPackage.physics.lsIterations ?? 'default'}`);
   if (!exactStringArray(scene.controllers || [], modelPackage.controllers)) throw new Error('Scene controller set does not match the registered model package');
   if (modelPackage.sceneConstraints?.fixtures && !exactStringArray(objectIds(scene.fixtures), modelPackage.sceneConstraints.fixtures)) throw new Error('Scene fixture identities do not match the registered model package');
   if (modelPackage.sceneConstraints?.objects && !exactStringArray(objectIds(scene.objects), modelPackage.sceneConstraints.objects)) throw new Error('Scene object identities do not match the registered model package');
