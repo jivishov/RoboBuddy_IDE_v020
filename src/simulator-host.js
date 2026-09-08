@@ -12,6 +12,7 @@ export class SimulatorHost {
   } = {}) {
     this.canvas = canvas;
     this.epoch = 0;
+    this.profileId = null;
     this.backend = null;
     this.pending = new Set();
     this.highContrast = true;
@@ -34,6 +35,7 @@ export class SimulatorHost {
     const epoch = ++this.epoch;
     const previous = this.backend;
     this.backend = null;
+    this.profileId = null;
     previous?.dispose?.();
     for (const pendingBackend of this.pending) pendingBackend.dispose?.();
     this.pending.clear();
@@ -61,7 +63,9 @@ export class SimulatorHost {
     this.syncLifecycleDiagnostics();
     if (epoch !== this.epoch) { backend.dispose(); return false; }
     this.backend = backend;
+    this.profileId = profileId;
     this.canvas.dataset.simulatorHostEpoch = String(epoch);
+    if (profileId !== 'microduck') this.canvas.dataset.cameraView = 'front';
     return true;
   }
   async reset(...args) { return this.backend?.reset?.(...args); }
@@ -76,7 +80,11 @@ export class SimulatorHost {
   getTaskEvaluation() { return this.backend?.getTaskEvaluation?.() || null; }
   getPhysicalSession() { return this.backend?.getPhysicalSession?.() || null; }
   getPhysicalAuthorityToken() { return this.backend?.getPhysicalAuthorityToken?.() || null; }
-  fit() { return this.backend?.fit?.(); }
+  fit() {
+    const result = this.backend?.fit?.();
+    if (this.profileId && this.profileId !== 'microduck') this.canvas.dataset.cameraView = 'front';
+    return result;
+  }
   resize() { return this.backend?.resize?.(); }
   setVariant(value) { return this.backend?.setVariant?.(value); }
   pause() { return this.backend?.pause?.() ?? false; }
@@ -101,6 +109,7 @@ export class SimulatorHost {
     this.disposed = true;
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
     this.epoch += 1;
+    this.profileId = null;
     this.backend?.dispose?.();
     this.backend = null;
     for (const pendingBackend of this.pending) pendingBackend.dispose?.();
