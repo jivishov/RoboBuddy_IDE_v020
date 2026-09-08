@@ -10,6 +10,12 @@ import mujoco
 
 EXPECTED_MUJOCO_VERSION = "3.11.0"
 ROOT = Path(__file__).resolve().parents[1]
+INTEGRATOR_CODES = {
+    "Euler": int(mujoco.mjtIntegrator.mjINT_EULER),
+    "RK4": int(mujoco.mjtIntegrator.mjINT_RK4),
+    "implicit": int(mujoco.mjtIntegrator.mjINT_IMPLICIT),
+    "implicitfast": int(mujoco.mjtIntegrator.mjINT_IMPLICITFAST),
+}
 
 MODEL_PACKAGES: dict[str, dict[str, object]] = {
     "phase1": {
@@ -17,6 +23,9 @@ MODEL_PACKAGES: dict[str, dict[str, object]] = {
         "asset": "models/vertical-slice/model.xml",
         "path": ROOT / "models" / "vertical-slice" / "model.xml",
         "timestep": 0.002,
+        "integrator": "RK4",
+        "iterations": None,
+        "ls_iterations": None,
         "joints": ["hinge"],
         "actuators": {"hinge": "hinge_position"},
         "bodies": ["free_box"],
@@ -27,6 +36,9 @@ MODEL_PACKAGES: dict[str, dict[str, object]] = {
         "asset": "models/so101/model.xml",
         "path": ROOT / "models" / "so101" / "model.xml",
         "timestep": 0.005,
+        "integrator": "implicitfast",
+        "iterations": 10,
+        "ls_iterations": 20,
         "joints": ["shoulder_pan", "shoulder_lift", "elbow_flex", "wrist_flex", "wrist_roll", "gripper"],
         "actuators": {
             "shoulder_pan": "shoulder_pan",
@@ -119,6 +131,24 @@ def run(
     expected_timestep = float(package["timestep"])
     if abs(float(model.opt.timestep) - expected_timestep) > 1e-12:
         raise RuntimeError(f"Unexpected timestep {model.opt.timestep}; expected {expected_timestep}")
+    expected_integrator_name = str(package["integrator"])
+    expected_integrator = INTEGRATOR_CODES[expected_integrator_name]
+    if int(model.opt.integrator) != expected_integrator:
+        raise RuntimeError(
+            f"Unexpected integrator {int(model.opt.integrator)}; "
+            f"expected {expected_integrator_name} ({expected_integrator})"
+        )
+    expected_iterations = package["iterations"]
+    if expected_iterations is not None and int(model.opt.iterations) != int(expected_iterations):
+        raise RuntimeError(
+            f"Unexpected solver iterations {int(model.opt.iterations)}; expected {int(expected_iterations)}"
+        )
+    expected_ls_iterations = package["ls_iterations"]
+    if expected_ls_iterations is not None and int(model.opt.ls_iterations) != int(expected_ls_iterations):
+        raise RuntimeError(
+            f"Unexpected solver line-search iterations {int(model.opt.ls_iterations)}; "
+            f"expected {int(expected_ls_iterations)}"
+        )
 
     joint_names = list(package["joints"])
     actuator_names = dict(package["actuators"])
@@ -233,6 +263,9 @@ def run(
             "version": mujoco.__version__,
             "versionEvidence": "mujoco.__version__ native package introspection",
             "timestepSeconds": float(model.opt.timestep),
+            "integrator": expected_integrator_name,
+            "iterations": int(model.opt.iterations),
+            "lsIterations": int(model.opt.ls_iterations),
         },
         "selectedJoint": selected_joint,
         "initialJoints": initial,
