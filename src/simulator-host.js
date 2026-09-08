@@ -1,49 +1,51 @@
 import { SourceRobotSimulator } from './source-simulator.js';
 import { MicroDuckPolicySimulator } from './microduck/policy-simulator.js';
 import { So101PhysicalSimulator } from './physics/so101-physical-simulator.js';
+import { OpenArmPhysicalSimulator } from './physics/openarm-physical-simulator.js';
 
 export class SimulatorHost {
   constructor(canvas, {
     sourceFactory = (target) => new SourceRobotSimulator(target, { externalClock: true }),
     microduckFactory = (target) => new MicroDuckPolicySimulator(target, { externalClock: true }),
     so101PhysicalFactory = (target) => new So101PhysicalSimulator(target),
+    openarmPhysicalFactory = (target) => new OpenArmPhysicalSimulator(target),
   } = {}) {
     this.canvas = canvas;
     this.epoch = 0;
+    this.profileId = null;
     this.backend = null;
     this.pending = new Set();
     this.highContrast = true;
     this.sourceFactory = sourceFactory;
     this.microduckFactory = microduckFactory;
     this.so101PhysicalFactory = so101PhysicalFactory;
+    this.openarmPhysicalFactory = openarmPhysicalFactory;
     this.controllerPreemptHandler = () => {};
     this.disposed = false;
     this.animationFrame = requestAnimationFrame((time) => this.renderFrame(time));
     this.syncLifecycleDiagnostics();
   }
-
   renderFrame(time) {
     if (this.disposed) return;
     this.animationFrame = requestAnimationFrame((next) => this.renderFrame(next));
     this.backend?.renderFrame?.(time);
   }
-
-  syncLifecycleDiagnostics() {
-    this.canvas.dataset.simulatorHostPendingCount = String(this.pending.size);
-  }
-
+  syncLifecycleDiagnostics() { this.canvas.dataset.simulatorHostPendingCount = String(this.pending.size); }
   async setScenario(profileId, scenario, fallbackRest = {}) {
     const epoch = ++this.epoch;
     const previous = this.backend;
     this.backend = null;
+    this.profileId = null;
     previous?.dispose?.();
     for (const pendingBackend of this.pending) pendingBackend.dispose?.();
     this.pending.clear();
-    const physicalSo101 = profileId === 'so101' && scenario?.simulationMode === 'physical_mujoco';
+    const physical = scenario?.simulationMode === 'physical_mujoco';
     const backend = profileId === 'microduck'
       ? this.microduckFactory(this.canvas)
-      : physicalSo101
+      : physical && profileId === 'so101'
       ? this.so101PhysicalFactory(this.canvas)
+      : physical && profileId === 'openarm'
+      ? this.openarmPhysicalFactory(this.canvas)
       : this.sourceFactory(this.canvas);
     backend.setControllerPreemptHandler?.(this.controllerPreemptHandler);
     this.pending.add(backend);
@@ -61,7 +63,9 @@ export class SimulatorHost {
     this.syncLifecycleDiagnostics();
     if (epoch !== this.epoch) { backend.dispose(); return false; }
     this.backend = backend;
+    this.profileId = profileId;
     this.canvas.dataset.simulatorHostEpoch = String(epoch);
+    if (profileId !== 'microduck') this.canvas.dataset.cameraView = 'front';
     return true;
   }
   async reset(...args) { return this.backend?.reset?.(...args); }
@@ -76,7 +80,11 @@ export class SimulatorHost {
   getTaskEvaluation() { return this.backend?.getTaskEvaluation?.() || null; }
   getPhysicalSession() { return this.backend?.getPhysicalSession?.() || null; }
   getPhysicalAuthorityToken() { return this.backend?.getPhysicalAuthorityToken?.() || null; }
-  fit() { return this.backend?.fit?.(); }
+  fit() {
+    const result = this.backend?.fit?.();
+    if (this.profileId && this.profileId !== 'microduck') this.canvas.dataset.cameraView = 'front';
+    return result;
+  }
   resize() { return this.backend?.resize?.(); }
   setVariant(value) { return this.backend?.setVariant?.(value); }
   pause() { return this.backend?.pause?.() ?? false; }
@@ -101,6 +109,7 @@ export class SimulatorHost {
     this.disposed = true;
     if (this.animationFrame) cancelAnimationFrame(this.animationFrame);
     this.epoch += 1;
+    this.profileId = null;
     this.backend?.dispose?.();
     this.backend = null;
     for (const pendingBackend of this.pending) pendingBackend.dispose?.();
