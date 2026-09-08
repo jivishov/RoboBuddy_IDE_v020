@@ -3,6 +3,8 @@ import { test, expect } from '@playwright/test';
 
 const NATIVE_REFERENCE_PATH = '/tmp/robobuddy-native-so101.json';
 const JOINTS = ['shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper'];
+// These are browser/native numerical-conformance tolerances, not hardware-fidelity tolerances.
+// Position tolerance 2e-4 rad is about 0.0115 degrees; velocity tolerance is 2e-3 rad/s.
 const PARITY = Object.freeze({ simulationTimeSeconds: 1e-9, jointPositionRad: 2e-4, jointVelocityRadS: 2e-3 });
 
 function expectNear(label, actual, expected, tolerance) {
@@ -51,14 +53,24 @@ test('SO-101 Phase 2A loads, resets deterministically, and moves through bounded
         });
       }
 
-      let outOfRangeError = null;
+      let jointRangeError = null;
       try {
         await session.sendCommand(
           { type: 'set_joint_target', jointId: 'wrist_roll', targetRad: 2.8 },
-          { commandId: 'so101-out-of-range', maxSteps: 10 },
+          { commandId: 'so101-joint-out-of-range', maxSteps: 10 },
         );
       } catch (error) {
-        outOfRangeError = String(error?.message || error);
+        jointRangeError = String(error?.message || error);
+      }
+
+      let controlRangeError = null;
+      try {
+        await session.sendCommand(
+          { type: 'set_joint_target', jointId: 'wrist_roll', targetRad: 3.0 },
+          { commandId: 'so101-control-out-of-range', maxSteps: 10 },
+        );
+      } catch (error) {
+        controlRangeError = String(error?.message || error);
       }
 
       const reset1 = (await session.reset()).result;
@@ -96,7 +108,8 @@ test('SO-101 Phase 2A loads, resets deterministically, and moves through bounded
         acceptanceTarget,
         singleJointTrajectory,
         moved,
-        outOfRangeError,
+        jointRangeError,
+        controlRangeError,
         reset1,
         reset2,
         multi1,
@@ -122,11 +135,13 @@ test('SO-101 Phase 2A loads, resets deterministically, and moves through bounded
   expect(result.acceptanceTarget).toBeCloseTo(0.4, 12);
   expect(Math.abs(result.acceptancePosition - 0.4)).toBeGreaterThan(0.05);
   expect(result.singleJointTrajectory.map(({ step }) => step)).toEqual([25, 50, 75, 100]);
+  expect(result.singleJointTrajectory.some(({ velocityRadS }) => Math.abs(velocityRadS) > 1e-4)).toBe(true);
   expect(result.moved.simulationTimeSeconds).toBeCloseTo(0.5, 9);
   expect(Math.abs(result.moved.joints.shoulder_pan.positionRad - result.acceptancePosition)).toBeGreaterThan(1e-4);
   expect(Number.isFinite(result.moved.joints.shoulder_pan.velocityRadS)).toBe(true);
   expect(result.finiteMoved).toBe(true);
-  expect(result.outOfRangeError).toContain('outside joint wrist_roll range');
+  expect(result.jointRangeError).toContain('outside joint wrist_roll range');
+  expect(result.controlRangeError).toContain('outside the actuator control range');
 
   for (const jointId of JOINTS) {
     expectNear(`${jointId} deterministic reset qpos`, result.reset1.joints[jointId].positionRad, result.reset2.joints[jointId].positionRad, 1e-12);
@@ -146,6 +161,9 @@ test('SO-101 Phase 2A loads, resets deterministically, and moves through bounded
     expect(native.model.sha256).toBe(result.loaded.model.sha256);
     expect(native.model.id).toBe(result.loaded.model.id);
     expect(native.engine.version).toBe('3.11.0');
+    expect(native.engine.integrator).toBe('implicitfast');
+    expect(native.engine.iterations).toBe(10);
+    expect(native.engine.lsIterations).toBe(20);
     expect(native.resetMatchesInitial).toBe(true);
     expect(native.trajectory).toHaveLength(result.singleJointTrajectory.length);
     const trajectoryDeltas = result.singleJointTrajectory.map((browserPoint, index) => {
