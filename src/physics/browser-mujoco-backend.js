@@ -28,12 +28,13 @@ export class BrowserMuJoCoBackend {
   }
 
   async loadScene(scene = {}, context = {}) {
-    this.#assertNotDisposed(); assertPhysicalScene(scene);
-    const modelPackage = requireModelPackage(scene.modelPackage); assertSceneMatchesPackage(scene, modelPackage); this.#validateNewEpoch(context);
-    if (!this.worker) this.#spawn();
-    this.state = PhysicsBackendState.LOADING; this.sessionId = String(context.sessionId); this.epoch = context.epoch; this.commandBudget = null;
+    this.#assertNotDisposed(); assertPhysicalScene(scene); this.#validateNewEpoch(context);
+    this.sessionId = String(context.sessionId); this.epoch = context.epoch;
     const generation = ++this.generation;
+    this.#invalidateLoadedScene(PhysicsBackendState.LOADING);
     try {
+      const modelPackage = requireModelPackage(scene.modelPackage); assertSceneMatchesPackage(scene, modelPackage);
+      if (!this.worker) this.#spawn();
       const raw = await this.#call('load', { modelPackage }); this.#assertGeneration(generation, context);
       this.loaded = true; this.sceneRevision = String(scene.revision); this.robotId = String(scene.robotId); this.modelPackageId = modelPackage.id;
       const observation = this.#decorateObservation(raw);
@@ -41,7 +42,13 @@ export class BrowserMuJoCoBackend {
       this.lastScene = { schemaVersion: scene.schemaVersion, id: scene.id, revision: this.sceneRevision, robotId: this.robotId, modelPackage: scene.modelPackage, physics: structuredClone(scene.physics), controllers: structuredClone(scene.controllers || []), model: structuredClone(observation.model) };
       this.lastObservation = observation; this.state = PhysicsBackendState.READY; this.#record('loadScene', { observation });
       return { sceneRevision: this.sceneRevision, robotId: this.robotId, observation };
-    } catch (error) { if (generation === this.generation) this.state = PhysicsBackendState.FAILED; throw error; }
+    } catch (error) {
+      if (generation === this.generation) {
+        this.#invalidateLoadedScene(PhysicsBackendState.FAILED);
+        this.#terminate('load failed');
+      }
+      throw error;
+    }
   }
 
   async reset(context = {}) {
@@ -98,7 +105,7 @@ export class BrowserMuJoCoBackend {
 
   async cancelRun(context = {}) {
     this.#assertLoaded(); this.#adoptNewEpoch(context); ++this.generation; this.#record('cancelRun', { reason: context.reason || 'cancelled' }); this.#terminate('cancelled');
-    this.loaded = false; this.state = PhysicsBackendState.IDLE; this.sceneRevision = null; this.robotId = null; this.modelPackageId = null; this.lastScene = null; this.lastObservation = null; this.commandBudget = null;
+    this.#invalidateLoadedScene(PhysicsBackendState.IDLE);
     return { cancelled: true, reloadRequired: true };
   }
 
@@ -122,6 +129,7 @@ export class BrowserMuJoCoBackend {
   #spawn() { this.worker = new Worker(this.workerUrl, { type: 'module', name: 'robobuddy-mujoco-physics' }); this.worker.onmessage = ({ data }) => { const request = this.pending.get(data?.id); if (!request) return; this.pending.delete(data.id); if (data.ok) request.resolve(data.payload); else request.reject(new Error(data.error || 'MuJoCo worker request failed')); }; this.worker.onerror = (event) => { if (!this.disposed) this.state = PhysicsBackendState.FAILED; this.#terminate(event.message || 'worker error'); }; }
   #call(op, payload = {}) { if (!this.worker) throw new Error('MuJoCo worker is not running'); const id = ++this.sequence; return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, op, payload }); }); }
   #record(type, details = {}) { this.trace.push({ type, sessionId: this.sessionId, epoch: this.epoch, sceneRevision: this.sceneRevision, robotId: this.robotId, simulationTimeSeconds: details.observation?.simulationTimeSeconds ?? this.lastObservation?.simulationTimeSeconds ?? null, ...details }); if (this.trace.length > MAX_TRACE_EVENTS) this.trace.splice(0, this.trace.length - MAX_TRACE_EVENTS); }
+  #invalidateLoadedScene(state) { this.loaded = false; this.state = state; this.sceneRevision = null; this.robotId = null; this.modelPackageId = null; this.lastScene = null; this.lastObservation = null; this.commandBudget = null; }
   #validateNewEpoch(context) { if (!context?.sessionId || !Number.isInteger(context.epoch) || context.epoch < 1) throw new Error('Physics load requires sessionId and positive epoch'); if (this.sessionId && context.sessionId !== this.sessionId) throw new Error('Physics backend is already owned by another session'); if (this.epoch && context.epoch <= this.epoch) throw new Error('Physics load requires a newer epoch'); }
   #adoptNewEpoch(context) { this.#assertSession(context); if (!Number.isInteger(context.epoch) || context.epoch <= this.epoch) throw new Error('Physics reset/cancel requires a newer epoch'); this.epoch = context.epoch; }
   #assertSession(context) { if (!context?.sessionId || context.sessionId !== this.sessionId) throw new Error('Stale or foreign physics session'); }
