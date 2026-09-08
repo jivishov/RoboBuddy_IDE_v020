@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels, Python, renderer, evaluator, and WebMCP', async ({ page }) => {
+test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels, Python, renderer, evaluator, and WebMCP', async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
@@ -34,6 +34,10 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
       leftEe: state?.observation?.bodies?.openarm_left_ee_base_link?.positionM,
       rightEe: state?.observation?.bodies?.openarm_right_ee_base_link?.positionM,
     };
+  });
+  await testInfo.attach('openarm-initial-state.json', {
+    body: Buffer.from(JSON.stringify({ ...initial, pageErrors }, null, 2)),
+    contentType: 'application/json',
   });
   expect(initial.backend).toBe('OpenArmPhysicalSimulator');
   expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v2' });
@@ -97,6 +101,10 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
       runtimeActive: app.physicalRuntime.isActive(),
       canvasAuthority: document.querySelector('#simCanvas').dataset.simulationAuthority,
     };
+  });
+  await testInfo.attach('openarm-completed-state.json', {
+    body: Buffer.from(JSON.stringify({ ...completed, pageErrors }, null, 2)),
+    contentType: 'application/json',
   });
   expect(completed.evaluation.success).toBe(true);
   expect(completed.evaluation.orderViolation).toBe(false);
