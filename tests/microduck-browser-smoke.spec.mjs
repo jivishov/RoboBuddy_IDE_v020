@@ -39,7 +39,8 @@ test('MicroDuck profile uses the shared canvas and survives backend-family switc
   await page.goto('/?ci=1');
   await page.selectOption('#robotSelect', 'openarm');
   await expect(page.locator('#statusMessage')).toContainText('Ready');
-  await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulator-backend', 'source-robot');
+  await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulator-backend', 'browser-mujoco');
+  await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulation-authority', 'physics-session');
   await page.selectOption('#robotSelect', 'microduck');
   await expect(page.locator('#statusMessage')).toContainText('Ready');
   const canvas = page.locator('#simCanvas');
