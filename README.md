@@ -1,5 +1,5 @@
 # RoboBuddy IDE — Physics Preview
 
-Browser robotics IDE migrating robot-by-robot to a shared MuJoCo physics architecture. SO-101 physical integration is under verification on the `0.2.0-alpha.1` milestone; hardware calibration is not claimed.
+Version `0.2.0-alpha.2` completes the SO-101 physical migration milestone: the normal SO-101 workspace, live Python, renderer, task evaluator, and bounded WebMCP controls share one authoritative browser MuJoCo PhysicsSession.
 
-SO-101 integration tests cover the authoritative session, live Python, renderer, task evaluation, WebMCP, stale ownership, and physical P4 regression gates.
+The supported SO-101 task is a synthetic rigid-body block-transfer benchmark. Simulator validation is not hardware calibration. OpenArm, LeKiwi, MicroDuck, Unitree G1, Panda, and ASIMOV remain separate later robot-specific migration work.
