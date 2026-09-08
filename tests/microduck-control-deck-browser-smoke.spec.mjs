@@ -19,6 +19,26 @@ async function openControlDeckAudit(page, tag, { gamepad = false } = {}) {
   const capture = deck.locator('.md-capture-button');
   const state = () => page.evaluate(() => window.__robobuddyCi.app.sim.getState());
   const stateAt = (...path) => page.evaluate((segments) => segments.reduce((value, key) => value[key], window.__robobuddyCi.app.sim.getState()), path);
+  await page.evaluate(async () => {
+    const { observeSoundStarts } = await import('/tests/helpers/microduck-timing.mjs');
+    window.__microduckSoundProbe = observeSoundStarts(window.__robobuddyCi.app.sim.backend);
+  });
+  const expectSoundStart = async (sound, action) => {
+    const sequence = await page.evaluate(() => window.__microduckSoundProbe.sequence);
+    await action();
+    await expect.poll(() => page.evaluate(() => window.__microduckSoundProbe.last)).toMatchObject({
+      sequence: sequence + 1, tag: sound, audio: { unlocked: true, sound },
+    });
+    expect(await page.evaluate(() => window.__microduckSoundProbe.last.scheduledVoices)).toBeGreaterThan(0);
+  };
+  const finishSkill = async (phase) => {
+    const result = await page.evaluate(async (expectedPhase) => {
+      const { finishSkillAtControlRate } = await import('/tests/helpers/microduck-timing.mjs');
+      return finishSkillAtControlRate(window.__robobuddyCi.app.sim.backend, expectedPhase);
+    }, phase);
+    console.log(`MICRODUCK_SKILL_TIMING=${JSON.stringify(result)}`);
+    expect(await stateAt('phase')).toBe('up');
+  };
   const captureInput = async () => {
     if ((await capture.textContent())?.trim() !== 'Release simulator input') await capture.click();
     await expect(page.locator('#simCanvas')).toHaveAttribute('data-microduck-capture', 'true');
@@ -38,7 +58,7 @@ async function openControlDeckAudit(page, tag, { gamepad = false } = {}) {
     await expect.poll(() => stateAt(...path), { timeout: 1_000, intervals: [50, 100, 150] }).toBe(0);
   };
 
-  return { deck, capture, state, stateAt, captureInput, expand, clickRangeEdge, expectLeaseExpiry };
+  return { deck, capture, state, stateAt, captureInput, expand, clickRangeEdge, expectLeaseExpiry, expectSoundStart, finishSkill };
 }
 
 test('control-deck-audit STOP and Reset neutralize retained human input', async ({ page }) => {
@@ -261,7 +281,7 @@ test('control-deck-audit runtime movement pose and skills cover every command fa
 });
 
 test('control-deck-audit audio gating held audio and cleanup are complete', async ({ page }) => {
-  const { state, stateAt, captureInput, expand } = await openControlDeckAudit(page, 'audio');
+  const { state, stateAt, captureInput, expand, expectSoundStart } = await openControlDeckAudit(page, 'audio');
   await captureInput();
   const runtime = await expand('Runtime');
   const audio = await expand('Generated local audio');
@@ -271,8 +291,8 @@ test('control-deck-audit audio gating held audio and cleanup are complete', asyn
   await expect(audio.locator('[data-md-value="audio.status"]')).toContainText('UNLOCKED');
 
   for (const tag of ['alarm', 'greet', 'inquire', 'peck', 'chirp', 'coo']) {
-    await audio.locator(`[data-md-command="sound"][data-tag="${tag}"]`).click();
-    await expect.poll(() => stateAt('audio', 'sound')).toBe(tag);
+    await expectSoundStart(tag, () => audio.locator(`[data-md-command="sound"][data-tag="${tag}"]`).click());
+    await expect.poll(() => stateAt('audio', 'sound')).toBeNull();
   }
   const wheee = audio.locator('[data-md-command="sound"][data-tag="wheee"]');
   await wheee.scrollIntoViewIfNeeded();
@@ -332,7 +352,7 @@ test('control-deck-audit audio gating held audio and cleanup are complete', asyn
 });
 
 test('control-deck-audit presentation peripherals gamepad accessibility and reachability are complete', async ({ page }) => {
-  const { deck, state, stateAt, captureInput, expand } = await openControlDeckAudit(page, 'presentation', { gamepad: true });
+  const { deck, state, stateAt, captureInput, expand, expectSoundStart, finishSkill } = await openControlDeckAudit(page, 'presentation', { gamepad: true });
   const initial = await state();
   const runtime = await expand('Runtime');
   const presentation = await expand('Presentation & modeled peripherals');
@@ -393,14 +413,16 @@ test('control-deck-audit presentation peripherals gamepad accessibility and reac
     fixture.gamepad.axes.fill(0);
     window.dispatchEvent(new Event('gamepadconnected'));
   });
-  const setGamepadButton = (index, pressed, value = pressed ? 1 : 0) => page.evaluate(({ index: buttonIndex, pressed: isPressed, value: buttonValue }) => {
+  const setGamepadButton = (index, pressed, value = pressed ? 1 : 0) => page.evaluate(async ({ index: buttonIndex, pressed: isPressed, value: buttonValue }) => {
     Object.assign(window.__microduckGamepadFixture.gamepad.buttons[buttonIndex], { pressed: isPressed, touched: isPressed, value: buttonValue });
+    // Let the real frame-polled input controller sample both edges. A fixed
+    // 100 ms pulse can disappear completely between slow rendering frames.
+    await new Promise(requestAnimationFrame);
+    await new Promise(requestAnimationFrame);
   }, { index, pressed, value });
-  const pulseGamepadButton = async (index, holdMs = 100) => {
+  const pulseGamepadButton = async (index) => {
     await setGamepadButton(index, true);
-    await page.waitForTimeout(holdMs);
     await setGamepadButton(index, false);
-    await page.waitForTimeout(100);
   };
   await pulseGamepadButton(9);
   await expect.poll(() => stateAt('enabled')).toBe(true);
@@ -417,12 +439,11 @@ test('control-deck-audit presentation peripherals gamepad accessibility and reac
   await pulseGamepadButton(1);
   await page.evaluate(() => { window.__microduckGamepadFixture.gamepad.axes.fill(0); });
 
-  const exerciseGamepadSkill = async (buttonIndex, phase, timeout = 5_000) => {
+  const exerciseGamepadSkill = async (buttonIndex, phase) => {
     await setGamepadButton(buttonIndex, true);
     await expect.poll(() => stateAt('phase')).toBe(phase);
     await setGamepadButton(buttonIndex, false);
-    await expect.poll(() => stateAt('phase'), { timeout }).toBe('up');
-    await page.waitForTimeout(100);
+    await finishSkill(phase);
   };
   await exerciseGamepadSkill(0, 'ground_pick');
   await exerciseGamepadSkill(4, 'kick_left');
@@ -433,10 +454,9 @@ test('control-deck-audit presentation peripherals gamepad accessibility and reac
   await setGamepadButton(13, true);
   await expect.poll(() => stateAt('phase')).toBe('rise');
   await setGamepadButton(13, false);
-  await expect.poll(() => stateAt('phase'), { timeout: 4_000 }).toBe('up');
+  await finishSkill('rise');
 
-  await setGamepadButton(7, true);
-  await expect.poll(() => stateAt('audio', 'sound')).toBe('chirp');
+  await expectSoundStart('chirp', () => setGamepadButton(7, true));
   await expect.poll(() => stateAt('mouth')).toBeGreaterThan(0.9);
   await setGamepadButton(7, false);
   await expect.poll(() => stateAt('mouth')).toBe(0);
