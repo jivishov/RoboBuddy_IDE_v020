@@ -7,7 +7,6 @@ const BLOCK_HALF_Z = 0.007;
 const TARGET_CENTER = [0.358, -0.156];
 const TARGET_HALF = [0.020, 0.030];
 const CONTACT_RICH_PARITY_M = 0.02;
-const OBSERVATION_SAMPLE_STEPS = 20;
 
 function distance3(a, b) {
   return Math.sqrt(a.reduce((sum, value, index) => sum + ((Number(value) - Number(b[index])) ** 2), 0));
@@ -18,7 +17,7 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
   await page.goto('/physics-slice.html', { waitUntil: 'domcontentloaded' });
 
-  const result = await page.evaluate(async ({ supportZ, blockHalfZ, targetCenter, targetHalf, observationSampleSteps }) => {
+  const result = await page.evaluate(async ({ supportZ, blockHalfZ, targetCenter, targetHalf }) => {
     const [{ PhysicsSession }, { BrowserMuJoCoBackend }, { SO101_MANIPULATION_SCENE, SO101_BENCHMARK_TRANSFER_CONTROLLER }] = await Promise.all([
       import('/src/physics/session.js'),
       import('/src/physics/browser-mujoco-backend.js'),
@@ -39,17 +38,13 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
       const diagnostics = await session.getDiagnostics();
       const initialPositionM = blockPosition(loaded.observation);
       let observation = loaded.observation;
-      let maxBlockZM = initialPositionM[2];
-      let gripperContactSamples = 0;
-      let carriedContactSamples = 0;
-      const stageEnds = [];
-      const settleSamples = [];
       let commandIndex = 0;
+      let maxBlockZM = initialPositionM[2];
+      const stageEnds = [];
       const physicsDt = loaded.observation.engine.timestepSeconds;
       const controllerPeriod = SO101_BENCHMARK_TRANSFER_CONTROLLER.controllerPeriodSeconds;
       const stepsPerControllerPeriod = Math.round(controllerPeriod / physicsDt);
       if (Math.abs((stepsPerControllerPeriod * physicsDt) - controllerPeriod) > 1e-12) throw new Error('P4 controller period does not align with physics timestep');
-      if (observationSampleSteps % stepsPerControllerPeriod !== 0) throw new Error('P4 observation sampling must be an integer multiple of the controller interval');
 
       const stages = SO101_BENCHMARK_TRANSFER_CONTROLLER.stages;
       for (let stageIndex = 0; stageIndex < stages.length; stageIndex += 1) {
@@ -61,8 +56,6 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
 
         if (Object.keys(stage.targetsRad).length) {
           commandIndex += 1;
-          // Keep one bounded command alive through any following no-command settle stages.
-          // This changes only the command budget; the stage-constant target and exact physics steps are unchanged.
           let commandBudgetSteps = stageSteps;
           for (let futureIndex = stageIndex + 1; futureIndex < stages.length; futureIndex += 1) {
             const future = stages[futureIndex];
@@ -75,38 +68,43 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
           );
         }
 
-        for (let advancedSteps = 0; advancedSteps < stageSteps;) {
-          const chunkSteps = Math.min(observationSampleSteps, stageSteps - advancedSteps);
-          observation = await session.advanceSteps(chunkSteps);
-          advancedSteps += chunkSteps;
-          const position = blockPosition(observation);
-          maxBlockZM = Math.max(maxBlockZM, position[2]);
-          const contacting = blockGripperContact(observation);
-          if (contacting) {
-            gripperContactSamples += 1;
-            if (position[2] > supportZ + blockHalfZ + 0.020) carriedContactSamples += 1;
-          }
-          if (stage.name === 'settle_final') settleSamples.push(position);
+        let settleMidpointPositionM = null;
+        if (stage.name === 'settle_final') {
+          const firstHalfSteps = Math.floor(stageSteps / 2);
+          observation = await session.advanceSteps(firstHalfSteps);
+          settleMidpointPositionM = blockPosition(observation);
+          observation = await session.advanceSteps(stageSteps - firstHalfSteps);
+        } else {
+          observation = await session.advanceSteps(stageSteps);
         }
+
+        const positionM = blockPosition(observation);
+        maxBlockZM = Math.max(maxBlockZM, positionM[2]);
         stageEnds.push({
           name: stage.name,
-          positionM: blockPosition(observation),
+          positionM,
           gripperContact: blockGripperContact(observation),
+          settleMidpointPositionM,
         });
       }
 
+      const byStage = Object.fromEntries(stageEnds.map((stage) => [stage.name, stage]));
       const finalPositionM = blockPosition(observation);
       const horizontalTravelM = Math.hypot(finalPositionM[0] - initialPositionM[0], finalPositionM[1] - initialPositionM[1]);
       const lifted = maxBlockZM > supportZ + blockHalfZ + 0.030;
-      const physicallyCarried = lifted && carriedContactSamples >= 4 && horizontalTravelM > 0.05;
+      const graspedAtClose = Boolean(byStage.close?.gripperContact);
+      const heldDuringLift = Boolean(byStage.lift?.gripperContact);
+      const heldDuringMove = Boolean(byStage.move?.gripperContact);
+      const physicallyCarried = lifted && graspedAtClose && heldDuringLift && heldDuringMove && horizontalTravelM > 0.05;
       const inTarget = Math.abs(finalPositionM[0] - targetCenter[0]) <= targetHalf[0]
         && Math.abs(finalPositionM[1] - targetCenter[1]) <= targetHalf[1];
       const released = !blockGripperContact(observation);
-      const settleTail = settleSamples.slice(-3);
-      const settleMotionM = settleTail.length >= 2
-        ? Math.sqrt(settleTail[0].reduce((sum, value, index) => sum + ((value - settleTail.at(-1)[index]) ** 2), 0))
+      const settleMidpoint = byStage.settle_final?.settleMidpointPositionM;
+      const settleMotionM = settleMidpoint
+        ? Math.sqrt(settleMidpoint.reduce((sum, value, index) => sum + ((value - finalPositionM[index]) ** 2), 0))
         : Number.POSITIVE_INFINITY;
       const resting = Math.abs(finalPositionM[2] - (supportZ + blockHalfZ)) < 0.012 && settleMotionM < 1e-5;
+
       return {
         model: loaded.observation.model,
         engine: loaded.observation.engine,
@@ -116,28 +114,22 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
         finalPositionM,
         maxBlockZM,
         horizontalTravelM,
-        gripperContactSamples,
-        carriedContactSamples,
         lifted,
+        graspedAtClose,
+        heldDuringLift,
+        heldDuringMove,
         physicallyCarried,
         inTarget,
         released,
         resting,
         settleMotionM,
         stageEnds,
-        observationSampleSteps,
         stepsPerControllerPeriod,
       };
     } finally {
       session.dispose();
     }
-  }, {
-    supportZ: SUPPORT_Z,
-    blockHalfZ: BLOCK_HALF_Z,
-    targetCenter: TARGET_CENTER,
-    targetHalf: TARGET_HALF,
-    observationSampleSteps: OBSERVATION_SAMPLE_STEPS,
-  });
+  }, { supportZ: SUPPORT_Z, blockHalfZ: BLOCK_HALF_Z, targetCenter: TARGET_CENTER, targetHalf: TARGET_HALF });
 
   expect(result.model.id).toBe('robobuddy-so101-manipulation-v1');
   expect(result.model.asset).toBe('models/so101/manipulation.xml');
@@ -146,10 +138,10 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
   expect(result.engine.timestepSeconds).toBeCloseTo(0.005, 12);
   expect(result.diagnostics.modelPackageId).toBe('so101-manipulation-menagerie-8161bba-v1');
   expect(result.stepsPerControllerPeriod).toBe(4);
-  expect(result.observationSampleSteps).toBe(20);
   expect(result.simulationTimeSeconds).toBeCloseTo(5.1, 9);
-  expect(result.gripperContactSamples).toBeGreaterThanOrEqual(4);
-  expect(result.carriedContactSamples).toBeGreaterThanOrEqual(4);
+  expect(result.graspedAtClose).toBe(true);
+  expect(result.heldDuringLift).toBe(true);
+  expect(result.heldDuringMove).toBe(true);
   expect(result.lifted).toBe(true);
   expect(result.physicallyCarried).toBe(true);
   expect(result.horizontalTravelM).toBeGreaterThan(0.05);
@@ -157,9 +149,6 @@ test('SO-101 P4 performs a physical browser block transfer through contact, carr
   expect(result.released).toBe(true);
   expect(result.resting).toBe(true);
   expect(result.settleMotionM).toBeLessThan(1e-5);
-  expect(result.stageEnds.find(({ name }) => name === 'close')?.gripperContact).toBe(true);
-  expect(result.stageEnds.find(({ name }) => name === 'lift')?.gripperContact).toBe(true);
-  expect(result.stageEnds.find(({ name }) => name === 'move')?.gripperContact).toBe(true);
   expect(result.stageEnds.find(({ name }) => name === 'settle_final')?.gripperContact).toBe(false);
 
   if (existsSync(NATIVE_REFERENCE_PATH)) {
