@@ -23,7 +23,7 @@ export const SO101_PHASE2A_SCENE = Object.freeze({
 export const SO101_MANIPULATION_SCENE = Object.freeze({
   schemaVersion: PHYSICS_BACKEND_API_VERSION,
   id: 'p4-so101-benchmark-transfer',
-  revision: 'p4-so101-benchmark-transfer-v1',
+  revision: 'p4-so101-benchmark-transfer-v2',
   robotId: SO101_MANIPULATION_MODEL_PACKAGE.robotId,
   modelPackage: SO101_MANIPULATION_MODEL_PACKAGE.id,
   legacyTaskId: null,
@@ -34,7 +34,8 @@ export const SO101_MANIPULATION_SCENE = Object.freeze({
     lsIterations: SO101_MANIPULATION_MODEL_PACKAGE.physics.lsIterations,
   }),
   fixtures: Object.freeze([
-    Object.freeze({ id: 'benchmark_work_surface' }),
+    Object.freeze({ id: 'benchmark_source_support' }),
+    Object.freeze({ id: 'benchmark_target_support' }),
     Object.freeze({ id: 'benchmark_target_region' }),
   ]),
   objects: Object.freeze([Object.freeze({ id: 'benchmark_block' })]),
@@ -44,7 +45,7 @@ export const SO101_MANIPULATION_SCENE = Object.freeze({
     objectId: 'benchmark_block',
     targetFrame: 'mujoco_world',
     targetCenterXYM: Object.freeze([0.358, -0.156]),
-    targetHalfExtentsXYM: Object.freeze([0.030, 0.030]),
+    targetHalfExtentsXYM: Object.freeze([0.020, 0.030]),
     requireContact: true,
     requireLift: true,
     requireCarry: true,

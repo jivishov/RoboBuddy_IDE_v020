@@ -10,9 +10,12 @@ assert.equal(SO101_MANIPULATION_MODEL_PACKAGE.source.upstreamRevision, 'aec17bbc
 assert.equal(SO101_MANIPULATION_MODEL_PACKAGE.physics.timestepSeconds, 0.005);
 assert.equal(SO101_MANIPULATION_MODEL_PACKAGE.benchmark.object.massKg, 0.020);
 assert.deepEqual(SO101_MANIPULATION_MODEL_PACKAGE.benchmark.object.dimensionsM, [0.016, 0.012, 0.014]);
+assert.deepEqual(SO101_MANIPULATION_MODEL_PACKAGE.benchmark.target.halfExtentsXYM, [0.020, 0.030]);
 assert.equal(SO101_MANIPULATION_MODEL_PACKAGE.benchmark.controllerVersion, SO101_BENCHMARK_TRANSFER_CONTROLLER.id);
 assert.equal(SO101_MANIPULATION_SCENE.modelPackage, SO101_MANIPULATION_MODEL_PACKAGE.id);
+assert.deepEqual(SO101_MANIPULATION_SCENE.fixtures.map((item) => item.id), ['benchmark_source_support', 'benchmark_target_support', 'benchmark_target_region']);
 assert.deepEqual(SO101_MANIPULATION_SCENE.objects.map((item) => item.id), ['benchmark_block']);
+assert.deepEqual(SO101_MANIPULATION_SCENE.taskGoal.targetHalfExtentsXYM, [0.020, 0.030]);
 assert.equal(SO101_MANIPULATION_SCENE.taskGoal.requireContact, true);
 assert.equal(SO101_MANIPULATION_SCENE.taskGoal.requireFinalRest, true);
 
@@ -20,7 +23,9 @@ const xml = readFileSync('models/so101/manipulation.xml');
 assert.equal(createHash('sha256').update(xml).digest('hex'), SO101_MANIPULATION_MODEL_PACKAGE.sha256);
 const xmlText = xml.toString('utf8');
 assert.match(xmlText, /<freejoint name="benchmark_block_free"\/>/);
-assert.match(xmlText, /name="benchmark_work_surface"/);
+assert.match(xmlText, /name="benchmark_source_support"/);
+assert.match(xmlText, /name="benchmark_target_support"/);
+assert.doesNotMatch(xmlText, /name="benchmark_work_surface"/);
 assert.match(xmlText, /name="benchmark_target_region"[^>]+contype="0" conaffinity="0"/);
 assert.match(xmlText, /name="camera_box1"[^>]+mass="0\.0040540541"/);
 assert.match(xmlText, /name="camera_box2"[^>]+mass="0\.0079459459"/);

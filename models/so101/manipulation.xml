@@ -19,10 +19,11 @@
   </default>
   <worldbody>
     <light pos="0 0 2" dir="0 0 -1"/>
-    <!-- Synthetic benchmark work surface. Parameters are declared benchmark values, not measured hardware. -->
-    <geom name="benchmark_work_surface" type="box" size="0.09 0.22 0.02" pos="0.39 -0.08 0.207" class="benchmark_contact" rgba="0.50 0.54 0.58 1"/>
+    <!-- Synthetic benchmark support pads. The split geometry keeps the source-derived camera collision volume physically active while leaving its swept volume unobstructed. -->
+    <geom name="benchmark_source_support" type="box" size="0.025 0.025 0.02" pos="0.39416 -0.00169 0.207" class="benchmark_contact" rgba="0.50 0.54 0.58 1"/>
+    <geom name="benchmark_target_support" type="box" size="0.025 0.045 0.02" pos="0.358 -0.156 0.207" class="benchmark_contact" rgba="0.50 0.54 0.58 1"/>
     <!-- Non-colliding target marker; task success is evaluated from the free block body, never from this marker. -->
-    <geom name="benchmark_target_region" type="box" size="0.03 0.03 0.0005" pos="0.358 -0.156 0.2275" contype="0" conaffinity="0" group="2" rgba="0.16 0.72 0.36 0.55"/>
+    <geom name="benchmark_target_region" type="box" size="0.02 0.03 0.0005" pos="0.358 -0.156 0.2275" contype="0" conaffinity="0" group="2" rgba="0.16 0.72 0.36 0.55"/>
     <body name="benchmark_block" pos="0.39416 -0.00169 0.234">
       <freejoint name="benchmark_block_free"/>
       <inertial pos="0 0 0" mass="0.020" diaginertia="5.6666667e-7 7.5333333e-7 6.6666667e-7"/>

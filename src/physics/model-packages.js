@@ -99,7 +99,7 @@ export const SO101_MANIPULATION_MODEL_PACKAGE = registerModelPackage({
   },
   license: 'Apache-2.0 for SO-101-derived model; repository-authored synthetic benchmark workcell is MIT',
   asset: 'models/so101/manipulation.xml',
-  sha256: '0ed13e4b8f21558f8501d8d03fc26140c207cf05f4894ed108a13e58718d9125',
+  sha256: 'cf0064059a56e2c6748f72733c606b833ebf61131802b27b3645c1f25089aecc',
   physics: { timestepSeconds: 0.005, integrator: 'implicitfast', iterations: 10, lsIterations: 20 },
   controllers: ['so101_position'],
   joints: so101Joints(),
@@ -113,11 +113,15 @@ export const SO101_MANIPULATION_MODEL_PACKAGE = registerModelPackage({
     wrist_roll: Math.PI / 2,
     gripper: 0.60,
   },
-  sceneConstraints: { fixtures: ['benchmark_work_surface', 'benchmark_target_region'], objects: ['benchmark_block'] },
+  sceneConstraints: { fixtures: ['benchmark_source_support', 'benchmark_target_support', 'benchmark_target_region'], objects: ['benchmark_block'] },
   benchmark: {
     object: { id: 'benchmark_block', dimensionsM: [0.016, 0.012, 0.014], massKg: 0.020, inertiaKgM2: [5.6666667e-7, 7.5333333e-7, 6.6666667e-7], friction: [0.8, 0.005, 0.0001] },
     workSurface: { topZM: 0.227, friction: [0.8, 0.005, 0.0001] },
-    target: { centerXYM: [0.358, -0.156], halfExtentsXYM: [0.030, 0.030] },
+    supportPads: {
+      source: { centerXYM: [0.39416, -0.00169], halfExtentsXYM: [0.025, 0.025] },
+      target: { centerXYM: [0.358, -0.156], halfExtentsXYM: [0.025, 0.045] },
+    },
+    target: { centerXYM: [0.358, -0.156], halfExtentsXYM: [0.020, 0.030] },
     controllerVersion: 'so101-benchmark-transfer-v1',
   },
   evidence: {
@@ -131,7 +135,8 @@ export const SO101_MANIPULATION_MODEL_PACKAGE = registerModelPackage({
     hardwareAlignment: PARAMETER_EVIDENCE.CALIBRATION_REQUIRED,
   },
   limitations: [
-    'Controlled synthetic benchmark workcell for physical-manipulation verification; object dimensions, mass and surface friction are declared benchmark parameters, not measured laboratory hardware.',
+    'Controlled synthetic benchmark workcell for physical-manipulation verification; object dimensions, mass, support-pad dimensions and surface friction are declared benchmark parameters, not measured laboratory hardware.',
+    'The pickup and placement supports are deliberately split so the synthetic workcell does not occupy the swept volume of the retained source-derived camera collision geometry; this is a workcell geometry correction, not collision disabling.',
     'The source camera-mount mesh mass is restored as 0.012 kg using the pinned source camera collision boxes; the resulting box-derived inertia is an explicit approximation, not the source mesh inertia.',
     'Source gripper collision primitives are retained, while upstream collision meshes/visual meshes remain omitted for browser economy; grasp conclusions apply only to this declared benchmark geometry.',
     'Servo gains and 2.94 N m force range are upstream simulation estimates and are not calibrated measurements of the installed SO-101 servos.',
