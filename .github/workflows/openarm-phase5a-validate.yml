@@ -36,7 +36,7 @@ jobs:
           node tests/physics/openarm-phase5a-core.mjs
           node tests/validate_task_patch.mjs
 
-      - name: Native MuJoCo nominal, negative and sensitivity gates
+      - name: Generate native MuJoCo nominal, negative and sensitivity evidence
         run: |
           python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
           python native/openarm_v2_reference.py --trial nominal > /tmp/openarm-nominal.json
@@ -46,6 +46,18 @@ jobs:
           python native/openarm_v2_reference.py --trial outside-left > /tmp/openarm-outside.json
           python native/openarm_v2_reference.py --trial insufficient-budget > /tmp/openarm-budget.json
           python native/openarm_v2_reference.py --trial nominal --timestep 0.0005 > /tmp/openarm-tight.json
+
+      - name: Retain native OpenArm evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openarm-phase5a-native-evidence-${{ github.sha }}
+          path: /tmp/openarm-*.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Validate native MuJoCo nominal, negative and sensitivity gates
+        run: |
           python - <<'PY'
           import json, math
           from pathlib import Path
