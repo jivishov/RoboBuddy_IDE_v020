@@ -14,6 +14,8 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   await expect(page.locator('#physicsBackendBadge')).toContainText('browser-mujoco');
   await expect(page.locator('#stepBtn')).toBeDisabled();
   await expect(page.locator('#cursorBtn')).toBeDisabled();
+  await expect(page.locator('#simCanvas')).toHaveAttribute('data-openarm-visual-source', 'canonical-v2-arm-mesh-source-aligned');
+  await expect(page.locator('#simCanvas')).toHaveAttribute('data-openarm-legacy-base-yaw-rendered', 'false');
 
   const initial = await page.evaluate(() => {
     const app = window.__robobuddyCi.app;
@@ -21,11 +23,14 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
     return {
       backend: app.sim.backend?.constructor?.name,
       authority: app.sim.getPhysicalAuthorityToken(),
+      presentation: app.sim.backend.getPresentationAudit(),
       source: app.files['main.py'],
       trajectories: app.files['trajectories.py'],
       model: state?.observation?.model,
       flask: state?.observation?.bodies?.flask,
       beaker: state?.observation?.bodies?.beaker,
+      leftBase: state?.observation?.bodies?.openarm_left_base_link?.positionM,
+      rightBase: state?.observation?.bodies?.openarm_right_base_link?.positionM,
       leftEe: state?.observation?.bodies?.openarm_left_ee_base_link?.positionM,
       rightEe: state?.observation?.bodies?.openarm_right_ee_base_link?.positionM,
     };
@@ -34,6 +39,25 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v1' });
   expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v1', asset: 'models/openarm_v2/manipulation.xml' });
   expect(initial.model.sha256).toBe('db15fa4b4a9c120ec09762ff1f4e00d995675453ade1738707258f6f5bbc883f');
+  expect(initial.presentation).toMatchObject({
+    physicalAuthority: 'MuJoCo PhysicsSession only',
+    jointPresentationSource: 'observed MuJoCo joint positions',
+    mountTranslationMm: [185, 790, 0],
+    legacyBaseYawControlled: false,
+    legacyBaseYawRendered: false,
+  });
+  expect(initial.presentation.hiddenNonphysicalParts).toEqual([
+    'openarm_body_link0_low_stand',
+    'turntable_bearing',
+    'turntable_disc',
+    'turntable_heading',
+    'turntable_pedestal',
+  ]);
+  expect(initial.presentation.source.robotId).toBe('openarm_v2_bimanual');
+  expect(initial.presentation.canonicalMountPositionsMm.left).toEqual([185, 1340, -31]);
+  expect(initial.presentation.canonicalMountPositionsMm.right).toEqual([185, 1340, 31]);
+  expect(initial.leftBase).toEqual([0.185, 0.031, 1.34]);
+  expect(initial.rightBase).toEqual([0.185, -0.031, 1.34]);
   expect(initial.source).toContain('from robobuddy.sim import connect');
   expect(initial.source).toContain('await robot.send_action');
   expect(initial.source).toContain('await robot.advance');
@@ -64,6 +88,7 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
     return {
       evaluation: app.sim.getTaskEvaluation(),
       authority: app.sim.getPhysicalAuthorityToken(),
+      presentation: backend.getPresentationAudit(),
       beforeRender, afterRender,
       flaskExpectedMm: [flaskExpected[0] * 1000, flaskExpected[2] * 1000, -flaskExpected[1] * 1000],
       flaskVisual,
@@ -74,11 +99,16 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(completed.evaluation.success).toBe(true);
   expect(completed.evaluation.orderViolation).toBe(false);
   for (const object of [completed.evaluation.flask, completed.evaluation.beaker]) {
-    expect(object).toMatchObject({ graspSeen: true, liftSeen: true, carrySeen: true, releaseSeen: true, settled: true, retreated: true, currentGripperContact: false, currentSupportContact: true });
+    expect(object).toMatchObject({ graspSeen: true, liftSeen: true, carrySeen: true, supportWhileHeldSeen: true, releaseSeen: true, settled: true, retreated: true, currentGripperContact: false, currentSupportContact: true });
+    expect(object.bilateralContactObservationCount).toBeGreaterThan(0);
     expect(object.maxHeldHorizontalTravelM).toBeGreaterThanOrEqual(0.06);
     expect(object.settleEvidenceDurationSeconds).toBeGreaterThanOrEqual(0.20);
     expect(object.settleDriftM).toBeLessThanOrEqual(0.001);
+    expect(object.supportWhileHeldTimeSeconds).toBeLessThan(object.releaseTimeSeconds);
+    expect(object.releaseTimeSeconds).toBeLessThan(object.settleTimeSeconds);
+    expect(object.settleTimeSeconds).toBeLessThan(object.retreatTimeSeconds);
   }
+  expect(completed.presentation.legacyBaseYawControlled).toBe(false);
   expect(completed.canvasAuthority).toBe('physics-session');
   expect(completed.runtimeActive).toBe(false);
   expect(completed.afterRender).toBeCloseTo(completed.beforeRender, 12);
