@@ -39,7 +39,8 @@ if (visibleOpenarm.length !== 1 || visibleOpenarm[0].id !== 'openarm-04-filtrati
 if (OPENARM_PHYSICAL_TASKS[0].physicalSceneId !== 'phase5a-openarm-v2-bimanual-stack') throw new Error('OpenArm physical scene id drifted');
 const openarmScenario = await loadPatchedScenario('openarm', 'openarm-04-filtration-workcell');
 if (openarmScenario.modelPackage !== 'openarm-v2-phase5a-a8c9796-v2') throw new Error('OpenArm refined physical model package drifted');
-if (openarmScenario.revision !== 'phase5a-openarm-v2-bimanual-stack-v2') throw new Error('OpenArm refined physical scene revision drifted');
+if (openarmScenario.workspaceRevision !== 'openarm-v2-physical-bimanual-stack-v2') throw new Error('OpenArm refined workspace revision drifted');
+if (openarmScenario.physicalSceneRevision !== 'phase5a-openarm-v2-bimanual-stack-v2') throw new Error('OpenArm refined physical scene revision drifted');
 if (openarmScenario.robotId !== 'openarm_v2_bimanual') throw new Error('OpenArm physical robot identity drifted');
 const openarmWorkspace = buildPatchedWorkspace('openarm', openarmScenario);
 for (const token of ['from robobuddy.sim import connect', 'await connect(', 'await robot.send_action(', 'await robot.advance(', 'await robot.get_observation()']) if (!openarmWorkspace['main.py'].includes(token)) throw new Error(`OpenArm live physical starter missing ${token}`);
