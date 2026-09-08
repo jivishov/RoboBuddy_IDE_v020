@@ -16,7 +16,7 @@ function expectNear(label, actual, expected, tolerance) {
   return delta;
 }
 
-test('Phase 1 browser MuJoCo slice is fixed-step, bounded, and native-conformant', async ({ page }) => {
+test('Phase 1 browser MuJoCo slice is fixed-step, paused-safe, bounded, and native-conformant', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
 
@@ -26,14 +26,39 @@ test('Phase 1 browser MuJoCo slice is fixed-step, bounded, and native-conformant
   await expect(page.locator('#schemaVersion')).toHaveText('0.2.0-alpha.1');
   await expect(page.locator('#view')).toHaveText('ground_truth');
   await expect(page.locator('#worldFrame')).toContainText('mujoco_world · right-handed · +Z');
+  await expect(page.locator('#modelSha')).toHaveText(/^[0-9a-f]{64}$/);
   await expect(page.locator('#engineVersion')).toHaveText('3.11.0');
   await expect(page.locator('#timestep')).toHaveText('0.002000 s');
+  await expect(page.locator('#time')).toHaveText('0.0000 s');
+
+  // Wall-clock/render time is not physics time: waiting alone must not advance MuJoCo.
+  await page.waitForTimeout(250);
+  await page.locator('#observe').click();
+  await expect(page.locator('#status')).toHaveText('Read observation complete');
   await expect(page.locator('#time')).toHaveText('0.0000 s');
 
   await page.locator('#right').click();
   await expect(page.locator('#status')).toHaveText('Set target +0.8 rad complete');
   await expect(page.locator('#target')).toHaveText('0.80000 rad');
+  let diagnostics = await page.evaluate(() => structuredClone(window.__phase1Diagnostics));
+  expect(diagnostics.remainingCommandSteps).toBe(500);
 
+  await page.waitForTimeout(250);
+  await page.locator('#observe').click();
+  await expect(page.locator('#time')).toHaveText('0.0000 s');
+
+  // A paused step request is a no-op: no simulated time and no command budget are consumed.
+  await page.locator('#pause').click();
+  await expect(page.locator('#status')).toHaveText('Pause complete');
+  await page.locator('#step100').click();
+  await expect(page.locator('#status')).toHaveText('Advance 100 steps complete');
+  await expect(page.locator('#time')).toHaveText('0.0000 s');
+  diagnostics = await page.evaluate(() => structuredClone(window.__phase1Diagnostics));
+  expect(diagnostics.state).toBe('paused');
+  expect(diagnostics.remainingCommandSteps).toBe(500);
+
+  await page.locator('#resume').click();
+  await expect(page.locator('#status')).toHaveText('Resume complete');
   await page.locator('#step500').click();
   await expect(page.locator('#status')).toHaveText('Advance 500 steps complete', { timeout: 30_000 });
   await expect(page.locator('#time')).toHaveText('1.0000 s');
@@ -59,9 +84,14 @@ test('Phase 1 browser MuJoCo slice is fixed-step, bounded, and native-conformant
   expect(browser.contactCount).toBeGreaterThan(0);
   expect(Math.abs(Number(browser.joints.hinge.positionRad))).toBeGreaterThan(0.01);
 
-  const diagnostics = await page.evaluate(() => structuredClone(window.__phase1Diagnostics));
+  diagnostics = await page.evaluate(() => structuredClone(window.__phase1Diagnostics));
   expect(diagnostics.remainingCommandSteps).toBe(0);
   expect(diagnostics.model.sha256).toBe(browser.model.sha256);
+
+  // Wall time after a completed step batch still cannot advance simulation by itself.
+  await page.waitForTimeout(250);
+  await page.locator('#observe').click();
+  await expect(page.locator('#time')).toHaveText('1.0000 s');
 
   await page.locator('#step100').click();
   await expect(page.locator('#status')).toContainText('exceeds remaining command budget 0');
