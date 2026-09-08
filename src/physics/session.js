@@ -13,6 +13,14 @@ export class PhysicsSession {
     this.robotId = null;
     this.disposed = false;
     this.activeCommandId = null;
+    this.observationListeners = new Set();
+  }
+
+  subscribe(listener) {
+    this.#assertLive();
+    if (typeof listener !== 'function') throw new TypeError('PhysicsSession subscriber must be a function');
+    this.observationListeners.add(listener);
+    return () => this.observationListeners.delete(listener);
   }
 
   async loadScene(scene) {
@@ -24,6 +32,7 @@ export class PhysicsSession {
       const result = await this.backend.loadScene(structuredClone(scene), this.#context());
       this.sceneRevision = result?.sceneRevision ?? scene.revision;
       this.robotId = result?.robotId ?? scene.robotId;
+      this.#publishObservation(result?.observation, 'loadScene');
       return { apiVersion: PHYSICS_BACKEND_API_VERSION, ...this.#context(), ...result };
     } catch (error) {
       this.#clearLoadedState();
@@ -36,6 +45,7 @@ export class PhysicsSession {
     this.epoch += 1;
     this.activeCommandId = null;
     const result = await this.#runLoadedOperation(() => this.backend.reset({ ...structuredClone(options), ...this.#context() }));
+    this.#publishObservation(result, 'reset');
     return { ...this.#context(), result };
   }
 
@@ -51,18 +61,23 @@ export class PhysicsSession {
     });
     const result = await this.#runLoadedOperation(() => this.backend.acceptCommand(envelope));
     this.activeCommandId = envelope.commandId;
+    this.#publishObservation(result?.observation, 'sendCommand');
     return result;
   }
 
   async advanceSteps(steps) {
     this.#assertLoaded();
     if (!Number.isInteger(steps) || steps < 1) throw new RangeError('steps must be a positive integer');
-    return this.#runLoadedOperation(() => this.backend.advanceSteps(steps, this.#context()));
+    const observation = await this.#runLoadedOperation(() => this.backend.advanceSteps(steps, this.#context()));
+    this.#publishObservation(observation, 'advanceSteps');
+    return observation;
   }
 
   async getObservation(options = {}) {
     this.#assertLoaded();
-    return this.#runLoadedOperation(() => this.backend.getObservation({ ...options, ...this.#context() }));
+    const observation = await this.#runLoadedOperation(() => this.backend.getObservation({ ...options, ...this.#context() }));
+    this.#publishObservation(observation, 'getObservation');
+    return observation;
   }
 
   async getDiagnostics() {
@@ -74,12 +89,16 @@ export class PhysicsSession {
 
   async pause() {
     this.#assertLoaded();
-    return this.#runLoadedOperation(() => this.backend.pause(this.#context()));
+    const observation = await this.#runLoadedOperation(() => this.backend.pause(this.#context()));
+    this.#publishObservation(observation, 'pause');
+    return observation;
   }
 
   async resume() {
     this.#assertLoaded();
-    return this.#runLoadedOperation(() => this.backend.resume(this.#context()));
+    const observation = await this.#runLoadedOperation(() => this.backend.resume(this.#context()));
+    this.#publishObservation(observation, 'resume');
+    return observation;
   }
 
   async cancelRun(reason = 'cancelled') {
@@ -101,11 +120,27 @@ export class PhysicsSession {
     this.disposed = true;
     this.epoch += 1;
     this.#clearLoadedState();
+    this.observationListeners.clear();
     this.backend.dispose();
   }
 
   #context() {
     return { sessionId: this.sessionId, epoch: this.epoch };
+  }
+
+  #publishObservation(observation, source) {
+    if (!observation || typeof observation !== 'object') return;
+    const event = Object.freeze({
+      source: String(source),
+      sessionId: this.sessionId,
+      epoch: this.epoch,
+      sceneRevision: this.sceneRevision,
+      robotId: this.robotId,
+      observation: structuredClone(observation),
+    });
+    for (const listener of this.observationListeners) {
+      try { listener(event); } catch { /* Observation consumers cannot become simulation authorities. */ }
+    }
   }
 
   async #runLoadedOperation(operation) {
