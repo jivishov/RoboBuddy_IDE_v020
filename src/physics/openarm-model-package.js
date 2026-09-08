@@ -57,6 +57,25 @@ const actuators = Object.freeze([
   actuator('right_finger1_ctrl', 'openarm_right_finger_joint1', [-0.7854, 0]),
 ]);
 
+const mechanicalCouplings = Object.freeze([
+  Object.freeze({
+    id: 'openarm_left_ee_finger_joint_mimic',
+    driverJointId: 'openarm_left_finger_joint1',
+    followerJointId: 'openarm_left_finger_joint2',
+    multiplier: 1,
+    offsetRad: 0,
+    evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+  }),
+  Object.freeze({
+    id: 'openarm_right_ee_finger_joint_mimic',
+    driverJointId: 'openarm_right_finger_joint1',
+    followerJointId: 'openarm_right_finger_joint2',
+    multiplier: 1,
+    offsetRad: 0,
+    evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+  }),
+]);
+
 const armBodies = [];
 for (const side of ['left', 'right']) {
   armBodies.push({ id: `openarm_${side}_base_link` });
@@ -82,6 +101,7 @@ export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
   controllers: ['openarm_v2_position'],
   joints,
   actuators,
+  mechanicalCouplings,
   bodies: [
     ...armBodies,
     { id: 'flask', freeJointId: 'flask_free' },
@@ -144,7 +164,8 @@ export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
     'Primitive collision surrogates are estimated and intentionally do not support claims about exact self-collision margins, fingertip pressure distribution, glass compliance, or installed-hardware clearances.',
     'The hotplate, ring stand/gauze, staging supports, flask and beaker are controlled dry benchmark geometry. Their dimensions, masses and friction are not measured laboratory hardware.',
     'Source actuator gains and force limits are simulator parameters from the pinned V2 model, not calibration of a particular assembled OpenArm.',
-    'The only equality constraints are the source-derived left/right finger mechanical couplings. There is no object grasp weld, parent attachment, snap, teleport, or task-success state overwrite.',
+    'The only equality constraints are the source-derived left/right finger mechanical couplings. Passive finger2 qpos is initialized consistently with the coupled actuated finger1 at setup/reset; it is never exposed as a separate command surface.',
+    'There is no object grasp weld, parent attachment, snap, teleport, or task-success state overwrite.',
     'No thermal, electrical, liquid, force-sensor, tactile-sensor, CAN timing, backlash, compliance, or hardware-safety validation is claimed.',
   ],
 });
