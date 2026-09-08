@@ -4,13 +4,13 @@
   "title": "RoboBuddy physical command envelope",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "sessionId", "epoch", "commandId", "robotId", "command"],
+  "required": ["schemaVersion", "sessionId", "epoch", "commandId", "sceneRevision", "robotId", "command"],
   "properties": {
     "schemaVersion": { "const": "0.2.0-alpha.1" },
     "sessionId": { "type": "string", "minLength": 1 },
-    "epoch": { "type": "integer", "minimum": 0 },
+    "epoch": { "type": "integer", "minimum": 1 },
     "commandId": { "type": "string", "minLength": 1 },
-    "sceneRevision": { "type": ["string", "null"] },
+    "sceneRevision": { "type": "string", "minLength": 1 },
     "robotId": { "type": "string", "minLength": 1 },
     "maxSteps": { "type": ["integer", "null"], "minimum": 1 },
     "command": {
