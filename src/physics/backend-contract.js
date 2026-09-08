@@ -47,6 +47,9 @@ export function assertPhysicalScene(scene) {
   if (scene.schemaVersion !== PHYSICS_BACKEND_API_VERSION) {
     throw new Error(`Unsupported physical scene schema ${scene.schemaVersion}`);
   }
+  if (scene.legacyTaskId != null && (typeof scene.legacyTaskId !== 'string' || !scene.legacyTaskId)) {
+    throw new TypeError('legacyTaskId must be null or a non-empty string');
+  }
   if (!scene.physics || typeof scene.physics !== 'object' || Array.isArray(scene.physics)) {
     throw new TypeError('Physical scene requires physics settings');
   }
@@ -65,8 +68,17 @@ export function assertPhysicalScene(scene) {
   for (const key of ['fixtures', 'objects', 'controllers']) {
     if (scene[key] != null && !Array.isArray(scene[key])) throw new TypeError(`${key} must be an array when provided`);
   }
-  if (Array.isArray(scene.controllers) && new Set(scene.controllers).size !== scene.controllers.length) {
-    throw new TypeError('controllers must contain unique values');
+  for (const key of ['fixtures', 'objects']) {
+    for (const [index, item] of (scene[key] || []).entries()) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw new TypeError(`${key}[${index}] must be an object`);
+    }
+  }
+  if (Array.isArray(scene.controllers)) {
+    if (scene.controllers.some((value) => typeof value !== 'string' || !value)) throw new TypeError('controllers must contain non-empty strings');
+    if (new Set(scene.controllers).size !== scene.controllers.length) throw new TypeError('controllers must contain unique values');
+  }
+  if (scene.taskGoal != null && (typeof scene.taskGoal !== 'object' || Array.isArray(scene.taskGoal))) {
+    throw new TypeError('taskGoal must be null or an object');
   }
   return scene;
 }
