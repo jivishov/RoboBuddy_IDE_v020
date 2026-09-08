@@ -72,7 +72,7 @@ The adaptation is intentionally **not** a byte-for-byte or dynamically complete 
 - mesh-based gripper collision pieces are omitted;
 - the source `camera_mount` child is omitted, including its camera, primitive camera collision boxes, and the `0.012 kg` mass assigned to its visual mesh in the pinned source;
 - at least one broad source fixed-jaw collision primitive and other geometry not required for Phase 2A articulation validation are omitted;
-- a simple `base_proxy` box is added as an estimated Phase 2A diagnostic proxy.
+- a simple `base_proxy` box is added only as an estimated diagnostic visual proxy; it is explicitly non-colliding (`contype=0`, `conaffinity=0`) and therefore cannot create a source-unsupported contact force.
 
 Because the source camera-mount mass is omitted, browser/native parity for this package proves agreement for the **RoboBuddy Phase 2A adapted plant**, not numerical equivalence to the complete Menagerie SO-101 model. Restoring or otherwise source-faithfully representing omitted payload/collision dynamics is required before manipulation or hardware-alignment claims are made.
 
@@ -113,7 +113,7 @@ The pinned Menagerie file explicitly states that its STS3215 position gains are 
 - `kv = 2.731`;
 - `forcerange = -2.94 .. 2.94`;
 - STS3215 damping `0.60`, friction loss `0.052`, and armature `0.028` for hardware-fidelity claims;
-- the Phase 2A-only `base_proxy` box;
+- the visual-only Phase 2A `base_proxy` shape;
 - any visual/collision completeness implied by the primitive-only diagnostic adaptation.
 
 ### CALIBRATION-REQUIRED
