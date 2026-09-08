@@ -104,6 +104,7 @@ export class BrowserMuJoCoBackend {
     if (envelope.command?.type === 'set_joint_target' && !Number.isInteger(envelope.maxSteps)) {
       throw new RangeError('Phase 1 set_joint_target requires a positive maxSteps budget');
     }
+    const wasPaused = this.state === PhysicsBackendState.PAUSED;
     const generation = this.generation;
     const raw = await this.#call('command', envelope.command);
     this.#assertGeneration(generation, envelope);
@@ -112,7 +113,7 @@ export class BrowserMuJoCoBackend {
     this.commandBudget = Number.isInteger(envelope.maxSteps)
       ? { commandId: envelope.commandId, remainingSteps: envelope.maxSteps }
       : null;
-    this.state = PhysicsBackendState.READY;
+    this.state = wasPaused ? PhysicsBackendState.PAUSED : PhysicsBackendState.READY;
     this.#record('command', {
       commandId: envelope.commandId,
       command: structuredClone(envelope.command),
@@ -141,7 +142,8 @@ export class BrowserMuJoCoBackend {
       this.#assertGeneration(generation, context);
       const observation = this.#decorateObservation(raw);
       const executedSteps = this.#executedSteps(previousTime, observation.simulationTimeSeconds, observation.engine.timestepSeconds);
-      if (executedSteps > stepCount) throw new Error(`MuJoCo advanced ${executedSteps} steps for a request of ${stepCount}`);
+      if (wasPaused && executedSteps !== 0) throw new Error(`Paused MuJoCo advanced ${executedSteps} steps`);
+      if (!wasPaused && executedSteps !== stepCount) throw new Error(`MuJoCo advanced ${executedSteps} steps for a request of ${stepCount}`);
       this.lastObservation = observation;
       if (this.commandBudget) this.commandBudget.remainingSteps -= executedSteps;
       this.state = wasPaused ? PhysicsBackendState.PAUSED : PhysicsBackendState.READY;
