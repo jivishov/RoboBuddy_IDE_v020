@@ -20,10 +20,16 @@ export class PhysicsSession {
     assertPhysicalScene(scene);
     this.epoch += 1;
     this.activeCommandId = null;
-    const result = await this.backend.loadScene(structuredClone(scene), this.#context());
-    this.sceneRevision = result?.sceneRevision ?? scene.revision;
-    this.robotId = result?.robotId ?? scene.robotId;
-    return { apiVersion: PHYSICS_BACKEND_API_VERSION, ...this.#context(), ...result };
+    try {
+      const result = await this.backend.loadScene(structuredClone(scene), this.#context());
+      this.sceneRevision = result?.sceneRevision ?? scene.revision;
+      this.robotId = result?.robotId ?? scene.robotId;
+      return { apiVersion: PHYSICS_BACKEND_API_VERSION, ...this.#context(), ...result };
+    } catch (error) {
+      this.sceneRevision = null;
+      this.robotId = null;
+      throw error;
+    }
   }
 
   async reset(options = {}) {
