@@ -57,6 +57,7 @@ jobs:
           node --check src/webmcp/register-ide-tools.js
           node --check tests/physics/vertical-slice-core.mjs
           node --check tests/physics-slice-browser.spec.mjs
+          node --check tests/microduck-starter-timing.mjs
           node --check playwright.config.mjs
       - name: Static fidelity checks
         run: node tests/validate.mjs
@@ -74,6 +75,7 @@ jobs:
       - name: MicroDuck Python and WebMCP contracts
         run: |
           node tests/microduck-python-bridge.mjs
+          node tests/microduck-starter-timing.mjs
           node tests/webmcp-core.mjs
       - name: Starter Python syntax
         run: python tests/validate_starters.py
@@ -117,5 +119,7 @@ jobs:
         run: |
           npm install --ignore-scripts --no-audit --no-fund
           npx playwright install --with-deps chromium
+      - name: MicroDuck starter Chromium regression
+        run: npm run test:browser -- --grep "MicroDuck Run visibly advances the default starter program across the field"
       - name: Chromium runtime and full source-plant replay
-        run: npm run test:browser
+        run: npm run test:browser -- --grep-invert "MicroDuck Run visibly advances the default starter program across the field"
