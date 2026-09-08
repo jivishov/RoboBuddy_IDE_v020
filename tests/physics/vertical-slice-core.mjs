@@ -51,5 +51,12 @@ for (const token of ['mj_name2id', 'jnt_qposadr', 'jnt_dofadr', 'actuator_trnid'
 for (const forbidden of ['data.qpos?.[0]', 'data.qvel?.[0]', 'data.ctrl[0]', "'hinge_position'", "'free_box'", "'models/vertical-slice/model.xml'"]) assert.ok(!workerSource.includes(forbidden), `generic worker must not rely on Phase 1-specific model semantics: ${forbidden}`);
 assert.ok(workerSource.includes('collection.delete?.()'), 'worker must release the copied MuJoCo contact vector'); assert.ok(workerSource.includes('contact.delete?.()'), 'worker must release copied MuJoCo contact handles');
 assert.ok(workerSource.includes('is outside the actuator control range'), 'worker must reject out-of-range targets instead of silently clamping'); assert.ok(workerSource.includes('Worker rejected non-registry model asset path'), 'worker must reject arbitrary model URLs/paths');
-const backendSource = readFileSync(new URL('../../src/physics/browser-mujoco-backend.js', import.meta.url), 'utf8'); assert.ok(backendSource.includes('executedSteps'), 'backend must account actual executed physics steps'); assert.ok(backendSource.includes('remainingSteps -= executedSteps'), 'paused/no-op requests must not consume unexecuted command steps'); assert.ok(backendSource.includes('requireModelPackage(scene.modelPackage)'), 'backend must resolve scenes through the controlled model registry'); assert.ok(!backendSource.includes('PHASE1_SCENE'), 'generic backend must not be intrinsically tied to the Phase 1 scene');
+const backendSource = readFileSync(new URL('../../src/physics/browser-mujoco-backend.js', import.meta.url), 'utf8');
+assert.ok(backendSource.includes('executedSteps'), 'backend must account actual executed physics steps');
+assert.ok(backendSource.includes('remainingSteps -= executedSteps'), 'paused/no-op requests must not consume unexecuted command steps');
+assert.ok(backendSource.includes('requireModelPackage(scene.modelPackage)'), 'backend must resolve scenes through the controlled model registry');
+assert.ok(!backendSource.includes('PHASE1_SCENE'), 'generic backend must not be intrinsically tied to the Phase 1 scene');
+assert.ok(backendSource.includes('#failLoadedScene(reason)'), 'backend must centralize fatal runtime invalidation');
+assert.ok(backendSource.includes("this.#failLoadedScene('runtime step failed')"), 'fatal stepping faults must invalidate physical authority');
+assert.ok(backendSource.includes('else this.#failLoadedScene(reason)'), 'worker crashes must invalidate physical authority');
 session.dispose(); console.log('Phase 1 vertical-slice contract checks: OK');
