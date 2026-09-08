@@ -25,6 +25,7 @@ TARGET_CENTER = np.array([0.358, -0.156], dtype=float)
 TARGET_HALF = np.array([0.020, 0.030], dtype=float)
 SUPPORT_Z = 0.227
 BLOCK_HALF_Z = 0.007
+APPROACH_PAN_RAD = 0.005
 
 
 def ids(model):
@@ -163,7 +164,7 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
     if trial == "miss":
         stage("approach_misaligned", {"shoulder_pan": 0.20, "shoulder_lift": 0.0}, 0.60)
     else:
-        stage("approach", {"shoulder_lift": 0.0}, 0.60)
+        stage("approach", {"shoulder_pan": APPROACH_PAN_RAD, "shoulder_lift": 0.0}, 0.60)
     stage("close", {"gripper": -0.04}, 0.50)
     stage("lift", {"shoulder_lift": -0.35}, 0.80)
     move_pan = 0.15 if trial == "outside" else 0.45
@@ -186,7 +187,7 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
         "trial": trial,
         "profile": profile,
         "engine": {"version": mujoco.__version__, "timestepSeconds": float(model.opt.timestep), "iterations": int(model.opt.iterations), "lsIterations": int(model.opt.ls_iterations)},
-        "controller": {"type": "bounded position-target stage controller", "ordinaryControlWrites": "data.ctrl only", "initialJointPositionsRad": INITIAL},
+        "controller": {"type": "bounded position-target stage controller", "ordinaryControlWrites": "data.ctrl only", "initialJointPositionsRad": INITIAL, "approachPanRad": APPROACH_PAN_RAD},
         "benchmark": {"blockMassKg": profile["payloadMassKg"], "blockHalfExtentsM": [0.008, 0.006, 0.007], "surfaceFriction": 0.8, "targetCenterXYM": TARGET_CENTER.tolist(), "targetHalfExtentsXYM": TARGET_HALF.tolist()},
         "metrics": {"success": success, "lifted": lifted, "physicallyCarried": physically_carried, "inTarget": in_target, "resting": resting, "released": released, "maxBlockZM": float(max_z), "horizontalTravelM": horizontal_travel, "gripperContactSamples": int(gripper_contact_samples), "carriedContactSamples": int(carried_contact_samples), "finalPositionM": final["positionM"], "finalSpeedNorm": final["speedNorm"], "stageDiagnostics": stages},
         "stages": stages,
