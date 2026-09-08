@@ -17,62 +17,59 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
-      - name: Probe source-aligned kinematic poses and fingertip geometry
+      - name: Sweep synthetic vessel grasp radii and physically compatible closure targets
         run: |
-          python - <<'PY' > /tmp/openarm-design-probe.json
-          import json, math
-          import mujoco
-          import numpy as np
+          python - <<'PY'
+          import json, shutil, subprocess
           from pathlib import Path
 
-          root=Path('.')
-          model=mujoco.MjModel.from_xml_path(str(root/'models/openarm_v2/manipulation.xml'))
-          data=mujoco.MjData(model)
-          def d2r(v): return math.radians(v)
-          poses={
-            'home': [0,0,0,90,0,0,0],
-            'lift_left': [-0.545,0,0,97.436,0,-7.941,0],
-            'transfer_left': [-26.7699,0,0,64.934,0,-1.6954,0],
-            'place_left': [-27.1394,0,0,56.4231,0,6.4055,0],
-            'park_near': [-45,0,0,55,0,0,0],
-            'park_high': [-25,0,0,100,0,20,0],
-          }
-          def id_(typ,name): return mujoco.mj_name2id(model,typ,name)
-          def set_pose(side,values,finger):
-            mujoco.mj_resetData(model,data)
-            # Put free vessels far away for pure geometry probe.
-            for obj in ('flask','beaker'):
-              j=id_(mujoco.mjtObj.mjOBJ_JOINT,f'{obj}_free'); a=int(model.jnt_qposadr[j]); data.qpos[a:a+3]=[2,2,2]
-              data.qpos[a+3:a+7]=[1,0,0,0]
-            # neutral other arm
-            for s in ('left','right'):
-              for i,v in enumerate([0,0,0,90,0,0,0],1):
-                j=id_(mujoco.mjtObj.mjOBJ_JOINT,f'openarm_{s}_joint{i}'); data.qpos[int(model.jnt_qposadr[j])]=d2r(v)
-              j=id_(mujoco.mjtObj.mjOBJ_JOINT,f'openarm_{s}_finger_joint1'); data.qpos[int(model.jnt_qposadr[j])]=(0.65 if s=='left' else -0.65)
-            for i,v in enumerate(values,1):
-              j=id_(mujoco.mjtObj.mjOBJ_JOINT,f'openarm_{side}_joint{i}'); data.qpos[int(model.jnt_qposadr[j])]=d2r(v)
-            j=id_(mujoco.mjtObj.mjOBJ_JOINT,f'openarm_{side}_finger_joint1'); data.qpos[int(model.jnt_qposadr[j])]=finger
-            mujoco.mj_forward(model,data)
-            out={}
-            for name in (f'openarm_{side}_ee_base_link',f'{side}_inner_fingertip',f'{side}_outer_fingertip'):
-              typ=mujoco.mjtObj.mjOBJ_BODY if 'ee_base_link' in name else mujoco.mjtObj.mjOBJ_GEOM
-              idx=id_(typ,name); pos=data.xpos[idx] if typ==mujoco.mjtObj.mjOBJ_BODY else data.geom_xpos[idx]
-              mat=data.xmat[idx] if typ==mujoco.mjtObj.mjOBJ_BODY else data.geom_xmat[idx]
-              out[name]={'pos':np.array(pos).tolist(),'xmat':np.array(mat).reshape(3,3).tolist()}
-            inner=np.array(out[f'{side}_inner_fingertip']['pos']); outer=np.array(out[f'{side}_outer_fingertip']['pos'])
-            out['fingerCenter']=((inner+outer)/2).tolist(); out['fingerCenterDistance']=float(np.linalg.norm(inner-outer))
-            return out
-          report={'poses':{}}
-          for label,pose in poses.items():
-            report['poses'][label]={
-              'left_open':set_pose('left',pose,0.65),
-              'left_closed':set_pose('left',pose,0.0),
-            }
-          # Mirror the relevant home geometry for the right arm.
-          report['right_home_open']=set_pose('right',[0,0,0,90,0,0,0],-0.65)
-          report['right_home_closed']=set_pose('right',[0,0,0,90,0,0,0],0.0)
-          report['taskCenters']={'flaskGripApprox':[0.509,0.1535,1.120],'beakerGripApprox':[0.509,-0.1535,1.120], 'hotplateBody':[0.608,0.1535,1.085], 'gauzeBeakerBody':[0.608,-0.1535,1.120]}
-          print(json.dumps(report,indent=2,sort_keys=True))
+          root = Path('.').resolve()
+          cases = [
+              ('legacy-envelope-moderate', 0.014, 0.025, 0.075, -0.355),
+              ('legacy-envelope-firmer', 0.014, 0.025, 0.050, -0.330),
+              ('legacy-envelope-contact', 0.014, 0.025, 0.100, -0.380),
+              ('smaller-envelope', 0.016, 0.022, 0.100, -0.280),
+          ]
+          report = []
+          for name, flask_radius, beaker_radius, left_hold, right_hold in cases:
+              case_dir = Path('/tmp') / f'openarm-probe-{name}'
+              if case_dir.exists(): shutil.rmtree(case_dir)
+              shutil.copytree(root, case_dir)
+              xml_path = case_dir / 'models/openarm_v2/manipulation.xml'
+              xml = xml_path.read_text()
+              xml = xml.replace('size="0.010 0.015" class="vessel"', f'size="{flask_radius:.3f} 0.015" class="vessel"', 1)
+              xml = xml.replace('<body name="beaker" pos="0.509 -0.1535 1.120">', '<body name="beaker" pos="0.509 -0.1535 1.105">')
+              xml = xml.replace('size="0.010 0.045" class="vessel"', f'size="{beaker_radius:.3f} 0.030" class="vessel"')
+              xml_path.write_text(xml)
+
+              runner_path = case_dir / 'native/openarm_v2_reference.py'
+              runner = runner_path.read_text()
+              runner = runner.replace("'initial_z': 1.120,", "'initial_z': 1.105,")
+              runner = runner.replace("('left_close', {'openarm_left_finger_joint1': 0.0}, 0.50)", f"('left_close', {{'openarm_left_finger_joint1': {left_hold}}}, 0.50)")
+              runner = runner.replace("arm('left', LEFT_LIFT, 0.0)", f"arm('left', LEFT_LIFT, {left_hold})")
+              runner = runner.replace("arm('left', LEFT_TRANSFER, 0.0)", f"arm('left', LEFT_TRANSFER, {left_hold})")
+              runner = runner.replace("arm('left', LEFT_PLACE, 0.0)", f"arm('left', LEFT_PLACE, {left_hold})")
+              runner = runner.replace("('right_close', {'openarm_right_finger_joint1': 0.0}, 0.50)", f"('right_close', {{'openarm_right_finger_joint1': {right_hold}}}, 0.50)")
+              runner = runner.replace("arm('right', RIGHT_LIFT, 0.0)", f"arm('right', RIGHT_LIFT, {right_hold})")
+              runner = runner.replace("arm('right', RIGHT_TRANSFER, 0.0)", f"arm('right', RIGHT_TRANSFER, {right_hold})")
+              runner = runner.replace("arm('right', RIGHT_PLACE, 0.0)", f"arm('right', RIGHT_PLACE, {right_hold})")
+              runner_path.write_text(runner)
+
+              output = subprocess.check_output(['python', str(runner_path), '--trial', 'nominal'], cwd=case_dir, text=True)
+              result = json.loads(output)
+              report.append({
+                  'case': name,
+                  'flaskRadiusM': flask_radius,
+                  'beakerRadiusM': beaker_radius,
+                  'leftHoldRad': left_hold,
+                  'rightHoldRad': right_hold,
+                  'success': result['metrics']['success'],
+                  'flask': result['metrics']['flask'],
+                  'beaker': result['metrics']['beaker'],
+                  'stages': result['stages'],
+              })
+          Path('/tmp/openarm-design-probe.json').write_text(json.dumps(report, indent=2, sort_keys=True))
+          print(json.dumps([{r['case']: {'success': r['success'], 'flask': r['flask'], 'beaker': r['beaker']}} for r in report], indent=2))
           PY
       - uses: actions/upload-artifact@v4
         with:
