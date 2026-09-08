@@ -1,10 +1,12 @@
 import { SourceRobotSimulator } from './source-simulator.js';
 import { MicroDuckPolicySimulator } from './microduck/policy-simulator.js';
+import { So101PhysicalSimulator } from './physics/so101-physical-simulator.js';
 
 export class SimulatorHost {
   constructor(canvas, {
     sourceFactory = (target) => new SourceRobotSimulator(target, { externalClock: true }),
     microduckFactory = (target) => new MicroDuckPolicySimulator(target, { externalClock: true }),
+    so101PhysicalFactory = (target) => new So101PhysicalSimulator(target),
   } = {}) {
     this.canvas = canvas;
     this.epoch = 0;
@@ -13,6 +15,7 @@ export class SimulatorHost {
     this.highContrast = true;
     this.sourceFactory = sourceFactory;
     this.microduckFactory = microduckFactory;
+    this.so101PhysicalFactory = so101PhysicalFactory;
     this.controllerPreemptHandler = () => {};
     this.disposed = false;
     this.animationFrame = requestAnimationFrame((time) => this.renderFrame(time));
@@ -36,7 +39,12 @@ export class SimulatorHost {
     previous?.dispose?.();
     for (const pendingBackend of this.pending) pendingBackend.dispose?.();
     this.pending.clear();
-    const backend = profileId === 'microduck' ? this.microduckFactory(this.canvas) : this.sourceFactory(this.canvas);
+    const physicalSo101 = profileId === 'so101' && scenario?.simulationMode === 'physical_mujoco';
+    const backend = profileId === 'microduck'
+      ? this.microduckFactory(this.canvas)
+      : physicalSo101
+      ? this.so101PhysicalFactory(this.canvas)
+      : this.sourceFactory(this.canvas);
     backend.setControllerPreemptHandler?.(this.controllerPreemptHandler);
     this.pending.add(backend);
     this.syncLifecycleDiagnostics();
@@ -60,10 +68,14 @@ export class SimulatorHost {
   setHighContrastScene(value) { this.highContrast = Boolean(value); return this.backend?.setHighContrastScene?.(this.highContrast) ?? this.highContrast; }
   isHighContrastSceneEnabled() { return this.backend?.isHighContrastSceneEnabled?.() ?? this.highContrast; }
   applyAction(...args) { return this.backend?.applyAction?.(...args); }
+  applyPhysicalTargets(...args) { return this.backend?.applyPhysicalTargets?.(...args); }
   advanceTime(...args) { return this.backend?.advanceTime?.(...args); }
   advanceBase(...args) { return this.backend?.advanceBase?.(...args); }
   getTelemetry() { return this.backend?.getTelemetry?.() || {}; }
   getContacts() { return this.backend?.getContacts?.() || {}; }
+  getTaskEvaluation() { return this.backend?.getTaskEvaluation?.() || null; }
+  getPhysicalSession() { return this.backend?.getPhysicalSession?.() || null; }
+  getPhysicalAuthorityToken() { return this.backend?.getPhysicalAuthorityToken?.() || null; }
   fit() { return this.backend?.fit?.(); }
   resize() { return this.backend?.resize?.(); }
   setVariant(value) { return this.backend?.setVariant?.(value); }
