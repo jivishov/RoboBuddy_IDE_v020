@@ -32,8 +32,22 @@ for (const name of SO101_PHASE2A_MODEL_PACKAGE.joints.map(({ id }) => id)) {
 }
 assert.ok(!so101Source.includes('<freejoint'), 'Phase 2A SO-101 validation plant must not acquire a hidden free root');
 
+assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE), 'registered package root must be immutable');
+assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE.physics), 'registered package physics settings must be immutable');
+assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE.joints), 'registered package joint list must be immutable');
+assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE.joints[0]), 'registered package joint descriptors must be immutable');
+assert.throws(() => { SO101_PHASE2A_MODEL_PACKAGE.physics.timestepSeconds = 0.01; }, TypeError);
+assert.throws(() => { SO101_PHASE2A_MODEL_PACKAGE.joints[0].id = 'tampered_joint'; }, TypeError);
+
 assert.throws(() => requireModelPackage('https://example.invalid/model.xml'), /Unknown physical model package/);
 assert.throws(() => validateModelPackage({ ...structuredClone(PHASE1_MODEL_PACKAGE), id: 'bad-url-package', asset: 'https://example.invalid/model.xml' }), /repository-local/);
 assert.throws(() => validateModelPackage({ ...structuredClone(PHASE1_MODEL_PACKAGE), id: 'bad-traversal-package', asset: 'models/../secret/model.xml' }), /repository-local/);
+assert.throws(() => validateModelPackage({ ...structuredClone(PHASE1_MODEL_PACKAGE), id: 'bad-sha-package', sha256: PHASE1_MODEL_PACKAGE.sha256.toUpperCase() }), /lowercase SHA-256/);
+assert.throws(() => validateModelPackage({ ...structuredClone(PHASE1_MODEL_PACKAGE), id: 'bad-integrator-package', physics: { ...PHASE1_MODEL_PACKAGE.physics, integrator: 'not-an-integrator' } }), /unsupported physics.integrator/);
+assert.throws(() => validateModelPackage({ ...structuredClone(SO101_PHASE2A_MODEL_PACKAGE), id: 'bad-iterations-package', physics: { ...SO101_PHASE2A_MODEL_PACKAGE.physics, iterations: 0 } }), /iterations/);
+assert.throws(() => validateModelPackage({ ...structuredClone(SO101_PHASE2A_MODEL_PACKAGE), id: 'bad-range-package', joints: SO101_PHASE2A_MODEL_PACKAGE.joints.map((joint, index) => index === 0 ? { ...joint, rangeRad: [1, -1] } : structuredClone(joint)) }), /minimum must be less than maximum/);
+assert.throws(() => validateModelPackage({ ...structuredClone(SO101_PHASE2A_MODEL_PACKAGE), id: 'bad-axis-package', joints: SO101_PHASE2A_MODEL_PACKAGE.joints.map((joint, index) => index === 0 ? { ...joint, axis: [0, 0, 0] } : structuredClone(joint)) }), /zero vector/);
+assert.throws(() => validateModelPackage({ ...structuredClone(SO101_PHASE2A_MODEL_PACKAGE), id: 'bad-evidence-package', actuators: SO101_PHASE2A_MODEL_PACKAGE.actuators.map((actuator, index) => index === 0 ? { ...actuator, evidence: 'authoritative-ish' } : structuredClone(actuator)) }), /unknown parameter evidence/);
+assert.throws(() => validateModelPackage({ ...structuredClone(PHASE1_MODEL_PACKAGE), id: 'bad-command-package', actuators: [{ id: 'bad', jointId: 'hinge', controllerId: 'hinge_position' }] }), /requires command/);
 assert.throws(() => validateModelPackage({ ...structuredClone(PHASE1_MODEL_PACKAGE), id: 'bad-actuator-package', actuators: [{ id: 'bad', jointId: 'missing', controllerId: 'hinge_position', command: 'position-rad' }] }), /unknown joint/);
 console.log('Model registry/package contract checks: OK');
