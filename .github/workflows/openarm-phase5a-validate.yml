@@ -1,0 +1,86 @@
+name: Validate OpenArm Phase 5A
+
+on:
+  push:
+    branches: ["fix/openarm-phase5a"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  openarm-phase5a:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: OpenArm Phase 5A syntax and static contracts
+        run: |
+          node --check src/physics/openarm-model-package.js
+          node --check src/physics/openarm-scene.js
+          node --check src/physics/openarm-task-evaluator.js
+          node --check src/physics/openarm-mujoco-worker.js
+          node --check src/physics/openarm-physical-simulator.js
+          node --check src/webmcp/openarm-physical-control.js
+          node --check tests/physics/openarm-phase5a-core.mjs
+          node --check tests/openarm-phase5a-browser.spec.mjs
+          python -m py_compile native/openarm_v2_reference.py
+          node tests/physics/openarm-phase5a-core.mjs
+          node tests/validate_task_patch.mjs
+
+      - name: Native MuJoCo nominal, negative and sensitivity gates
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
+          python native/openarm_v2_reference.py --trial nominal > /tmp/openarm-nominal.json
+          python native/openarm_v2_reference.py --trial miss-left > /tmp/openarm-miss.json
+          python native/openarm_v2_reference.py --trial weak-grip > /tmp/openarm-weak.json
+          python native/openarm_v2_reference.py --trial blocked-left > /tmp/openarm-blocked.json
+          python native/openarm_v2_reference.py --trial outside-left > /tmp/openarm-outside.json
+          python native/openarm_v2_reference.py --trial insufficient-budget > /tmp/openarm-budget.json
+          python native/openarm_v2_reference.py --trial nominal --timestep 0.0005 > /tmp/openarm-tight.json
+          python - <<'PY'
+          import json, math
+          from pathlib import Path
+          def load(name): return json.loads(Path(name).read_text())
+          nominal=load('/tmp/openarm-nominal.json')
+          miss=load('/tmp/openarm-miss.json')
+          weak=load('/tmp/openarm-weak.json')
+          blocked=load('/tmp/openarm-blocked.json')
+          outside=load('/tmp/openarm-outside.json')
+          budget=load('/tmp/openarm-budget.json')
+          tight=load('/tmp/openarm-tight.json')
+          assert nominal['engine']['version']=='3.11.0', nominal['engine']
+          assert abs(nominal['engine']['timestepSeconds']-0.001)<1e-12
+          assert nominal['model']['freeJointCount']==2, nominal['model']
+          assert nominal['model']['weldEqualityCount']==0, nominal['model']
+          assert nominal['metrics']['success'] is True, nominal['metrics']
+          assert nominal['metrics']['flask']['settled'] is True, nominal['metrics']['flask']
+          assert nominal['metrics']['beaker']['settled'] is True, nominal['metrics']['beaker']
+          for result in (miss, weak, blocked, outside, budget):
+              assert result['metrics']['success'] is False, (result['trial'], result['metrics'])
+          assert tight['metrics']['success'] is True, tight['metrics']
+          for side, expected_y in [('left',0.1535),('right',-0.1535)]:
+              ee=nominal['referenceMapping'][side+'HomeEePositionM']
+              assert abs(ee[0]-0.401)<0.003 and abs(ee[1]-expected_y)<0.003 and abs(ee[2]-1.120)<0.003, (side,ee)
+          for name in ('flaskFinalPositionM','beakerFinalPositionM'):
+              a=nominal['metrics'][name]; b=tight['metrics'][name]
+              delta=math.sqrt(sum((x-y)**2 for x,y in zip(a,b)))
+              assert delta<=0.02,(name,a,b,delta)
+          print('OpenArm native nominal/negative/sensitivity gates: OK')
+          PY
+
+      - name: Install browser harness
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: OpenArm browser authority and task gates
+        run: npx playwright test tests/openarm-phase5a-browser.spec.mjs --reporter=line
