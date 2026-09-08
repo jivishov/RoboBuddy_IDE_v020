@@ -1,0 +1,35 @@
+name: One-shot OpenArm stale test patch
+
+on:
+  push:
+    branches: ["fix/openarm-phase5a-fidelity-review"]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[stale-test-patched]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Replace the obsolete legacy OpenArm backend expectation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/microduck-browser-smoke.spec.mjs')
+          text = path.read_text()
+          old = "await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulator-backend', 'source-robot');"
+          new = "await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulator-backend', 'browser-mujoco');\n  await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulation-authority', 'physics-session');"
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected exactly one stale OpenArm backend assertion, found {count}')
+          path.write_text(text.replace(old, new))
+          PY
+      - name: Commit the one-line test correction
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/microduck-browser-smoke.spec.mjs
+          git commit -m "test(openarm): expect physical backend during MicroDuck switch [stale-test-patched]"
+          git push

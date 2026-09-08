@@ -1,0 +1,502 @@
+#!/usr/bin/env python3
+"""Native MuJoCo implementation-comparison reference for RoboBuddy OpenArm V2 Phase 5A.
+
+Setup writes only the declared initial robot qpos/ctrl values. Ordinary task
+execution writes actuator controls and advances MuJoCo. Free flask/beaker qpos
+are never written in the nominal run. Negative profiles explicitly alter test
+parameters before execution and are reported as such.
+
+This is native/browser model-implementation evidence, not hardware validation.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import math
+from pathlib import Path
+
+import mujoco
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+MODEL_PATH = ROOT / 'models' / 'openarm_v2' / 'manipulation.xml'
+JOINTS = [
+    *(f'openarm_left_joint{i}' for i in range(1, 8)), 'openarm_left_finger_joint1',
+    *(f'openarm_right_joint{i}' for i in range(1, 8)), 'openarm_right_finger_joint1',
+]
+ACTUATORS = [
+    *(f'left_joint{i}_ctrl' for i in range(1, 8)), 'left_finger1_ctrl',
+    *(f'right_joint{i}_ctrl' for i in range(1, 8)), 'right_finger1_ctrl',
+]
+INITIAL = {
+    **{f'openarm_left_joint{i}': 0.0 for i in range(1, 8)},
+    'openarm_left_joint4': math.pi / 2,
+    'openarm_left_finger_joint1': 0.65,
+    **{f'openarm_right_joint{i}': 0.0 for i in range(1, 8)},
+    'openarm_right_joint4': math.pi / 2,
+    'openarm_right_finger_joint1': -0.65,
+}
+
+
+def d2r(value):
+    return math.radians(value)
+
+
+def arm(side, values, finger=None):
+    out = {f'openarm_{side}_joint{i + 1}': d2r(value) for i, value in enumerate(values)}
+    if finger is not None:
+        out[f'openarm_{side}_finger_joint1'] = float(finger)
+    return out
+
+
+LEFT_LIFT = [-0.545, 0, 0, 97.436, 0, -7.941, 0]
+RIGHT_LIFT = [0.545, 0, 0, 97.436, 0, 7.941, 0]
+LEFT_TRANSFER = [-26.7699, 0, 0, 64.934, 0, -1.6954, 0]
+RIGHT_TRANSFER = [26.7699, 0, 0, 64.934, 0, 1.6954, 0]
+LEFT_PLACE = [-27.1394, 0, 0, 56.4231, 0, 6.4055, 0]
+RIGHT_PLACE = [27.1394, 0, 0, 56.4231, 0, -6.4055, 0]
+STAGES = [
+    ('settle_initial', {}, 0.40),
+    ('left_close', {'openarm_left_finger_joint1': 0.0}, 0.50),
+    ('left_lift', arm('left', LEFT_LIFT, 0.0), 1.00),
+    ('left_transfer', arm('left', LEFT_TRANSFER, 0.0), 1.20),
+    ('left_lower', arm('left', LEFT_PLACE, 0.0), 0.90),
+    ('left_release', {'openarm_left_finger_joint1': 0.65}, 0.45),
+    ('left_settle', {}, 0.45),
+    ('left_retreat', arm('left', LEFT_TRANSFER, 0.65), 0.85),
+    ('right_close', {'openarm_right_finger_joint1': 0.0}, 0.50),
+    ('right_lift', arm('right', RIGHT_LIFT, 0.0), 1.00),
+    ('right_transfer', arm('right', RIGHT_TRANSFER, 0.0), 1.20),
+    ('right_lower', arm('right', RIGHT_PLACE, 0.0), 0.90),
+    ('right_release', {'openarm_right_finger_joint1': -0.65}, 0.45),
+    ('right_settle', {}, 0.45),
+    ('right_retreat', arm('right', RIGHT_TRANSFER, -0.65), 0.85),
+]
+
+TARGETS = {
+    'flask': {
+        'center': np.array([0.608, 0.1535]),
+        'half': np.array([0.045, 0.045]),
+        'support': 'left_hotplate',
+        'initial_z': 1.085,
+        'geoms': {'flask_body_geom', 'flask_grip_geom'},
+        'fingers': {'left_inner_fingertip', 'left_outer_fingertip'},
+        'side': 'left',
+    },
+    'beaker': {
+        'center': np.array([0.608, -0.1535]),
+        'half': np.array([0.040, 0.040]),
+        'support': 'right_ring_gauze',
+        'initial_z': 1.120,
+        'geoms': {'beaker_grip_geom'},
+        'fingers': {'right_inner_fingertip', 'right_outer_fingertip'},
+        'side': 'right',
+    },
+}
+CRITERIA = {
+    'lift_clearance_m': 0.020,
+    'carry_horizontal_m': 0.060,
+    'settle_seconds': 0.20,
+    'max_settle_drift_m': 0.001,
+    'max_settle_linear_speed_m_s': 0.035,
+    'max_settle_angular_speed_rad_s': 0.8,
+    'retreat_distance_m': 0.050,
+    'support_height_tolerance_m': 0.015,
+}
+
+
+def sha256_bytes(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def canonical_json_hash(value) -> str:
+    payload = json.dumps(value, sort_keys=True, separators=(',', ':')).encode()
+    return sha256_bytes(payload)
+
+
+def controller_descriptor():
+    return {
+        'initialJointPositionsRad': INITIAL,
+        'stages': [
+            {'name': name, 'targetsRad': targets, 'durationSeconds': duration}
+            for name, targets, duration in STAGES
+        ],
+        'criteria': CRITERIA,
+        'targets': {
+            key: {
+                'centerXYM': spec['center'].tolist(),
+                'halfExtentsXYM': spec['half'].tolist(),
+                'supportGeom': spec['support'],
+                'initialBodyZM': spec['initial_z'],
+                'objectGeoms': sorted(spec['geoms']),
+                'gripperGeoms': sorted(spec['fingers']),
+                'side': spec['side'],
+            }
+            for key, spec in TARGETS.items()
+        },
+    }
+
+
+def name(model, typ, idx):
+    return mujoco.mj_id2name(model, typ, int(idx)) or f'id:{idx}'
+
+
+def ids(model):
+    joints = {joint: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint) for joint in JOINTS}
+    acts = {joint: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, actuator) for joint, actuator in zip(JOINTS, ACTUATORS)}
+    bodies = {
+        body: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, body)
+        for body in ('flask', 'beaker', 'openarm_left_ee_base_link', 'openarm_right_ee_base_link')
+    }
+    free = {obj: mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, f'{obj}_free') for obj in ('flask', 'beaker')}
+    assert min(*joints.values(), *acts.values(), *bodies.values(), *free.values()) >= 0
+    return joints, acts, bodies, free
+
+
+def setup(model, data, joints, acts, trial):
+    mujoco.mj_resetData(model, data)
+    for joint, value in INITIAL.items():
+        data.qpos[int(model.jnt_qposadr[joints[joint]])] = value
+        data.ctrl[acts[joint]] = value
+    # Explicit negative setup intervention only; nominal free-object qpos is untouched.
+    if trial == 'miss-left':
+        free_joint = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, 'flask_free')
+        qpos_address = int(model.jnt_qposadr[free_joint])
+        data.qpos[qpos_address + 1] += 0.05
+    mujoco.mj_forward(model, data)
+
+
+def contacts(model, data):
+    out = []
+    for index in range(data.ncon):
+        contact = data.contact[index]
+        out.append((
+            name(model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1),
+            name(model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2),
+        ))
+    return out
+
+
+def object_contact_state(model, data, obj):
+    spec = TARGETS[obj]
+    pairs = contacts(model, data)
+    touched = set()
+    support = False
+    for first, second in pairs:
+        if first in spec['geoms'] and second in spec['fingers']:
+            touched.add(second)
+        if second in spec['geoms'] and first in spec['fingers']:
+            touched.add(first)
+        if (first in spec['geoms'] and second == spec['support']) or (second in spec['geoms'] and first == spec['support']):
+            support = True
+    return touched, support
+
+
+def body_position(data, body_id):
+    return np.array(data.xpos[body_id], dtype=float)
+
+
+def initial_evidence(model, data, joints, bodies):
+    return {
+        'simulationTimeSeconds': float(data.time),
+        'jointsRad': {
+            joint: float(data.qpos[int(model.jnt_qposadr[joint_id])])
+            for joint, joint_id in joints.items()
+        },
+        'bodiesM': {body: body_position(data, body_id).tolist() for body, body_id in bodies.items()},
+    }
+
+
+def run_trial(trial='nominal', timestep=None):
+    model = mujoco.MjModel.from_xml_path(str(MODEL_PATH))
+    if timestep is not None:
+        model.opt.timestep = float(timestep)
+    data = mujoco.MjData(model)
+    joints, acts, bodies, free = ids(model)
+
+    # Negative-only parameter profiles are explicit and never used by nominal execution.
+    if trial == 'weak-grip':
+        for key in ('openarm_left_finger_joint1', 'openarm_right_finger_joint1'):
+            actuator_id = acts[key]
+            model.actuator_forcerange[actuator_id, :] = (-0.02, 0.02)
+            model.actuator_forcelimited[actuator_id] = 1
+    if trial == 'blocked-left':
+        actuator_id = acts['openarm_left_joint1']
+        model.actuator_forcerange[actuator_id, :] = (-0.001, 0.001)
+        model.actuator_forcelimited[actuator_id] = 1
+
+    setup(model, data, joints, acts, trial)
+    equality_types = [int(value) for value in model.eq_type]
+    weld_code = int(mujoco.mjtEq.mjEQ_WELD)
+    assert weld_code not in equality_types, equality_types
+    assert len(equality_types) == 2, equality_types
+
+    initial_state = initial_evidence(model, data, joints, bodies)
+    home_ee = {
+        'left': body_position(data, bodies['openarm_left_ee_base_link']).tolist(),
+        'right': body_position(data, bodies['openarm_right_ee_base_link']).tolist(),
+    }
+    state = {
+        obj: {
+            'initial': body_position(data, bodies[obj]),
+            'max_z': float(data.xpos[bodies[obj]][2]),
+            'contact_seen': set(),
+            'grasp': False,
+            'lift': False,
+            'carry_anchor': None,
+            'carry': False,
+            'support_while_held': False,
+            'support_while_held_time': None,
+            'previous_held': False,
+            'release': False,
+            'release_time': None,
+            'settle_candidate': None,
+            'settle_start': None,
+            'settle_drift': None,
+            'settled': False,
+            'settled_ee': None,
+            'settle_time': None,
+            'retreat': False,
+            'retreat_distance': 0.0,
+            'retreat_time': None,
+            'current_support': False,
+            'current_held': False,
+            'current_bilateral': False,
+        }
+        for obj in ('flask', 'beaker')
+    }
+
+    stage_diag = []
+    command_sequence = []
+    trajectory = []
+    contact_pairs_seen = set()
+    next_sample_time = 0.0
+
+    for stage_name, targets, seconds in STAGES:
+        if trial == 'insufficient-budget' and stage_name == 'left_transfer':
+            break
+        actual_targets = dict(targets)
+        if trial == 'outside-left' and stage_name in ('left_transfer', 'left_lower', 'left_retreat'):
+            actual_targets = arm('left', [-8.0, 0, 0, 80.0, 0, -2.0, 0], 0.0 if stage_name != 'left_retreat' else 0.65)
+        for joint, value in actual_targets.items():
+            data.ctrl[acts[joint]] = float(value)
+        command_sequence.append({'stage': stage_name, 'targetsRad': actual_targets, 'durationSeconds': seconds})
+
+        step_count = int(round(seconds / model.opt.timestep))
+        assert abs(step_count * model.opt.timestep - seconds) < 1e-9
+        for _ in range(step_count):
+            mujoco.mj_step(model, data)
+            pair_list = contacts(model, data)
+            contact_pairs_seen.update(tuple(sorted(pair)) for pair in pair_list)
+
+            for obj in ('flask', 'beaker'):
+                st = state[obj]
+                spec = TARGETS[obj]
+                position = body_position(data, bodies[obj])
+                touched, support = object_contact_state(model, data, obj)
+                bilateral = spec['fingers'].issubset(touched)
+                held = bool(touched)
+                st['max_z'] = max(st['max_z'], float(position[2]))
+                st['contact_seen'].update(touched)
+                st['current_support'] = support
+                st['current_held'] = held
+                st['current_bilateral'] = bilateral
+                if bilateral:
+                    st['grasp'] = True
+
+                if st['grasp'] and bilateral and position[2] > spec['initial_z'] + CRITERIA['lift_clearance_m']:
+                    st['lift'] = True
+                    if st['carry_anchor'] is None and not st['carry']:
+                        st['carry_anchor'] = position.copy()
+
+                if st['carry_anchor'] is not None and not st['carry']:
+                    if not held:
+                        st['carry_anchor'] = None
+                    elif bilateral and np.linalg.norm(position[:2] - st['carry_anchor'][:2]) >= CRITERIA['carry_horizontal_m']:
+                        st['carry'] = True
+
+                inside = bool(np.all(np.abs(position[:2] - spec['center']) <= spec['half']))
+                near = abs(position[2] - spec['initial_z']) <= CRITERIA['support_height_tolerance_m']
+                if st['carry'] and bilateral and support and inside and near and not st['support_while_held']:
+                    st['support_while_held'] = True
+                    st['support_while_held_time'] = float(data.time)
+
+                if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:
+                    st['release'] = True
+                    st['release_time'] = float(data.time)
+
+                qvel_address = int(model.jnt_dofadr[free[obj]])
+                linear_speed = float(np.linalg.norm(data.qvel[qvel_address:qvel_address + 3]))
+                angular_speed = float(np.linalg.norm(data.qvel[qvel_address + 3:qvel_address + 6]))
+                settle_eligible = (
+                    st['release'] and support and not held and inside and near
+                    and linear_speed <= CRITERIA['max_settle_linear_speed_m_s']
+                    and angular_speed <= CRITERIA['max_settle_angular_speed_rad_s']
+                )
+                ee = body_position(data, bodies[f"openarm_{spec['side']}_ee_base_link"])
+                if not settle_eligible:
+                    st['settle_candidate'] = None
+                    st['settle_start'] = None
+                    st['settle_drift'] = None
+                    st['settled'] = False
+                    st['settled_ee'] = None
+                    st['retreat'] = False
+                    st['retreat_distance'] = 0.0
+                    st['retreat_time'] = None
+                elif st['settle_candidate'] is None or st['settle_start'] is None:
+                    st['settle_candidate'] = position.copy()
+                    st['settle_start'] = float(data.time)
+                    st['settle_drift'] = 0.0
+                    st['settled'] = False
+                    st['settled_ee'] = None
+                    st['retreat'] = False
+                    st['retreat_distance'] = 0.0
+                    st['retreat_time'] = None
+                else:
+                    drift = float(np.linalg.norm(position - st['settle_candidate']))
+                    if drift > CRITERIA['max_settle_drift_m']:
+                        st['settle_candidate'] = position.copy()
+                        st['settle_start'] = float(data.time)
+                        st['settle_drift'] = 0.0
+                        st['settled'] = False
+                        st['settled_ee'] = None
+                        st['retreat'] = False
+                        st['retreat_distance'] = 0.0
+                        st['retreat_time'] = None
+                    else:
+                        st['settle_drift'] = max(float(st['settle_drift'] or 0.0), drift)
+                        if float(data.time) - st['settle_start'] + 1e-12 >= CRITERIA['settle_seconds']:
+                            if not st['settled']:
+                                st['settle_time'] = float(data.time)
+                                st['settled_ee'] = ee.copy()
+                            st['settled'] = True
+
+                if st['settled'] and support and not held and st['settled_ee'] is not None:
+                    retreat_distance = float(np.linalg.norm(ee - st['settled_ee']))
+                    st['retreat_distance'] = max(st['retreat_distance'], retreat_distance)
+                    if retreat_distance >= CRITERIA['retreat_distance_m']:
+                        st['retreat'] = True
+                        st['retreat_time'] = st['retreat_time'] or float(data.time)
+
+                st['previous_held'] = held
+
+            if float(data.time) + 1e-12 >= next_sample_time:
+                trajectory.append({
+                    'timeSeconds': float(data.time),
+                    'flaskM': body_position(data, bodies['flask']).tolist(),
+                    'beakerM': body_position(data, bodies['beaker']).tolist(),
+                })
+                next_sample_time += 0.05
+
+        stage_diag.append({
+            'stage': stage_name,
+            'time': float(data.time),
+            'flask': body_position(data, bodies['flask']).tolist(),
+            'beaker': body_position(data, bodies['beaker']).tolist(),
+            'contacts': contacts(model, data),
+        })
+
+    def metrics(obj):
+        st = state[obj]
+        spec = TARGETS[obj]
+        position = body_position(data, bodies[obj])
+        touched, support = object_contact_state(model, data, obj)
+        inside = bool(np.all(np.abs(position[:2] - spec['center']) <= spec['half']))
+        bilateral = spec['fingers'].issubset(touched)
+        return {
+            'bilateralContact': st['grasp'],
+            'lifted': st['lift'],
+            'carried': st['carry'],
+            'supportWhileHeld': st['support_while_held'],
+            'released': st['release'],
+            'support': support,
+            'settled': st['settled'],
+            'settleDriftM': st['settle_drift'],
+            'retreated': st['retreat'],
+            'retreatDistanceM': st['retreat_distance'],
+            'insideTarget': inside,
+            'currentGripperContact': bool(touched),
+            'currentBilateralContact': bilateral,
+            'maxZM': st['max_z'],
+            'finalPositionM': position.tolist(),
+            'contactGeoms': sorted(st['contact_seen']),
+            'supportWhileHeldTimeSeconds': st['support_while_held_time'],
+            'releaseTimeSeconds': st['release_time'],
+            'settleTimeSeconds': st['settle_time'],
+            'retreatTimeSeconds': st['retreat_time'],
+        }
+
+    flask = metrics('flask')
+    beaker = metrics('beaker')
+    required = ('bilateralContact', 'lifted', 'carried', 'supportWhileHeld', 'released', 'support', 'settled', 'retreated', 'insideTarget')
+    success = all(flask[key] for key in required) and all(beaker[key] for key in required)
+    blocked_actual = float(data.qpos[int(model.jnt_qposadr[joints['openarm_left_joint1']])])
+    final_state = {
+        'simulationTimeSeconds': float(data.time),
+        'jointsRad': {
+            joint: float(data.qpos[int(model.jnt_qposadr[joint_id])])
+            for joint, joint_id in joints.items()
+        },
+        'bodiesM': {body: body_position(data, body_id).tolist() for body, body_id in bodies.items()},
+    }
+    descriptor = controller_descriptor()
+    return {
+        'classification': 'native/browser model implementation comparison; not hardware validation',
+        'trial': trial,
+        'trialProfile': {
+            'negativeSetupObjectQposOffset': trial == 'miss-left',
+            'modifiedActuatorLimits': trial in ('weak-grip', 'blocked-left'),
+            'modifiedTargets': trial == 'outside-left',
+            'truncatedExecutionBudget': trial == 'insufficient-budget',
+        },
+        'engine': {
+            'version': mujoco.__version__,
+            'timestepSeconds': float(model.opt.timestep),
+            'integratorCode': int(model.opt.integrator),
+            'solverCode': int(model.opt.solver),
+            'iterations': int(model.opt.iterations),
+            'lsIterations': int(model.opt.ls_iterations),
+            'coneCode': int(model.opt.cone),
+            'impratio': float(model.opt.impratio),
+        },
+        'model': {
+            'asset': str(MODEL_PATH.relative_to(ROOT)).replace('\\', '/'),
+            'sha256': sha256_bytes(MODEL_PATH.read_bytes()),
+            'nq': int(model.nq),
+            'nv': int(model.nv),
+            'nu': int(model.nu),
+            'neq': int(model.neq),
+            'hasObjectWeld': False,
+        },
+        'controller': {
+            'sha256': canonical_json_hash(descriptor),
+            'descriptor': descriptor,
+        },
+        'initialState': initial_state,
+        'homeEeM': home_ee,
+        'commandSequence': command_sequence,
+        'contactPairsSeen': [list(pair) for pair in sorted(contact_pairs_seen)],
+        'objectTrajectories': trajectory,
+        'finalState': final_state,
+        'metrics': {
+            'success': bool(success),
+            'flask': flask,
+            'beaker': beaker,
+            'blockedLeftJoint1ActualRad': blocked_actual,
+        },
+        'taskVerdict': 'success' if success else 'failure',
+        'stages': stage_diag,
+    }
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--trial', choices=('nominal', 'miss-left', 'weak-grip', 'blocked-left', 'outside-left', 'insufficient-budget'), default='nominal')
+    parser.add_argument('--timestep', type=float)
+    args = parser.parse_args()
+    print(json.dumps(run_trial(args.trial, timestep=args.timestep), indent=2, sort_keys=True))
+
+
+if __name__ == '__main__':
+    main()

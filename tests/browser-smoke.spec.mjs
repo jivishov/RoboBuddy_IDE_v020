@@ -97,6 +97,7 @@ test('all pinned reference traces run through the source fixed-step plant collis
     }
 
     for (const [profileId, descriptors] of Object.entries(catalog.PATCH_TASKS)) {
+      if (profileId === 'openarm') continue;
       for (const descriptor of descriptors) {
         const scenario = await catalog.loadPatchedScenario(profileId, descriptor.id);
         const engine = await ScenarioV2Engine.create(scenario, { autoStartPlant: false });
@@ -125,7 +126,6 @@ test('all pinned reference traces run through the source fixed-step plant collis
   }, { revision: TASK_PATCH });
 
   expect(report.map((item) => item.scenarioId)).toEqual([
-    'openarm-04-filtration-workcell',
     'so101-v2-06-quantitative-transfer',
     'so101-v2-08-burette-initial-reading',
     'so101-v2-09-vacuum-filtration',
@@ -177,10 +177,12 @@ test('Unitree G1 loads the source-pinned 29-joint mesh as a truthful kinematic p
   expect(pageErrors, pageErrors.join('\n\n')).toEqual([]);
 });
 
-test('learner Python reaches the first physical action through the IDE Step Action path', async ({ page }) => {
+test('legacy LeKiwi learner Python reaches the first action through the IDE Step Action path', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
   await page.goto('/?ci=1', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
+  await page.locator('#robotSelect').selectOption('lekiwi');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   await page.locator('#stepBtn').click();
   await expect(page.locator('#statusMessage')).toContainText('Stepped A01', { timeout: 90_000 });
@@ -190,11 +192,13 @@ test('learner Python reaches the first physical action through the IDE Step Acti
 });
 
 
-test('Pause holds an active source-plant run and resumes it in place', async ({ page }) => {
+test('Pause holds an active LeKiwi source-plant run and resumes it in place', async ({ page }) => {
   test.setTimeout(240_000);
   await page.goto('/?ci=pause', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   expect(await page.locator('#runBtn').evaluate((button) => button.nextElementSibling?.id)).toBe('pauseBtn');
+  await page.locator('#robotSelect').selectOption('lekiwi');
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
 
   await page.locator('#runBtn').click();
   await expect(page.locator('#pauseBtn')).toBeEnabled();
@@ -217,7 +221,7 @@ test('Pause holds an active source-plant run and resumes it in place', async ({ 
   await expect(page.locator('#pauseBtn')).toBeDisabled();
 });
 
-test('source-plant and Unitree keep their main-thread compile/replay Run and Run-to-Cursor paths', async ({ page }) => {
+test('LeKiwi source-plant and Unitree keep their main-thread compile/replay Run and Run-to-Cursor paths', async ({ page }) => {
   test.setTimeout(240_000);
   await page.goto('/?ci=cycle04-preservation', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
@@ -230,6 +234,8 @@ test('source-plant and Unitree keep their main-thread compile/replay Run and Run
     return index + 1;
   });
 
+  await page.selectOption('#robotSelect', 'lekiwi');
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   const sourceLine = await setFirstActionCursor();
   await page.click('#cursorBtn');
   await expect(page.locator('#statusMessage')).toContainText(`main.py:${sourceLine}`, { timeout: SOURCE_REPLAY_TIMEOUT });

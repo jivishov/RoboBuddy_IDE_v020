@@ -130,6 +130,25 @@ export function validateModelPackage(manifest) {
     }
   }
 
+  if (manifest.mechanicalCouplings != null) {
+    if (!Array.isArray(manifest.mechanicalCouplings)) throw new TypeError('mechanicalCouplings must be an array when provided');
+    const ids = new Set();
+    for (const [index, coupling] of manifest.mechanicalCouplings.entries()) {
+      if (!coupling || typeof coupling !== 'object' || Array.isArray(coupling)) throw new TypeError(`mechanicalCouplings[${index}] must be an object`);
+      for (const key of ['id', 'driverJointId', 'followerJointId']) {
+        if (typeof coupling[key] !== 'string' || !coupling[key]) throw new TypeError(`mechanicalCouplings[${index}] requires ${key}`);
+      }
+      if (ids.has(coupling.id)) throw new TypeError(`mechanicalCouplings contains duplicate id ${coupling.id}`);
+      ids.add(coupling.id);
+      if (!jointIds.has(coupling.driverJointId)) throw new TypeError(`Mechanical coupling ${coupling.id} driver must be a declared controllable joint`);
+      if (jointIds.has(coupling.followerJointId)) throw new TypeError(`Mechanical coupling ${coupling.id} follower must remain a passive source-model joint, not a second command surface`);
+      const multiplier = Number(coupling.multiplier ?? 1);
+      const offsetRad = Number(coupling.offsetRad ?? 0);
+      if (!Number.isFinite(multiplier) || !Number.isFinite(offsetRad)) throw new TypeError(`Mechanical coupling ${coupling.id} requires finite multiplier/offsetRad`);
+      parameterEvidence(coupling.evidence, `mechanicalCouplings[${index}].evidence`);
+    }
+  }
+
   if (manifest.bodies != null) validateDescriptorList(manifest.bodies, 'bodies', ['id']);
   stringArray(manifest.controllers, 'controllers');
   for (const actuator of manifest.actuators) {
