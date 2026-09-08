@@ -37,8 +37,10 @@ jobs:
           node --check src/physics/browser-mujoco-backend.js
           node --check src/physics/capabilities.js
           node --check src/physics/model-registry.js
+          node --check src/physics/model-packages.js
           node --check src/physics/mujoco-worker.js
           node --check src/physics/phase1-scene.js
+          node --check src/physics/so101-scene.js
           node --check src/physics/session.js
           node --check src/physics/ui-status.js
           node --check src/runtime/live-python-bridge.js
@@ -55,8 +57,11 @@ jobs:
           node --check src/webmcp/agent-facade.js
           node --check src/webmcp/microduck-control.js
           node --check src/webmcp/register-ide-tools.js
+          node --check tests/physics/model-registry-core.mjs
           node --check tests/physics/vertical-slice-core.mjs
+          node --check tests/physics/live-python-bridge-core.mjs
           node --check tests/physics-slice-browser.spec.mjs
+          node --check tests/so101-physics-browser.spec.mjs
           node --check tests/microduck-starter-timing.mjs
           node --check tests/helpers/microduck-timing.mjs
           node --check tests/microduck-control-timing-core.mjs
@@ -70,6 +75,10 @@ jobs:
         run: node tests/validate_task_patch.mjs
       - name: Phase 1 physics contract checks
         run: node tests/physics/vertical-slice-core.mjs
+      - name: Phase 2A model and timing contract checks
+        run: |
+          node tests/physics/model-registry-core.mjs
+          node tests/physics/live-python-bridge-core.mjs
       - name: MicroDuck asset and policy contracts
         run: |
           node tests/validate_microduck_assets.mjs
@@ -91,9 +100,11 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
           python -m py_compile native/reference_runner.py
-          python native/reference_runner.py --target 0.8 --steps 500 > /tmp/robobuddy-native-reference.json
+          python native/reference_runner.py --model phase1 --target 0.8 --steps 500 > /tmp/robobuddy-native-reference.json
+          python native/reference_runner.py --model so101 --joint shoulder_pan --target 0.4 --steps 100 > /tmp/robobuddy-native-so101.json
           python - <<'PY'
           import json
+          import math
           from pathlib import Path
           result = json.loads(Path('/tmp/robobuddy-native-reference.json').read_text())
           assert result['engine']['version'] == '3.11.0'
@@ -104,6 +115,19 @@ jobs:
           assert result['bodies']['free_box']['positionM'][2] < 1.0
           assert result['contactCount'] > 0
           print('Native Phase 1 reference: OK')
+
+          so101 = json.loads(Path('/tmp/robobuddy-native-so101.json').read_text())
+          assert so101['model']['id'] == 'robobuddy-so101-phase2a-v1'
+          assert so101['model']['asset'] == 'models/so101/model.xml'
+          assert len(so101['model']['sha256']) == 64
+          assert so101['engine']['version'] == '3.11.0'
+          assert abs(so101['engine']['timestepSeconds'] - 0.005) < 1e-12
+          assert abs(so101['simulationTimeSeconds'] - 0.5) < 1e-9
+          assert so101['finiteState'] is True
+          assert set(so101['joints']) == {'shoulder_pan', 'shoulder_lift', 'elbow_flex', 'wrist_flex', 'wrist_roll', 'gripper'}
+          assert abs(so101['initialJoints']['shoulder_pan']['positionRad'] - so101['joints']['shoulder_pan']['positionRad']) > 1e-4
+          assert math.isfinite(so101['joints']['shoulder_pan']['velocityRadS'])
+          print('Native SO-101 Phase 2A reference: OK')
           PY
       - name: HTML parse smoke test
         run: |
