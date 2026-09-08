@@ -61,6 +61,7 @@ jobs:
           node --check tests/physics/vertical-slice-core.mjs
           node --check tests/physics/live-python-bridge-core.mjs
           node --check tests/physics-slice-browser.spec.mjs
+          node --check tests/physics-load-failure-browser.spec.mjs
           node --check tests/so101-physics-browser.spec.mjs
           node --check tests/microduck-starter-timing.mjs
           node --check tests/helpers/microduck-timing.mjs
