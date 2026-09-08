@@ -23,7 +23,7 @@ export const SO101_PHASE2A_SCENE = Object.freeze({
 export const SO101_MANIPULATION_SCENE = Object.freeze({
   schemaVersion: PHYSICS_BACKEND_API_VERSION,
   id: 'p4-so101-benchmark-transfer',
-  revision: 'p4-so101-benchmark-transfer-v2',
+  revision: 'p4-so101-benchmark-transfer-v3',
   robotId: SO101_MANIPULATION_MODEL_PACKAGE.robotId,
   modelPackage: SO101_MANIPULATION_MODEL_PACKAGE.id,
   legacyTaskId: null,
@@ -59,7 +59,7 @@ export const SO101_BENCHMARK_TRANSFER_CONTROLLER = Object.freeze({
   controllerPeriodSeconds: 0.02,
   stages: Object.freeze([
     Object.freeze({ name: 'settle_initial', durationSeconds: 0.20, targetsRad: Object.freeze({}) }),
-    Object.freeze({ name: 'approach', durationSeconds: 0.60, targetsRad: Object.freeze({ shoulder_lift: 0.0 }) }),
+    Object.freeze({ name: 'approach', durationSeconds: 0.60, targetsRad: Object.freeze({ shoulder_pan: 0.005, shoulder_lift: 0.0 }) }),
     Object.freeze({ name: 'close', durationSeconds: 0.50, targetsRad: Object.freeze({ gripper: -0.04 }) }),
     Object.freeze({ name: 'lift', durationSeconds: 0.80, targetsRad: Object.freeze({ shoulder_lift: -0.35 }) }),
     Object.freeze({ name: 'move', durationSeconds: 0.90, targetsRad: Object.freeze({ shoulder_pan: 0.45 }) }),
