@@ -69,7 +69,11 @@ test('normal SO-101 IDE workspace uses one MuJoCo authority for live Python, ren
   });
   expect(completed.evaluation.maxBlockZM).toBeGreaterThan(0.264);
   expect(completed.evaluation.maxHorizontalTravelM).toBeGreaterThan(0.05);
-  expect(completed.evaluation.targetSupportContactObservationCount).toBeGreaterThan(0);
+  expect(completed.evaluation.maxHeldHorizontalTravelM).toBeGreaterThan(0.05);
+  expect(completed.evaluation.carriedContactObservationCount).toBeGreaterThanOrEqual(2);
+  expect(completed.evaluation.settleEvidenceDurationSeconds).toBeGreaterThanOrEqual(0.20);
+  expect(completed.evaluation.settlePositionDriftM).toBeLessThanOrEqual(0.0005);
+  expect(completed.evaluation.targetSupportContactObservationCount).toBeGreaterThan(1);
   expect(completed.canvas).toEqual({ authority: 'physics-session', success: 'true' });
   expect(completed.physicalRuntimeActive).toBe(false);
   expect(completed.prepared).toBeNull();
