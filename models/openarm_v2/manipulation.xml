@@ -101,12 +101,12 @@
                       <body name="openarm_left_ee_inner_finger" pos="-0.00143 -0.018 -0.068">
                         <inertial pos="-0.0124991 -0.00176593 -0.0241663" quat="0.982638 0.0922084 -0.15927 -0.0235197" mass="0.125979" diaginertia="3.8543e-05 3.6883e-05 1.43942e-05"/>
                         <joint name="openarm_left_finger_joint1" axis="-1 0 0" range="0 0.7854" actuatorfrcrange="-10 10" class="motor_finger"/>
-                        <geom name="left_inner_fingertip" type="capsule" fromto="0 0 -0.005 0 0 -0.075" size="0.008" class="left_fingertip"/>
+                        <geom name="left_inner_fingertip" type="capsule" fromto="0 0 -0.005 0 0 -0.075" size="0.009" class="left_fingertip"/>
                       </body>
                       <body name="openarm_left_ee_outer_finger" pos="-0.00143 0.018 -0.068">
                         <inertial pos="-0.012796 0.0020183 -0.026792" quat="0.982097 -0.0906989 -0.165079 0.00294117" mass="0.11372" diaginertia="3.70662e-05 3.60159e-05 1.33599e-05"/>
                         <joint name="openarm_left_finger_joint2" axis="1 0 0" range="0 0.7854" actuatorfrcrange="-10 10" class="motor_finger"/>
-                        <geom name="left_outer_fingertip" type="capsule" fromto="0 0 -0.005 0 0 -0.075" size="0.008" class="left_fingertip"/>
+                        <geom name="left_outer_fingertip" type="capsule" fromto="0 0 -0.005 0 0 -0.075" size="0.009" class="left_fingertip"/>
                       </body>
                     </body>
                   </body>
@@ -152,12 +152,12 @@
                       <body name="openarm_right_ee_inner_finger" pos="-0.00143 0.018 -0.068">
                         <inertial pos="-0.0124991 0.00176593 -0.0241663" quat="0.982638 -0.0922084 -0.15927 0.0235197" mass="0.125979" diaginertia="3.8543e-05 3.6883e-05 1.43942e-05"/>
                         <joint name="openarm_right_finger_joint1" axis="-1 0 0" range="-0.7854 0" actuatorfrcrange="-10 10" class="motor_finger"/>
-                        <geom name="right_inner_fingertip" type="capsule" fromto="0 0 -0.005 0 0 -0.075" size="0.008" class="right_fingertip"/>
+                        <geom name="right_inner_fingertip" type="capsule" fromto="0 0 -0.005 0 0 -0.075" size="0.009" class="right_fingertip"/>
                       </body>
                       <body name="openarm_right_ee_outer_finger" pos="-0.00143 -0.018 -0.068">
                         <inertial pos="-0.012796 -0.0020183 -0.026792" quat="0.982097 0.0906989 -0.165079 -0.00294117" mass="0.11372" diaginertia="3.70662e-05 3.60159e-05 1.33599e-05"/>
                         <joint name="openarm_right_finger_joint2" axis="1 0 0" range="-0.7854 0" actuatorfrcrange="-10 10" class="motor_finger"/>
-                        <geom name="right_outer_fingertip" type="capsule" fromto="0 0 -0.005 0 0 -0.075" size="0.008" class="right_fingertip"/>
+                        <geom name="right_outer_fingertip" type="capsule" fromto="0 0 -0.005 0 0 -0.075" size="0.009" class="right_fingertip"/>
                       </body>
                     </body>
                   </body>

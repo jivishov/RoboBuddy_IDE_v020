@@ -38,7 +38,7 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(initial.backend).toBe('OpenArmPhysicalSimulator');
   expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v1' });
   expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v1', asset: 'models/openarm_v2/manipulation.xml' });
-  expect(initial.model.sha256).toBe('db15fa4b4a9c120ec09762ff1f4e00d995675453ade1738707258f6f5bbc883f');
+  expect(initial.model.sha256).toBe('323a345733dc45a4b3d7616e83ea5aef48cb099eb29855691530252b167f64b5');
   expect(initial.presentation).toMatchObject({
     physicalAuthority: 'MuJoCo PhysicsSession only',
     jointPresentationSource: 'observed MuJoCo joint positions',

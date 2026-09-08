@@ -22,7 +22,7 @@ The source cell mounting relationship is preserved: the bimanual arm origin is l
 
 ## Browser physical-model adaptation
 
-The upstream visual and collision meshes are not redistributed as MuJoCo collision assets in this Phase 5A package. Robot collision geometry is represented by explicitly declared primitive surrogates so the browser model remains self-contained. Those primitive collision shapes are an approximation and are not equivalent to the upstream mesh contact geometry.
+The upstream visual and collision meshes are not redistributed as MuJoCo collision assets in this Phase 5A package. Robot collision geometry is represented by explicitly declared primitive surrogates so the browser model remains self-contained. Those primitive collision shapes are an approximation and are not equivalent to the upstream mesh contact geometry. The fingertip capsule surrogate uses a 9 mm radius in this benchmark so a fully closed opposed-finger pose produces a small bilateral contact preload instead of an exactly tangent, numerically fragile 20 mm gap; this remains an estimated browser collision surrogate, not a source or hardware dimension.
 
 The dry workcell fixtures and vessels are RoboBuddy synthetic benchmark geometry. They are not measurements of a specific installed hotplate, ring stand, flask, beaker, table, or OpenArm system. The unpowered hotplate and ring-stand/gauze support model rigid contact only; no thermal, fluid, vacuum, payload-certification, glass-compliance, tactile, force-sensor, or hardware-safety behavior is claimed. The vessel colliders are validated only for the direct exterior pinch/lift/place interactions in this task; they are not validated for insertion, pouring, filling, or liquid operations.
 

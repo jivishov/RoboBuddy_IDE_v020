@@ -96,7 +96,7 @@ export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
   },
   license: 'Apache-2.0 for OpenArm-derived plant; repository-authored dry benchmark fixtures are MIT',
   asset: 'models/openarm_v2/manipulation.xml',
-  sha256: 'db15fa4b4a9c120ec09762ff1f4e00d995675453ade1738707258f6f5bbc883f',
+  sha256: '323a345733dc45a4b3d7616e83ea5aef48cb099eb29855691530252b167f64b5',
   physics: { timestepSeconds: 0.001, integrator: 'Euler' },
   controllers: ['openarm_v2_position'],
   joints,
