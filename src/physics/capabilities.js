@@ -18,47 +18,21 @@ export const PHYSICS_PREVIEW_CAPABILITIES = Object.freeze({
     ],
   }),
   openarm: capabilityRecord({
-    backend: EXECUTION_BACKENDS.LEGACY,
-    capability: 'legacy bimanual manipulation preview',
-    evidence: MODEL_EVIDENCE.MODEL_DERIVED,
-    limitations: LEGACY_LIMITS,
-  }),
-  lekiwi: capabilityRecord({
-    backend: EXECUTION_BACKENDS.LEGACY,
-    capability: 'legacy mobile-manipulation preview',
-    evidence: MODEL_EVIDENCE.MODEL_DERIVED,
-    limitations: LEGACY_LIMITS,
-  }),
-  unitree: capabilityRecord({
-    backend: EXECUTION_BACKENDS.LEGACY,
-    capability: 'kinematic joint-pose inspection only',
-    evidence: MODEL_EVIDENCE.MODEL_DERIVED,
+    backend: EXECUTION_BACKENDS.BROWSER_MUJOCO,
+    capability: 'single-authority OpenArm V2 bimanual dry glassware stacking workspace with live async Python and causal physical task evaluation',
+    evidence: MODEL_EVIDENCE.NUMERICALLY_VERIFIED,
     limitations: [
-      'No dynamic balance or walking controller is active.',
-      'No physical contact plant is active.',
-      'No hardware-validation claim is made.',
+      'The OpenArm V2 kinematic tree, rigid-body inertias, joint limits, motor damping/armature/friction-loss, controller gains/effort limits, mirrored finger coupling, and fixed cell-home mount are source-derived from pinned enactic/openarm_mujoco V2.',
+      'Robot mesh collisions are declared primitive surrogates and the flask/beaker/hotplate/ring-stand parameters are controlled benchmark estimates, so browser results are simulator evidence rather than exact mesh-collision or laboratory-hardware parity.',
+      'No liquids, heating, temperature, glass compliance, force/tactile sensing, payload certification, CAN timing, backlash, or installed-hardware validation is claimed.',
     ],
   }),
-  microduck: capabilityRecord({
-    backend: EXECUTION_BACKENDS.LEGACY,
-    capability: 'legacy policy demonstrator',
-    evidence: MODEL_EVIDENCE.MODEL_DERIVED,
-    limitations: [
-      'Approximate browser dynamics remain active until the matched model/controller migration is complete.',
-      'No RL-environment, locomotion, contact, or hardware-parity claim is made.',
-    ],
-  }),
+  lekiwi: capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'legacy mobile-manipulation preview', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: LEGACY_LIMITS }),
+  unitree: capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'kinematic joint-pose inspection only', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: ['No dynamic balance or walking controller is active.', 'No physical contact plant is active.', 'No hardware-validation claim is made.'] }),
+  microduck: capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'legacy policy demonstrator', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: ['Approximate browser dynamics remain active until the matched model/controller migration is complete.', 'No RL-environment, locomotion, contact, or hardware-parity claim is made.'] }),
 });
 
 export function physicsCapabilityFor(profileId) {
-  return PHYSICS_PREVIEW_CAPABILITIES[profileId] || capabilityRecord({
-    backend: EXECUTION_BACKENDS.LEGACY,
-    capability: 'unsupported physical workspace',
-    evidence: MODEL_EVIDENCE.MODEL_DERIVED,
-    limitations: LEGACY_LIMITS,
-  });
+  return PHYSICS_PREVIEW_CAPABILITIES[profileId] || capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'unsupported physical workspace', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: LEGACY_LIMITS });
 }
-
-export function capabilityLabel(record) {
-  return `${record.backend} · ${record.evidence}`;
-}
+export function capabilityLabel(record) { return `${record.backend} · ${record.evidence}`; }
