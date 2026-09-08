@@ -1,0 +1,30 @@
+name: Apply OpenArm Phase 5A Bootstrap
+
+on:
+  push:
+    branches: ["fix/openarm-phase5a"]
+    paths:
+      - ".github/workflows/openarm-phase5a-bootstrap.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/openarm-phase5a
+      - name: Apply reviewed migration payload
+        run: |
+          cat scripts/phase5a.runner.* > /tmp/apply_openarm_phase5a.py
+          python /tmp/apply_openarm_phase5a.py
+          rm scripts/phase5a.payload.* scripts/phase5a.runner.*
+          rm .github/workflows/openarm-phase5a-bootstrap.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "feat(physics): migrate OpenArm V2 task to MuJoCo"
+          git push origin HEAD:fix/openarm-phase5a
