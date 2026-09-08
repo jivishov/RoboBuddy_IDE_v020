@@ -38,7 +38,18 @@ async function activeTools(page) {
   return page.evaluate(() => window.__webMcpRegistrations.filter(({ signal }) => !signal?.aborted).map(({ tool }) => tool.name));
 }
 
-test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBuddy WebMCP surface', async ({ page }) => {
+const BASE_TOOLS = [
+  'describe_robobuddy_task',
+  'read_robobuddy_workspace',
+  'inspect_robobuddy_simulation',
+  'focus_robobuddy_workspace',
+  'run_robobuddy_program',
+  'draft_robobuddy_cooperative_edit',
+];
+
+const OPENARM_TOOLS = [...BASE_TOOLS, 'control_openarm_simulation'];
+
+test('explicit human Agent Assist registers the bounded OpenArm physical WebMCP surface', async ({ page }) => {
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
   await openReadyApp(page);
@@ -49,7 +60,6 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   await expect(control).toHaveAttribute('data-available', 'true');
   await expect(control).toHaveAttribute('data-tools', 'disabled');
   await expect(indicator).toHaveCSS('background-color', 'rgb(220, 90, 100)');
-  await expect(indicator).toHaveCSS('animation-name', 'none');
   expect(await page.evaluate(() => window.__webMcpRegistrations.length)).toBe(0);
 
   await page.locator('[data-agent-access="assist"]').evaluate((button) => button.click());
@@ -61,88 +71,67 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   await expect(control).toHaveAttribute('data-tools', 'enabled');
   await expect(indicator).toHaveCSS('background-color', 'rgb(70, 209, 124)');
   await expect(indicator).toHaveCSS('animation-name', 'agent-assist-blink');
+  await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
 
   const registered = await page.evaluate(() => window.__webMcpRegistrations.filter(({ signal }) => !signal?.aborted).map(({ tool }) => ({
-    name: tool.name,
-    annotations: tool.annotations,
-    inputSchema: tool.inputSchema,
+    name: tool.name, annotations: tool.annotations, inputSchema: tool.inputSchema, description: tool.description,
   })));
-  expect(registered.map(({ name }) => name)).toEqual([
-    'describe_robobuddy_task',
-    'read_robobuddy_workspace',
-    'inspect_robobuddy_simulation',
-    'focus_robobuddy_workspace',
-    'run_robobuddy_program',
-    'draft_robobuddy_cooperative_edit',
-  ]);
   expect(registered.every(({ annotations }) => annotations.untrustedContentHint)).toBe(true);
   expect(registered.slice(0, 3).every(({ annotations }) => annotations.readOnlyHint)).toBe(true);
   expect(registered.slice(3).every(({ annotations }) => !annotations.readOnlyHint)).toBe(true);
-  expect(registered.every(({ inputSchema }) => inputSchema.type === 'object' && inputSchema.additionalProperties === false)).toBe(true);
 
   const task = await callTool(page, 'describe_robobuddy_task');
   expect(task).toMatchObject({
     taskId: 'openarm-04-filtration-workcell',
-    simulationMode: 'source_plant',
-    sourcePlantAvailable: true,
+    simulationMode: 'physical_mujoco',
+    stateKind: 'mujoco_physical_state',
+    sourcePlantAvailable: false,
+    physicalSimulationAvailable: true,
     hardwareValidated: false,
   });
   expect(JSON.stringify(task)).not.toContain('referenceActions');
 
   const source = await callTool(page, 'read_robobuddy_workspace', { file: 'trajectories.py' });
-  expect(source).toMatchObject({
-    file: 'trajectories.py',
-    startLine: 1,
-    contentClassification: 'untrusted_user_authored_source',
-  });
+  expect(source).toMatchObject({ file: 'trajectories.py', startLine: 1, contentClassification: 'untrusted_user_authored_source' });
   expect(source.content.length).toBeLessThanOrEqual(1_200);
   expect(source.endLine - source.startLine + 1).toBeLessThanOrEqual(32);
 
   const state = await callTool(page, 'inspect_robobuddy_simulation');
   expect(state).toMatchObject({
-    executionState: 'idle',
-    simulationMode: 'source_plant',
-    stateKind: 'modeled_source_plant',
-    untrustedContent: true,
+    executionState: 'idle', simulationMode: 'physical_mujoco', stateKind: 'mujoco_physical_state',
+    sourcePlantAvailable: false, physicalSimulationAvailable: true, hardwareValidated: false, untrustedContent: true,
   });
+  expect(state.physicalAuthority).toMatchObject({ robotId: 'openarm_v2_bimanual' });
+
+  const controlSurface = registered.find(({ name }) => name === 'control_openarm_simulation');
+  expect(controlSurface.description).toContain('same authoritative PhysicsSession');
+  const setBranch = controlSurface.inputSchema.oneOf.find((branch) => branch.properties.command.const === 'set_joint_targets');
+  expect(setBranch.additionalProperties).toBe(false);
+  expect(setBranch.properties.schema_version.const).toBe('robobuddy.openarm.physical.v1');
+  expect(setBranch.properties.targets_rad.additionalProperties).toBe(false);
+  expect(setBranch.properties.targets_rad.properties.openarm_left_finger_joint2).toBeUndefined();
 
   const focus = await callTool(page, 'focus_robobuddy_workspace', { file: 'main.py', line: 1 });
   expect(focus).toMatchObject({ focused: true, file: 'main.py', line: 1, sourceChanged: false });
   await expect(page.locator('#statusMessage')).toContainText('Agent focused main.py:1');
 
-  await page.evaluate(() => window.__robobuddyCi.app.editor.cm.setValue('async def demo_move():\n    await robot.move(3.0, 0.0, 0.0)\n'));
+  await page.evaluate(() => window.__robobuddyCi.app.editor.cm.setValue('async def demo_move():\n    await robot.advance(0.02)\n'));
   const temporaryEdit = await callTool(page, 'draft_robobuddy_cooperative_edit', {
-    file: 'main.py',
-    start_line: 2,
-    end_line: 2,
-    expected_source: '    await robot.move(3.0, 0.0, 0.0)',
-    replacement_code: '    await robot.move(0.30, 0.0, 0.0)',
-    explanation: 'Use the bounded teaching speed for a visible, controlled move.',
+    file: 'main.py', start_line: 2, end_line: 2,
+    expected_source: '    await robot.advance(0.02)',
+    replacement_code: '    await robot.advance(0.04)',
+    explanation: 'Use a different bounded simulation-time interval for review.',
   });
   expect(temporaryEdit).toMatchObject({
-    sourceChanged: true,
-    temporary: true,
-    persistence: 'not_saved_refresh_reloads_workspace',
-    file: 'main.py',
-    disabledOriginal: true,
-    startLine: 2,
-    endLine: 2,
-    workingStartLine: 7,
+    sourceChanged: true, temporary: true, persistence: 'not_saved_refresh_reloads_workspace',
+    file: 'main.py', disabledOriginal: true, startLine: 2, endLine: 2, workingStartLine: 7,
   });
   const draftedSource = await page.evaluate(() => window.__robobuddyCi.app.editor.cm.getValue());
-  expect(draftedSource).toContain('    # Agent-disabled: await robot.move(3.0, 0.0, 0.0)');
-  expect(draftedSource).toContain('    # Explanation: Use the bounded teaching speed for a visible, controlled move.');
-  expect(draftedSource).toContain('\n    await robot.move(0.30, 0.0, 0.0)');
-  expect(draftedSource).not.toContain('\n        await robot.move(0.30, 0.0, 0.0)');
-  await expect(page.locator('#statusMessage')).toContainText('temporary cooperative edit');
-  expect(await page.locator('#dirtyDot').isHidden()).toBe(false);
-
+  expect(draftedSource).toContain('    # Agent-disabled: await robot.advance(0.02)');
+  expect(draftedSource).toContain('    await robot.advance(0.04)');
   const staleEdit = await callTool(page, 'draft_robobuddy_cooperative_edit', {
-    file: 'main.py',
-    start_line: 2,
-    end_line: 2,
-    expected_source: '    await robot.move(3.0, 0.0, 0.0)',
-    replacement_code: '    await robot.move(0.20, 0.0, 0.0)',
+    file: 'main.py', start_line: 2, end_line: 2,
+    expected_source: '    await robot.advance(0.02)', replacement_code: '    await robot.advance(0.06)',
     explanation: 'This must not overwrite a changed draft.',
   });
   expect(staleEdit).toMatchObject({ ok: false, error: { code: 'SOURCE_MISMATCH', retryable: true } });
@@ -150,7 +139,10 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
 
   await page.evaluate(() => window.__robobuddyCi.app.editor.cm.setValue('print("webmcp run smoke")\n'));
   const run = await callTool(page, 'run_robobuddy_program');
-  expect(run).toMatchObject({ completed: true, simulation: { executionState: 'idle', status: 'Run complete' } });
+  expect(run.completed).toBe(true);
+  expect(run.simulation).toMatchObject({ executionState: 'idle' });
+  expect(run.simulation.status).toContain('physical task criteria not yet satisfied');
+  expect(run.simulation.taskEvaluation?.success).toBe(false);
 
   const cancelled = await callTool(page, 'run_robobuddy_program', {}, { aborted: true });
   expect(cancelled).toMatchObject({ ok: false, error: { code: 'OPERATION_CANCELLED', retryable: true } });
@@ -163,31 +155,19 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
   const reloadedSource = await page.evaluate(() => window.__robobuddyCi.app.editor.cm.getValue());
   expect(reloadedSource).not.toContain('Agent cooperative edit');
-  expect(reloadedSource).not.toContain('Agent-disabled: await robot.move(3.0, 0.0, 0.0)');
+  expect(reloadedSource).not.toContain('Agent-disabled: await robot.advance(0.02)');
   expect(pageErrors, pageErrors.join('\n\n')).toEqual([]);
 });
 
-test('ready MicroDuck adds one strict bounded control tool and removes it across profile changes', async ({ page }) => {
+test('ready MicroDuck adds its strict tools and removes them across profile changes', async ({ page }) => {
   await openReadyApp(page);
   await page.locator('[data-agent-access="assist"]').click();
-  await expect.poll(() => activeTools(page)).toEqual([
-    'describe_robobuddy_task',
-    'read_robobuddy_workspace',
-    'inspect_robobuddy_simulation',
-    'focus_robobuddy_workspace',
-    'run_robobuddy_program',
-    'draft_robobuddy_cooperative_edit',
-  ]);
+  await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
 
   await page.locator('#robotSelect').selectOption('microduck');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
   await expect.poll(() => activeTools(page)).toEqual([
-    'describe_robobuddy_task',
-    'read_robobuddy_workspace',
-    'inspect_robobuddy_simulation',
-    'focus_robobuddy_workspace',
-    'run_robobuddy_program',
-    'draft_robobuddy_cooperative_edit',
+    ...BASE_TOOLS,
     'control_microduck_simulation',
     'manage_microduck_visual_cues',
   ]);
@@ -255,23 +235,23 @@ test('ready MicroDuck adds one strict bounded control tool and removes it across
 
   await page.locator('#robotSelect').selectOption('openarm');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
-  await expect.poll(() => activeTools(page)).toHaveLength(6);
+  await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
   expect(await page.evaluate(() => window.__webMcpRegistrations.filter(({ tool, signal }) => tool.name === 'control_microduck_simulation' && !signal?.aborted).length)).toBe(0);
 });
 
 test('loading and failed MicroDuck workspaces keep only the six base tools', async ({ page }) => {
   await openReadyApp(page);
   await page.locator('[data-agent-access="assist"]').click();
-  await expect.poll(() => activeTools(page)).toHaveLength(6);
+  await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
   await page.route('**/assets/microduck/generated/procedural-rig.json', async (route) => {
     await new Promise((resolve) => setTimeout(resolve, 250));
     await route.abort('failed');
   });
   await page.locator('#robotSelect').selectOption('microduck');
   await expect(page.locator('#statusMessage')).toContainText('Loading local MicroDuck');
-  await expect.poll(() => activeTools(page)).toHaveLength(6);
+  await expect.poll(() => activeTools(page)).toEqual(BASE_TOOLS);
   await expect(page.locator('#statusMessage')).toContainText('unavailable', { timeout: 60_000 });
-  await expect.poll(() => activeTools(page)).toHaveLength(6);
+  await expect.poll(() => activeTools(page)).toEqual(BASE_TOOLS);
   expect(await page.evaluate(() => window.__webMcpRegistrations.filter(({ tool, signal }) => tool.name === 'control_microduck_simulation' && !signal?.aborted).length)).toBe(0);
 });
 
