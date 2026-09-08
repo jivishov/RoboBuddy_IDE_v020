@@ -1,7 +1,9 @@
-import { assertPhysicsBackend, PHYSICS_BACKEND_API_VERSION, PhysicsBackendState } from './backend-contract.js';
+import { assertPhysicalScene, assertPhysicsBackend, PHYSICS_BACKEND_API_VERSION, PhysicsBackendState } from './backend-contract.js';
+import { PHASE1_SCENE } from './phase1-scene.js';
 
 const MAX_TRACE_EVENTS = 512;
 const MAX_STEP_BATCH = 100000;
+const STEP_TIME_TOLERANCE_SECONDS = 1e-9;
 const WORLD_FRAME = Object.freeze({
   id: 'mujoco_world',
   handedness: 'right-handed',
@@ -9,6 +11,16 @@ const WORLD_FRAME = Object.freeze({
   linearUnit: 'm',
   angularUnit: 'rad',
 });
+
+function exactStringArray(actual, expected) {
+  return Array.isArray(actual)
+    && actual.length === expected.length
+    && actual.every((value, index) => value === expected[index]);
+}
+
+function objectIds(items) {
+  return Array.isArray(items) ? items.map((item) => item?.id) : [];
+}
 
 export class BrowserMuJoCoBackend {
   constructor({ workerUrl = new URL('./mujoco-worker.js', import.meta.url), modelUrl = new URL('../../models/vertical-slice/model.xml', import.meta.url) } = {}) {
@@ -33,10 +45,9 @@ export class BrowserMuJoCoBackend {
 
   async loadScene(scene = {}, context = {}) {
     this.#assertNotDisposed();
+    assertPhysicalScene(scene);
+    this.#assertPhase1Scene(scene);
     this.#validateNewEpoch(context);
-    if (!scene?.revision || !scene?.robotId) throw new TypeError('Scene requires revision and robotId');
-    const requestedModelUrl = scene.modelUrl ? new URL(scene.modelUrl, this.modelUrl) : this.modelUrl;
-    if (requestedModelUrl.href !== this.modelUrl.href) throw new Error('Phase 1 only permits the pinned vertical-slice model');
     if (!this.worker) this.#spawn();
     this.state = PhysicsBackendState.LOADING;
     this.sessionId = String(context.sessionId);
@@ -51,9 +62,13 @@ export class BrowserMuJoCoBackend {
       this.robotId = String(scene.robotId);
       const observation = this.#decorateObservation(raw);
       this.lastScene = {
+        schemaVersion: scene.schemaVersion,
+        id: scene.id,
         revision: this.sceneRevision,
         robotId: this.robotId,
-        modelUrl: this.modelUrl.href,
+        modelPackage: scene.modelPackage,
+        physics: structuredClone(scene.physics),
+        controllers: structuredClone(scene.controllers || []),
         model: structuredClone(observation.model),
       };
       this.lastObservation = observation;
@@ -118,16 +133,21 @@ export class BrowserMuJoCoBackend {
       throw new RangeError(`Step request ${stepCount} exceeds remaining command budget ${this.commandBudget.remainingSteps}`);
     }
     const generation = this.generation;
-    this.state = PhysicsBackendState.RUNNING;
+    const previousTime = Number(this.lastObservation?.simulationTimeSeconds ?? 0);
+    const wasPaused = this.state === PhysicsBackendState.PAUSED;
+    if (!wasPaused) this.state = PhysicsBackendState.RUNNING;
     try {
       const raw = await this.#call('step', { count: stepCount });
       this.#assertGeneration(generation, context);
       const observation = this.#decorateObservation(raw);
+      const executedSteps = this.#executedSteps(previousTime, observation.simulationTimeSeconds, observation.engine.timestepSeconds);
+      if (executedSteps > stepCount) throw new Error(`MuJoCo advanced ${executedSteps} steps for a request of ${stepCount}`);
       this.lastObservation = observation;
-      if (this.commandBudget) this.commandBudget.remainingSteps -= stepCount;
-      this.state = PhysicsBackendState.READY;
+      if (this.commandBudget) this.commandBudget.remainingSteps -= executedSteps;
+      this.state = wasPaused ? PhysicsBackendState.PAUSED : PhysicsBackendState.READY;
       this.#record('advanceSteps', {
-        stepCount,
+        requestedSteps: stepCount,
+        executedSteps,
         commandId: this.commandBudget?.commandId ?? null,
         remainingSteps: this.commandBudget?.remainingSteps ?? null,
         observation,
@@ -275,6 +295,32 @@ export class BrowserMuJoCoBackend {
       contacts: structuredClone(Array.isArray(raw.contacts) ? raw.contacts : []),
       sensors: {},
     };
+  }
+
+  #executedSteps(previousTime, nextTime, timestep) {
+    const delta = nextTime - previousTime;
+    if (!Number.isFinite(delta) || delta < -STEP_TIME_TOLERANCE_SECONDS) throw new Error('MuJoCo simulation time moved backwards');
+    if (Math.abs(delta) <= STEP_TIME_TOLERANCE_SECONDS) return 0;
+    const ratio = delta / timestep;
+    const steps = Math.round(ratio);
+    if (steps < 0 || Math.abs(delta - steps * timestep) > STEP_TIME_TOLERANCE_SECONDS) {
+      throw new Error(`MuJoCo simulation-time delta ${delta} is not an integer number of ${timestep}s steps`);
+    }
+    return steps;
+  }
+
+  #assertPhase1Scene(scene) {
+    if (scene.id !== PHASE1_SCENE.id) throw new Error(`Phase 1 scene id must be ${PHASE1_SCENE.id}`);
+    if (scene.revision !== PHASE1_SCENE.revision) throw new Error(`Phase 1 scene revision must be ${PHASE1_SCENE.revision}`);
+    if (scene.robotId !== PHASE1_SCENE.robotId) throw new Error(`Phase 1 robotId must be ${PHASE1_SCENE.robotId}`);
+    if (scene.modelPackage !== PHASE1_SCENE.modelPackage) throw new Error(`Phase 1 modelPackage must be ${PHASE1_SCENE.modelPackage}`);
+    if (Math.abs(Number(scene.physics.timestepSeconds) - PHASE1_SCENE.physics.timestepSeconds) > 1e-12) {
+      throw new Error(`Phase 1 timestep must be ${PHASE1_SCENE.physics.timestepSeconds}`);
+    }
+    if (scene.physics.integrator !== PHASE1_SCENE.physics.integrator) throw new Error(`Phase 1 integrator must be ${PHASE1_SCENE.physics.integrator}`);
+    if (!exactStringArray(scene.controllers, PHASE1_SCENE.controllers)) throw new Error('Phase 1 controller set does not match the pinned scene');
+    if (!exactStringArray(objectIds(scene.fixtures), objectIds(PHASE1_SCENE.fixtures))) throw new Error('Phase 1 fixture identities do not match the pinned scene');
+    if (!exactStringArray(objectIds(scene.objects), objectIds(PHASE1_SCENE.objects))) throw new Error('Phase 1 object identities do not match the pinned scene');
   }
 
   #spawn() {
