@@ -17,6 +17,34 @@ Source URLs:
 - https://github.com/google-deepmind/mujoco_menagerie/blob/8161bba264d7fa7c99ca301e91e7fb44737676ad/robotstudio_so101/so101.xml
 - https://github.com/google-deepmind/mujoco_menagerie/blob/8161bba264d7fa7c99ca301e91e7fb44737676ad/robotstudio_so101/LICENSE
 
+## Upstream source asset inventory
+
+The pinned Menagerie MJCF references these visual/source meshes:
+
+- `waveshare_mounting_plate_so101_v2.stl`
+- `sts3215_03a_v1.stl`
+- `motor_holder_so101_base_v1.stl`
+- `wrist_roll_follower_so101_v1.stl`
+- `moving_jaw_so101_v1.stl`
+- `base_motor_holder_so101_v1.stl`
+- `upper_arm_so101_v1.stl`
+- `wrist_roll_pitch_so101_v2.stl`
+- `under_arm_so101_v1.stl`
+- `rotation_pitch_so101_v1.stl`
+- `motor_holder_so101_wrist_v1.stl`
+- `sts3215_03a_no_horn_v1.stl`
+- `base_so101_v2.stl`
+- `moving_jaw_so101_gripper_v1.stl`
+- `wrist_roll_follower_so101_camera_mount.stl`
+
+The pinned Menagerie gripper also references these mesh collision components:
+
+- `wrist_roll_follower_so101_gripper_part0_v1.stl`
+- `moving_jaw_so101_gripper_part0_v1.stl`
+- `moving_jaw_so101_gripper_part1_v1.stl`
+
+These upstream mesh names are recorded for provenance. The Phase 2A browser-validation package does not bundle or claim to reproduce those visual meshes or mesh-only gripper collision pieces; it deliberately uses the retained source primitive collision geometry plus the explicitly estimated `base_proxy` described below.
+
 ## Model adaptation for Phase 2A
 
 The Phase 2A MJCF keeps the source kinematic tree, link transforms, joint axes/ranges, link masses/full inertias, MuJoCo timestep/integrator/solver settings, position-actuator mappings, and source primitive collision proxies needed for articulated validation. It intentionally omits upstream visual STL meshes and mesh-based gripper collision pieces so the browser worker can compile one self-contained MJCF without a general arbitrary-asset loader. A simple `base_proxy` box is an estimated diagnostic visual/collision proxy. No object-grasp task relies on it in Phase 2A.
