@@ -5,9 +5,13 @@ function uid(prefix) {
 }
 
 export class PhysicsSession {
-  constructor(backend, { sessionId = uid('physics') } = {}) {
+  constructor(backend, { sessionId = uid('physics'), observationBatchSteps = null } = {}) {
     this.backend = assertPhysicsBackend(backend);
     this.sessionId = String(sessionId);
+    if (observationBatchSteps != null && (!Number.isInteger(observationBatchSteps) || observationBatchSteps < 1)) {
+      throw new RangeError('observationBatchSteps must be a positive integer when configured');
+    }
+    this.observationBatchSteps = observationBatchSteps == null ? null : Number(observationBatchSteps);
     this.epoch = 0;
     this.sceneRevision = null;
     this.robotId = null;
@@ -68,8 +72,25 @@ export class PhysicsSession {
   async advanceSteps(steps) {
     this.#assertLoaded();
     if (!Number.isInteger(steps) || steps < 1) throw new RangeError('steps must be a positive integer');
-    const observation = await this.#runLoadedOperation(() => this.backend.advanceSteps(steps, this.#context()));
-    this.#publishObservation(observation, 'advanceSteps');
+    const batch = this.observationBatchSteps;
+    if (!batch || steps <= batch) {
+      const observation = await this.#runLoadedOperation(() => this.backend.advanceSteps(steps, this.#context()));
+      this.#publishObservation(observation, 'advanceSteps');
+      return observation;
+    }
+
+    // Long lockstep advances still execute exclusively in the authoritative backend,
+    // but publish intermediate ground-truth observations at a declared physics-step
+    // cadence. This prevents task evaluators/controllers from losing short-lived
+    // physical contacts merely because a caller requested a long simulation interval.
+    let remaining = steps;
+    let observation = null;
+    while (remaining > 0) {
+      const chunk = Math.min(batch, remaining);
+      observation = await this.#runLoadedOperation(() => this.backend.advanceSteps(chunk, this.#context()));
+      this.#publishObservation(observation, 'advanceSteps');
+      remaining -= chunk;
+    }
     return observation;
   }
 
