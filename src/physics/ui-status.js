@@ -15,5 +15,11 @@ export function applyPhysicsPreviewStatus(profileId) {
   if (simBadge && capability.backend === 'legacy') {
     simBadge.textContent = 'PHYSICS PREVIEW · LEGACY MODEL ACTIVE · NOT HARDWARE VALIDATION';
   }
+  if (modeChip && capability.backend === 'browser-mujoco') {
+    modeChip.textContent = 'SO-101 PHYSICAL WORKSPACE · MUJOCO AUTHORITY';
+  }
+  if (simBadge && capability.backend === 'browser-mujoco') {
+    simBadge.textContent = 'MUJOCO RIGID-BODY BENCHMARK · ACTUAL CONTACT/GRAVITY · NOT HARDWARE CALIBRATION';
+  }
   return capability;
 }
