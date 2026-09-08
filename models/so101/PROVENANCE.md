@@ -1,135 +1,106 @@
-# SO-101 Phase 2A model provenance
+# SO-101 physical model and IDE migration provenance
 
-This package is a controlled articulated-plant validation model for RoboBuddy IDE Physics Preview Phase 2A. It is not a hardware-calibrated digital twin, it is not dynamically identical to the complete pinned MuJoCo Menagerie package, and it is not yet the production SO-101 workspace.
+RoboBuddy IDE Physics Preview uses two pinned SO-101 MuJoCo packages for different evidence purposes. Neither is a hardware-calibrated digital twin.
 
-## Authoritative sources and adaptation basis
+## Pinned source basis
 
-The physically executed Phase 2A model is based on a pinned Google DeepMind MuJoCo Menagerie SO-101 simulation package. Menagerie in turn records its derivation from The Robot Studio's public SO-101 simulation model. Both layers are pinned because Menagerie intentionally changes simulation details relative to the original project model.
+The executed SO-101 models are based on Google DeepMind MuJoCo Menagerie `robotstudio_so101` at revision `8161bba264d7fa7c99ca301e91e7fb44737676ad`. Menagerie records its upstream derivation from The Robot Studio `SO-ARM100` simulation model at revision `aec17bbc256d1a7342d53aaa4950595d4c30b40d`. The SO-101-derived model content is Apache-2.0.
 
-- Primary executed-model source: Google DeepMind MuJoCo Menagerie, `robotstudio_so101`.
-- Pinned Menagerie revision: `8161bba264d7fa7c99ca301e91e7fb44737676ad`.
-- Menagerie source MJCF: `robotstudio_so101/so101.xml`.
-- Original project source: The Robot Studio `SO-ARM100`, `Simulation/SO101/so101_new_calib.xml`.
-- Original project revision recorded by Menagerie: `aec17bbc256d1a7342d53aaa4950595d4c30b40d`.
-- Source variant: SO-101 follower arm using STS3215-class servos and a single moving-jaw gripper.
-- RoboBuddy Phase 2A adaptation: the six-actuated-joint chain from the pinned Menagerie model, with a deliberately reduced self-contained geometry set and without the Menagerie `camera_mount` child.
-- License: Apache License 2.0, as declared by the pinned Menagerie SO-101 package.
+Primary source paths:
 
-Source URLs:
+- Menagerie: `robotstudio_so101/so101.xml`
+- Upstream project: `Simulation/SO101/so101_new_calib.xml`
 
-- https://github.com/google-deepmind/mujoco_menagerie/tree/8161bba264d7fa7c99ca301e91e7fb44737676ad/robotstudio_so101
-- https://github.com/google-deepmind/mujoco_menagerie/blob/8161bba264d7fa7c99ca301e91e7fb44737676ad/robotstudio_so101/so101.xml
-- https://github.com/google-deepmind/mujoco_menagerie/blob/8161bba264d7fa7c99ca301e91e7fb44737676ad/robotstudio_so101/LICENSE
-- https://github.com/TheRobotStudio/SO-ARM100/blob/aec17bbc256d1a7342d53aaa4950595d4c30b40d/Simulation/SO101/so101_new_calib.xml
+Menagerie intentionally adapts the project model for MuJoCo simulation, including `implicitfast`, actuator settings, primitive collision geometry, gripper contact settings, and a camera mount. A value described below as source-derived is traceable to the named source layer; it is not automatically a measured manufacturer or installed-hardware parameter.
 
-Menagerie's pinned README says its derivation steps include copying the public SO-101 MJCF, switching to `implicitfast`, changing the actuator force-range handling, adding primitive arm/gripper collision geometry and manipulation-oriented gripper solver parameters, and adding a camera mount. Therefore `SOURCE-DERIVED` below means the parameter is traceable to the specifically named source layer; it does **not** mean every Menagerie value is an original manufacturer/hardware limit.
+## Model packages
 
-### Wrist-roll limit discrepancy
+### Articulation/conformance reference
 
-A direct source comparison found a meaningful limit difference that must not be hidden:
+- Package: `so101-phase2a-menagerie-8161bba`
+- Model ID: `robobuddy-so101-phase2a-v1`
+- Asset: `models/so101/model.xml`
+- SHA-256: `8573559b58eb522ca80c8cd4c88d30e0b2ab20fb222f67c57e3808a4783af085`
 
-- The Robot Studio source revision recorded by Menagerie gives `wrist_roll` a range of approximately `-2.7438473 .. 2.8412063 rad`.
-- The pinned Menagerie model gives `wrist_roll` a symmetric joint range of `-2.7438473 .. 2.7438473 rad` while keeping the actuator control range approximately `-2.74385 .. 2.84121 rad`.
-- The Menagerie README does not list this joint-range narrowing among its high-level derivation steps.
+This reduced model remains a deterministic articulation/browser-native conformance reference. It deliberately omits source components that matter to manipulation and is not the normal physical SO-101 IDE workspace.
 
-RoboBuddy Phase 2A preserves the **pinned Menagerie joint constraint** because that is the executed simulation source used for the browser/native conformance plant. It is therefore a Menagerie-derived simulation constraint, not a claimed measured hardware limit. Before hardware alignment or task-envelope certification, the usable wrist range must be established from the actual assembled robot/calibration and reconciled with the project-source and Menagerie values.
+### Manipulation/normal IDE physical package
 
-## Upstream source asset inventory
+- Package: `so101-manipulation-menagerie-8161bba-v1`
+- Model ID: `robobuddy-so101-manipulation-v1`
+- Asset: `models/so101/manipulation.xml`
+- SHA-256: `cf0064059a56e2c6748f72733c606b833ebf61131802b27b3645c1f25089aecc`
+- MuJoCo timestep: `0.005 s`
+- Integrator: `implicitfast`
+- Solver iterations: `10`
+- Line-search iterations: `20`
 
-The pinned Menagerie MJCF references these visual/source meshes:
+This package retains the source-derived six-actuated-joint topology, articulated-body inertials, gripper primitive collision geometry, and the pinned source camera collision boxes. The source camera-mount visual mesh mass of `0.012 kg` is restored by distributing that mass across the two source camera collision boxes; the resulting box-based inertia is an explicit estimate, not the original mesh inertia.
 
-- `waveshare_mounting_plate_so101_v2.stl`
-- `sts3215_03a_v1.stl`
-- `motor_holder_so101_base_v1.stl`
-- `wrist_roll_follower_so101_v1.stl`
-- `moving_jaw_so101_v1.stl`
-- `base_motor_holder_so101_v1.stl`
-- `upper_arm_so101_v1.stl`
-- `wrist_roll_pitch_so101_v2.stl`
-- `under_arm_so101_v1.stl`
-- `rotation_pitch_so101_v1.stl`
-- `motor_holder_so101_wrist_v1.stl`
-- `sts3215_03a_no_horn_v1.stl`
-- `base_so101_v2.stl`
-- `moving_jaw_so101_gripper_v1.stl`
-- `wrist_roll_follower_so101_camera_mount.stl`
+The manipulation model contains a true free-body benchmark block (`benchmark_block_free`). Ordinary execution does not weld, parent, attach, snap, or write the block transform. The target marker is non-colliding. The pickup and target supports are split synthetic benchmark fixtures so the workcell does not place a broad support surface through the retained camera collision swept volume.
 
-The pinned Menagerie gripper also references these mesh collision components:
+## Wrist-roll discrepancy
 
-- `wrist_roll_follower_so101_gripper_part0_v1.stl`
-- `moving_jaw_so101_gripper_part0_v1.stl`
-- `moving_jaw_so101_gripper_part1_v1.stl`
+The source layers disagree in a way that must remain visible:
 
-These upstream mesh names are recorded for provenance. The Phase 2A browser-validation package does not bundle those meshes.
+- The Robot Studio revision recorded by Menagerie gives `wrist_roll` an upper joint range of approximately `2.8412063 rad`.
+- The pinned Menagerie model constrains the joint symmetrically to approximately `-2.7438473 .. 2.7438473 rad` while its actuator control range extends to about `2.84121 rad`.
 
-## Model adaptation for Phase 2A
+RoboBuddy executes the pinned Menagerie joint constraint. Commands are validated against both the joint and actuator envelopes, so the effective command range is their intersection. This is a simulation-source decision, not a measured hardware limit. Actual assembled-robot usable range must be calibrated separately.
 
-The Phase 2A MJCF retains the pinned Menagerie six-joint articulated-chain transforms, joint axes/ranges, explicit inertials of `base`, `shoulder`, `upper_arm`, `lower_arm`, `wrist`, `gripper`, and `moving_jaw_so101_v1`, MuJoCo timestep/integrator/solver settings, position-actuator mappings/control ranges, and a subset of the source primitive collision geometry sufficient for articulated-plant validation.
+## Evidence classes
 
-The adaptation is intentionally **not** a byte-for-byte or dynamically complete copy of the Menagerie model:
+### Source-derived
 
-- visual STL meshes are omitted;
-- mesh-based gripper collision pieces are omitted;
-- the source `camera_mount` child is omitted, including its camera, primitive camera collision boxes, and the `0.012 kg` mass assigned to its visual mesh in the pinned source;
-- at least one broad source fixed-jaw collision primitive and other geometry not required for Phase 2A articulation validation are omitted;
-- a simple `base_proxy` box is added only as an estimated diagnostic visual proxy; it is explicitly non-colliding (`contype=0`, `conaffinity=0`) and therefore cannot create a source-unsupported contact force.
+- six-joint hierarchy, transforms, local axes, and pinned Menagerie simulation joint limits;
+- retained articulated-body masses and inertia tensors;
+- `0.005 s` timestep, integrator, and solver settings;
+- position-actuator mappings and source simulation control ranges;
+- retained gripper primitive collisions;
+- camera collision boxes and the source `0.012 kg` camera-mount mass value.
 
-Because the source camera-mount mass is omitted, browser/native parity for this package proves agreement for the **RoboBuddy Phase 2A adapted plant**, not numerical equivalence to the complete Menagerie SO-101 model. Restoring or otherwise source-faithfully representing omitted payload/collision dynamics is required before manipulation or hardware-alignment claims are made.
+### Estimated / synthetic benchmark
 
-The world frame is MuJoCo's right-handed +Z-up frame. Linear units are metres, mass is kilograms, time is seconds, and joint/control angles are radians. Every modeled revolute joint uses local axis `0 0 1`; the body transforms in the MJCF establish the corresponding physical axis in parent/world coordinates.
+- Menagerie STS3215 simulation gains/effort behavior when interpreted as physical hardware behavior;
+- box-derived inertia distribution used to restore the camera-mount mass;
+- benchmark block dimensions, `0.020 kg` mass, inertia, friction, support-pad dimensions/positions, and target region;
+- benchmark work-surface contact parameters.
 
-Joint order and ranges used by the executed Phase 2A Menagerie-derived plant:
+These parameters support a controlled simulator benchmark. They are not measured laboratory geometry or installed-hardware calibration.
 
-| Order | Joint | Joint range rad | Actuator control range rad |
-| ---: | --- | --- | --- |
-| 1 | `shoulder_pan` | -1.91986 .. 1.91986 | -1.91986 .. 1.91986 |
-| 2 | `shoulder_lift` | -1.7453293 .. 1.7453293 | -1.74533 .. 1.74533 |
-| 3 | `elbow_flex` | -1.69 .. 1.69 | -1.69 .. 1.69 |
-| 4 | `wrist_flex` | -1.658063 .. 1.658063 | -1.65806 .. 1.65806 |
-| 5 | `wrist_roll` | -2.7438473 .. 2.7438473 | -2.74385 .. 2.84121 |
-| 6 | `gripper` | -0.174533 .. 1.7453292 | -0.17453 .. 1.74533 |
+### Calibration-required
 
-The command layer validates both the actuator control range and the joint range; a controller target is never permission to write `qpos` directly. Thus, a `wrist_roll` target between the Menagerie joint maximum and actuator control maximum is rejected by the Phase 2A contract even though it falls within the actuator's declared control range.
+Hardware-aligned fidelity requires independent measurement or validation of at least joint zero offsets and usable limits, installed servo configuration/gains/latency, torque-speed and effort limits, backlash/friction/compliance, gripper opening/force/friction/fingertip geometry, mount/tool/camera configuration, payload mass/centre of mass, work-surface properties, and model-to-hardware trajectory error.
 
-## Parameter evidence classes
+## Normal SO-101 physical IDE architecture
 
-### SOURCE-DERIVED
+The supported SO-101 workspace is `SO-101 Physical Block Transfer` (`so101-physical-block-transfer`). It uses the manipulation package above through one authoritative browser `PhysicsSession` backed by MuJoCo.
 
-- six-actuated-joint hierarchy and body transforms retained from the pinned Menagerie model;
-- joint names, order, local axes, and the **Menagerie simulation joint limits** used by this Phase 2A plant;
-- explicit masses, inertial-frame positions, and full inertia tensors for the retained articulated bodies listed above;
-- 0.005 s fixed MuJoCo timestep;
-- `implicitfast` integrator and the pinned solver settings;
-- one position actuator per modeled joint and the pinned actuator control ranges;
-- primitive arm/gripper collision geometry copied from the pinned Menagerie model where retained;
-- gripper mechanism topology: one fixed jaw plus one actuated moving jaw;
-- source camera-mount visual-mesh mass value of `0.012 kg` as a Menagerie fact, although that child is not represented in the Phase 2A adapted MJCF.
+- Live Python uses `robobuddy.sim.v1`, SI units, radians, and fixed simulation-time advancement.
+- A command acknowledgement means the target was accepted/latched; it is not target achievement.
+- WebMCP uses versioned schema `robobuddy.so101.physical.v1` with explicit radian targets and bounded physics-step/time budgets.
+- Python and WebMCP route to the same current PhysicsSession and reject stale session/epoch ownership.
+- The Three.js canonical SO-101 rig is presentation-only. MuJoCo radians are converted at the rendering boundary; the benchmark block is rendered directly from the MuJoCo body observation.
+- Rendering does not advance physics.
+- Task evaluation consumes the same MuJoCo observations. Success requires observed gripper contact, lift, carried contact, release, target inclusion, post-release target-support contact after elapsed simulation settling time, and final rest. Program completion or a commanded endpoint is not success.
+- Reset is deterministic initial-condition creation. It clears task evidence and does not count as recovery of a failed manipulation.
 
-### ESTIMATED
+## Supported and deferred SO-101 tasks
 
-The pinned Menagerie file explicitly states that its STS3215 position gains are not a one-to-one mapping of LeRobot servo gains and that they were calculated assuming a proportional gain of 16. Therefore the following source-provided simulation values are treated as estimated physical parameters rather than authoritative hardware measurements:
+### Supported
 
-- `kp = 998.22`;
-- `kv = 2.731`;
-- `forcerange = -2.94 .. 2.94`;
-- STS3215 damping `0.60`, friction loss `0.052`, and armature `0.028` for hardware-fidelity claims;
-- the visual-only Phase 2A `base_proxy` shape;
-- any visual/collision completeness implied by the primitive-only diagnostic adaptation.
+`so101-physical-block-transfer` is the only task exposed as completed physical SO-101 functionality in this milestone. It is deliberately a rigid-body benchmark, not a hardware-calibrated laboratory operation.
 
-### CALIBRATION-REQUIRED
+### Deferred
 
-Before hardware-aligned fidelity can be claimed for an assembled SO-101, independently measure or verify at least:
+The following legacy RoboBuddy_AI definitions remain read-only provenance/regression fixtures but are not exposed as completed physical SO-101 tasks:
 
-- actual joint zero/calibration offsets and usable limits, explicitly including reconciliation of the `wrist_roll` Menagerie/project-source discrepancy;
-- installed servo model, firmware/configuration, gain and latency behavior;
-- torque-speed/effort behavior and sustained/transient limits;
-- backlash, friction, compliance, and mechanical play;
-- gripper opening mapping, contact friction, grip force, and fingertip geometry;
-- mount, tool/camera configuration, payload mass/centre of mass, and work-surface properties;
-- model-to-hardware trajectory error across the intended task range.
+- `so101-v2-06-quantitative-transfer`: current dry two-bottle staging concept is potentially rigid-body defensible, but needs validated bottle geometry, multi-object grasps/releases, and controller evidence. Liquid transfer remains unsupported.
+- `so101-v2-08-burette-initial-reading`: current dry bottle/beaker clearance concept is potentially rigid-body defensible, but needs validated glassware/burette fixtures and multi-object manipulation. Filling, dispensing, meniscus reading, and liquid metrology remain unsupported.
+- `so101-v2-09-vacuum-filtration`: current dry keep-clear concept is potentially rigid-body defensible, but needs validated workcell geometry and multi-object manipulation. Vacuum, hose coupling, pressure, filtration, and liquids remain unsupported.
 
-Before Phase 2B manipulation fidelity is claimed for the simulator itself, restore or explicitly re-model and validate the omitted source payload/collision features that can affect gripper and contact dynamics, including the camera-mount contribution if that is the target hardware variant.
+No legacy task is preserved by adding fake liquid behavior, hidden grasp attachment, object teleportation, assisted animation semantics, or unjustified contact parameters.
 
-## Phase 2A limitations
+## Validation boundary
 
-This package is intended only to prove model-driven loading, deterministic reset, bounded actuator-target motion, multi-joint numerical stability, and browser/native MuJoCo conformance for the adapted Phase 2A plant. It does not establish hardware fidelity, manufacturer-limit fidelity, or complete Menagerie-model equivalence. It intentionally does not implement grasping, block transfer, bottle/glassware manipulation, task completion logic, or production Python/WebMCP routing; those remain Phase 2B work.
+Browser/native MuJoCo agreement and the P4 positive/negative/sensitivity tests validate meaningful behavior of the declared simulator package. They do not establish hardware calibration or parity with a specific assembled SO-101. Future hardware claims require separate physical measurements and acceptance criteria.

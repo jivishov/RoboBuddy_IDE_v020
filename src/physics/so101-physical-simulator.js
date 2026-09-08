@@ -5,7 +5,11 @@ import { BrowserMuJoCoBackend } from './browser-mujoco-backend.js';
 import { PhysicsSession } from './session.js';
 import { SO101_MANIPULATION_MODEL_PACKAGE } from './model-packages.js';
 import { SO101_MANIPULATION_SCENE } from './so101-scene.js';
-import { So101BlockTransferEvaluator, hasSo101BlockGripperContact } from './so101-task-evaluator.js';
+import {
+  So101BlockTransferEvaluator,
+  hasSo101BlockGripperContact,
+  hasSo101BlockTargetSupportContact,
+} from './so101-task-evaluator.js';
 
 const RAD_TO_DEG = 180 / Math.PI;
 const MAX_WEBMCP_ADVANCE_SECONDS = 2;
@@ -182,12 +186,20 @@ export class So101PhysicalSimulator {
 
   isHighContrastSceneEnabled() { return this.highContrast; }
 
-  isReady() { return Boolean(this.ready && this.session && this.lastObservation); }
+  isReady() {
+    return Boolean(
+      this.ready
+      && this.session
+      && this.lastObservation
+      && this.session.sceneRevision
+      && this.session.robotId
+    );
+  }
 
   getPhysicalSession() { return this.session; }
 
   getPhysicalAuthorityToken() {
-    if (!this.session || !this.lastObservation) return null;
+    if (!this.isReady()) return null;
     return Object.freeze({
       sessionId: this.session.sessionId,
       epoch: this.session.epoch,
@@ -220,6 +232,7 @@ export class So101PhysicalSimulator {
     return {
       contact_count: Number(observation.contactCount || 0),
       block_gripper_contact: hasSo101BlockGripperContact(observation),
+      block_target_support_contact: hasSo101BlockTargetSupportContact(observation),
       grasp_contact_seen: evaluation.contactSeen,
       lift_seen: evaluation.liftSeen,
       carry_seen: evaluation.carrySeen,
@@ -415,7 +428,7 @@ export class So101PhysicalSimulator {
 
   #assertReady() {
     this.#assertNotDisposed();
-    if (!this.ready || !this.session || !this.lastObservation) throw new Error('SO-101 physical session is not ready');
+    if (!this.isReady()) throw new Error('SO-101 physical session is not ready');
   }
 
   #assertNotDisposed() {

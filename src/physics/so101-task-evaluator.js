@@ -6,20 +6,23 @@ const BLOCK_HALF_Z_M = SO101_MANIPULATION_MODEL_PACKAGE.benchmark.object.dimensi
 const LIFT_CLEARANCE_M = 0.030;
 const CARRY_HORIZONTAL_M = 0.050;
 const REST_Z_TOLERANCE_M = 0.012;
-const REST_MOTION_TOLERANCE_M = 1e-5;
-const REST_MIN_SAMPLE_SECONDS = 0.10;
+const REST_MIN_SETTLE_SECONDS = 0.20;
 const GRIPPER_GEOM_RE = /^(fixed_jaw_|moving_jaw_)/;
 
 function finiteVec3(value) {
   return Array.isArray(value) && value.length === 3 && value.every((item) => Number.isFinite(Number(item)));
 }
 
-function distance3(a, b) {
-  return Math.sqrt(a.reduce((sum, value, index) => sum + ((Number(value) - Number(b[index])) ** 2), 0));
-}
-
 function horizontalDistance(a, b) {
   return Math.hypot(Number(a[0]) - Number(b[0]), Number(a[1]) - Number(b[1]));
+}
+
+function hasNamedPair(observation, first, second) {
+  return (observation?.contacts || []).some((contact) => {
+    const a = contact?.geom1Name;
+    const b = contact?.geom2Name;
+    return (a === first && b === second) || (a === second && b === first);
+  });
 }
 
 export function hasSo101BlockGripperContact(observation) {
@@ -29,6 +32,10 @@ export function hasSo101BlockGripperContact(observation) {
     return (a === 'benchmark_block_geom' && GRIPPER_GEOM_RE.test(b || ''))
       || (b === 'benchmark_block_geom' && GRIPPER_GEOM_RE.test(a || ''));
   });
+}
+
+export function hasSo101BlockTargetSupportContact(observation) {
+  return hasNamedPair(observation, 'benchmark_block_geom', 'benchmark_target_support');
 }
 
 function blockPosition(observation) {
@@ -52,6 +59,7 @@ export class So101BlockTransferEvaluator {
     this.maxHorizontalTravelM = 0;
     this.contactObservationCount = 0;
     this.carriedContactObservationCount = 0;
+    this.targetSupportContactObservationCount = 0;
     this.contactSeen = false;
     this.liftSeen = false;
     this.carrySeen = false;
@@ -59,6 +67,7 @@ export class So101BlockTransferEvaluator {
     this.settleSeen = false;
     this.inTarget = false;
     this.currentGripperContact = false;
+    this.currentTargetSupportContact = false;
     this.lastObservation = null;
     if (initialObservation) this.observe(initialObservation);
     return this.snapshot();
@@ -74,11 +83,14 @@ export class So101BlockTransferEvaluator {
     this.maxHorizontalTravelM = Math.max(this.maxHorizontalTravelM, horizontalDistance(positionM, this.initialPositionM));
 
     const gripperContact = hasSo101BlockGripperContact(observation);
+    const targetSupportContact = hasSo101BlockTargetSupportContact(observation);
     this.currentGripperContact = gripperContact;
+    this.currentTargetSupportContact = targetSupportContact;
     if (gripperContact) {
       this.contactSeen = true;
       this.contactObservationCount += 1;
     }
+    if (targetSupportContact) this.targetSupportContactObservationCount += 1;
 
     const liftThresholdM = SUPPORT_Z_M + BLOCK_HALF_Z_M + LIFT_CLEARANCE_M;
     if (this.contactSeen && positionM[2] > liftThresholdM) this.liftSeen = true;
@@ -91,19 +103,22 @@ export class So101BlockTransferEvaluator {
     const [halfX, halfY] = this.goal.targetHalfExtentsXYM;
     this.inTarget = Math.abs(positionM[0] - targetX) <= halfX && Math.abs(positionM[1] - targetY) <= halfY;
 
-    if (this.carrySeen && this.contactSeen && !gripperContact) {
-      if (!this.releaseSeen) {
-        this.releaseSeen = true;
-        this.firstReleasedPositionM = [...positionM];
-        this.firstReleasedTimeSeconds = simulationTimeSeconds;
-      }
+    if (this.carrySeen && this.contactSeen && !gripperContact && !this.releaseSeen) {
+      this.releaseSeen = true;
+      this.firstReleasedPositionM = [...positionM];
+      this.firstReleasedTimeSeconds = simulationTimeSeconds;
     }
 
-    if (this.releaseSeen && this.lastPositionM && this.lastSimulationTimeSeconds != null) {
-      const dt = simulationTimeSeconds - this.lastSimulationTimeSeconds;
+    if (this.releaseSeen && this.firstReleasedTimeSeconds != null) {
+      const elapsedSinceRelease = simulationTimeSeconds - this.firstReleasedTimeSeconds;
       const nearSupport = Math.abs(positionM[2] - (SUPPORT_Z_M + BLOCK_HALF_Z_M)) < REST_Z_TOLERANCE_M;
-      const settledMotion = distance3(positionM, this.lastPositionM);
-      if (dt >= REST_MIN_SAMPLE_SECONDS && nearSupport && settledMotion < REST_MOTION_TOLERANCE_M) this.settleSeen = true;
+      if (elapsedSinceRelease >= REST_MIN_SETTLE_SECONDS
+        && nearSupport
+        && this.inTarget
+        && targetSupportContact
+        && !gripperContact) {
+        this.settleSeen = true;
+      }
     }
 
     this.lastPositionM = [...positionM];
@@ -121,6 +136,7 @@ export class So101BlockTransferEvaluator {
       && this.releaseSeen
       && this.settleSeen
       && this.inTarget
+      && this.currentTargetSupportContact
       && !this.currentGripperContact
     );
     return Object.freeze({
@@ -134,8 +150,10 @@ export class So101BlockTransferEvaluator {
       settleSeen: this.settleSeen,
       inTarget: this.inTarget,
       currentGripperContact: this.currentGripperContact,
+      currentTargetSupportContact: this.currentTargetSupportContact,
       contactObservationCount: this.contactObservationCount,
       carriedContactObservationCount: this.carriedContactObservationCount,
+      targetSupportContactObservationCount: this.targetSupportContactObservationCount,
       initialPositionM: this.initialPositionM ? [...this.initialPositionM] : null,
       finalPositionM,
       maxBlockZM: Number.isFinite(this.maxBlockZM) ? this.maxBlockZM : null,
@@ -144,7 +162,7 @@ export class So101BlockTransferEvaluator {
       targetHalfExtentsXYM: [...this.goal.targetHalfExtentsXYM],
       supportTopZM: SUPPORT_Z_M,
       blockHalfZM: BLOCK_HALF_Z_M,
-      evidence: 'MuJoCo ground-truth observations and named geometry contacts; no hardware-validation claim.',
+      evidence: 'MuJoCo ground-truth body positions and named geometry contacts; settling requires post-release target-support contact and elapsed simulation time. No hardware-validation claim.',
     });
   }
 }

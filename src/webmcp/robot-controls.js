@@ -14,7 +14,14 @@ const DEFAULT_SO101_COMMAND_STEPS = 1000;
 const MAX_SO101_COMMAND_STEPS = 5000;
 
 const SO101_PHYSICAL_RANGES = Object.freeze(Object.fromEntries(
-  SO101_MANIPULATION_MODEL_PACKAGE.joints.map((joint) => [joint.id, Object.freeze([...joint.rangeRad])]),
+  SO101_MANIPULATION_MODEL_PACKAGE.joints.map((joint) => {
+    const actuator = SO101_MANIPULATION_MODEL_PACKAGE.actuators.find((item) => item.jointId === joint.id);
+    if (!actuator) throw new Error(`SO-101 physical WebMCP has no actuator for ${joint.id}`);
+    const minimum = Math.max(Number(joint.rangeRad[0]), Number(actuator.controlRangeRad[0]));
+    const maximum = Math.min(Number(joint.rangeRad[1]), Number(actuator.controlRangeRad[1]));
+    if (!Number.isFinite(minimum) || !Number.isFinite(maximum) || minimum >= maximum) throw new Error(`SO-101 physical WebMCP has no valid control intersection for ${joint.id}`);
+    return [joint.id, Object.freeze([minimum, maximum])];
+  }),
 ));
 
 const TOOL_META = Object.freeze({
@@ -201,7 +208,7 @@ function captureControlContext(facade, profileId, expectedEpoch) {
   if (profileId === 'so101' && context.simulationMode !== 'physical_mujoco') throw new WebMcpDomainError('PROFILE_MISMATCH', 'SO-101 direct control requires the physical MuJoCo workspace.');
   if (facade.app.getExecutionState() !== 'idle') throw new WebMcpDomainError('SIMULATION_BUSY', 'Stop or finish the active Python run before direct WebMCP simulation control.', { retryable: true });
   const physicalAuthority = profileId === 'so101' ? facade.app.sim.getPhysicalAuthorityToken?.() : null;
-  if (profileId === 'so101' && !physicalAuthority) throw new WebMcpDomainError('SIMULATION_NOT_READY', 'SO-101 physical authority is unavailable.', { retryable: true });
+  if (profileId === 'so101' && !physicalAuthority?.sessionId) throw new WebMcpDomainError('SIMULATION_NOT_READY', 'SO-101 physical authority is unavailable.', { retryable: true });
   return Object.freeze({
     profileId,
     workspaceGeneration: context.workspaceGeneration,

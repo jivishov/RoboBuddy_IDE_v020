@@ -41,6 +41,8 @@ jobs:
           node --check src/physics/mujoco-worker.js
           node --check src/physics/phase1-scene.js
           node --check src/physics/so101-scene.js
+          node --check src/physics/so101-task-evaluator.js
+          node --check src/physics/so101-physical-simulator.js
           node --check src/physics/session.js
           node --check src/physics/ui-status.js
           node --check src/runtime/live-python-bridge.js
@@ -57,17 +59,23 @@ jobs:
           node --check src/microduck/python-worker.js
           node --check src/microduck/rig-adapter.js
           node --check src/webmcp/agent-facade.js
+          node --check src/webmcp/physical-agent-facade.js
           node --check src/webmcp/microduck-control.js
+          node --check src/webmcp/robot-controls.js
           node --check src/webmcp/register-ide-tools.js
           node --check tests/physics/model-registry-core.mjs
           node --check tests/physics/vertical-slice-core.mjs
           node --check tests/physics/live-python-bridge-core.mjs
           node --check tests/physics/physical-python-runtime-core.mjs
           node --check tests/physics/so101-manipulation-core.mjs
+          node --check tests/physics/so101-task-evaluator-core.mjs
           node --check tests/physics-slice-browser.spec.mjs
           node --check tests/physics-load-failure-browser.spec.mjs
           node --check tests/so101-physics-browser.spec.mjs
           node --check tests/so101-live-python-browser.spec.mjs
+          node --check tests/so101-manipulation-browser.spec.mjs
+          node --check tests/so101-ide-physical-browser.spec.mjs
+          node --check tests/webmcp-robot-controls.spec.mjs
           node --check tests/microduck-starter-timing.mjs
           node --check tests/helpers/microduck-timing.mjs
           node --check tests/microduck-control-timing-core.mjs
@@ -86,8 +94,10 @@ jobs:
           node tests/physics/model-registry-core.mjs
           node tests/physics/live-python-bridge-core.mjs
           node tests/physics/physical-python-runtime-core.mjs
-      - name: SO-101 manipulation package contract checks
-        run: node tests/physics/so101-manipulation-core.mjs
+      - name: SO-101 manipulation package and evaluator contract checks
+        run: |
+          node tests/physics/so101-manipulation-core.mjs
+          node tests/physics/so101-task-evaluator-core.mjs
       - name: MicroDuck asset and policy contracts
         run: |
           node tests/validate_microduck_assets.mjs
