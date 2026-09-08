@@ -52,7 +52,7 @@ export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
     url: 'https://github.com/google-deepmind/mujoco_menagerie/blob/8161bba264d7fa7c99ca301e91e7fb44737676ad/robotstudio_so101/so101.xml',
     revision: '8161bba264d7fa7c99ca301e91e7fb44737676ad',
     upstreamRevision: 'aec17bbc256d1a7342d53aaa4950595d4c30b40d',
-    variant: 'The Robot Studio SO-101 follower arm; Phase 2A self-contained adaptation omits the source camera-mount child',
+    variant: 'Pinned MuJoCo Menagerie SO-101 simulation adaptation of The Robot Studio follower arm; Phase 2A self-contained adaptation omits the source camera-mount child',
   },
   license: 'Apache-2.0',
   asset: 'models/so101/model.xml',
@@ -72,6 +72,7 @@ export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
   },
   limitations: [
     'Phase 2A articulated-plant validation package only; normal IDE capability is not promoted yet.',
+    'The pinned Menagerie wrist_roll upper joint limit is 2.7438473 rad, while The Robot Studio source revision recorded by Menagerie uses about 2.8412063 rad; RoboBuddy preserves the pinned Menagerie simulation constraint and does not present it as a measured hardware limit.',
     'Upstream visual meshes, mesh gripper collisions, the camera-mount child and some nonessential source collision geometry are omitted from this self-contained browser validation MJCF.',
     'The omitted upstream camera-mount child carries a source mesh mass of 0.012 kg, so this adapted plant must not be described as dynamically identical to the full pinned Menagerie model.',
     'Servo gains/force settings are upstream simulation estimates, not hardware calibration.',
