@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { writeFile } from 'node:fs/promises';
 
 test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels, Python, renderer, evaluator, and WebMCP', async ({ page }, testInfo) => {
   test.setTimeout(240_000);
@@ -8,6 +9,35 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
   await page.locator('#robotSelect').selectOption('openarm');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
+
+  const startupUi = {
+    taskValue: await page.locator('#taskSelect').inputValue(),
+    taskPanelText: await page.locator('#taskPanel').textContent(),
+    modeChipText: await page.locator('#modeChip').textContent(),
+    physicsBadgeText: await page.locator('#physicsBackendBadge').textContent(),
+    stepDisabled: await page.locator('#stepBtn').isDisabled(),
+    cursorDisabled: await page.locator('#cursorBtn').isDisabled(),
+    visualSource: await page.locator('#simCanvas').getAttribute('data-openarm-visual-source'),
+    legacyBaseYawRendered: await page.locator('#simCanvas').getAttribute('data-openarm-legacy-base-yaw-rendered'),
+    canvasBackend: await page.locator('#simCanvas').getAttribute('data-simulator-backend'),
+    canvasAuthority: await page.locator('#simCanvas').getAttribute('data-simulation-authority'),
+    runtime: await page.evaluate(() => {
+      const app = window.__robobuddyCi?.app;
+      const backend = app?.sim?.backend;
+      return {
+        appPresent: Boolean(app),
+        backendName: backend?.constructor?.name || null,
+        hasPresentationAudit: typeof backend?.getPresentationAudit === 'function',
+        authority: app?.sim?.getPhysicalAuthorityToken?.() || null,
+        model: app?.sim?.getState?.()?.observation?.model || null,
+      };
+    }),
+    pageErrors: [...pageErrors],
+  };
+  const startupPath = testInfo.outputPath('openarm-startup-audit.json');
+  await writeFile(startupPath, JSON.stringify(startupUi, null, 2));
+  await testInfo.attach('openarm-startup-audit.json', { path: startupPath, contentType: 'application/json' });
+
   await expect(page.locator('#taskSelect')).toHaveValue('openarm-04-filtration-workcell');
   await expect(page.locator('#taskPanel')).toContainText('Bimanual Heater and Ring-Stand Stack');
   await expect(page.locator('#modeChip')).toContainText('OPENARM V2 PHYSICAL WORKSPACE');
@@ -35,10 +65,9 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
       rightEe: state?.observation?.bodies?.openarm_right_ee_base_link?.positionM,
     };
   });
-  await testInfo.attach('openarm-initial-state.json', {
-    body: Buffer.from(JSON.stringify({ ...initial, pageErrors }, null, 2)),
-    contentType: 'application/json',
-  });
+  const initialPath = testInfo.outputPath('openarm-initial-state.json');
+  await writeFile(initialPath, JSON.stringify({ ...initial, pageErrors }, null, 2));
+  await testInfo.attach('openarm-initial-state.json', { path: initialPath, contentType: 'application/json' });
   expect(initial.backend).toBe('OpenArmPhysicalSimulator');
   expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v2' });
   expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v2', asset: 'models/openarm_v2/manipulation.xml' });
@@ -102,10 +131,9 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
       canvasAuthority: document.querySelector('#simCanvas').dataset.simulationAuthority,
     };
   });
-  await testInfo.attach('openarm-completed-state.json', {
-    body: Buffer.from(JSON.stringify({ ...completed, pageErrors }, null, 2)),
-    contentType: 'application/json',
-  });
+  const completedPath = testInfo.outputPath('openarm-completed-state.json');
+  await writeFile(completedPath, JSON.stringify({ ...completed, pageErrors }, null, 2));
+  await testInfo.attach('openarm-completed-state.json', { path: completedPath, contentType: 'application/json' });
   expect(completed.evaluation.success).toBe(true);
   expect(completed.evaluation.orderViolation).toBe(false);
   for (const object of [completed.evaluation.flask, completed.evaluation.beaker]) {
