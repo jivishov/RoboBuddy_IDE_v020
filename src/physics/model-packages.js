@@ -44,14 +44,21 @@ const SO101_CONTROL_RANGES = Object.freeze({
   gripper: [-0.17453, 1.74533],
 });
 
+const SO101_SOURCE = Object.freeze({
+  url: 'https://github.com/google-deepmind/mujoco_menagerie/blob/8161bba264d7fa7c99ca301e91e7fb44737676ad/robotstudio_so101/so101.xml',
+  revision: '8161bba264d7fa7c99ca301e91e7fb44737676ad',
+  upstreamRevision: 'aec17bbc256d1a7342d53aaa4950595d4c30b40d',
+});
+
+const so101Joints = () => SO101_JOINTS.map(([id, rangeRad]) => ({ id, rangeRad, axis: [0, 0, 1], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED }));
+const so101Actuators = () => SO101_JOINTS.map(([id]) => ({ id, jointId: id, controllerId: 'so101_position', command: 'position-rad', controlRangeRad: SO101_CONTROL_RANGES[id], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED }));
+
 export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
   id: 'so101-phase2a-menagerie-8161bba',
   robotId: 'so101_follower',
   modelId: 'robobuddy-so101-phase2a-v1',
   source: {
-    url: 'https://github.com/google-deepmind/mujoco_menagerie/blob/8161bba264d7fa7c99ca301e91e7fb44737676ad/robotstudio_so101/so101.xml',
-    revision: '8161bba264d7fa7c99ca301e91e7fb44737676ad',
-    upstreamRevision: 'aec17bbc256d1a7342d53aaa4950595d4c30b40d',
+    ...SO101_SOURCE,
     variant: 'Pinned MuJoCo Menagerie SO-101 simulation adaptation of The Robot Studio follower arm; Phase 2A self-contained adaptation omits the source camera-mount child',
   },
   license: 'Apache-2.0',
@@ -59,8 +66,8 @@ export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
   sha256: '8573559b58eb522ca80c8cd4c88d30e0b2ab20fb222f67c57e3808a4783af085',
   physics: { timestepSeconds: 0.005, integrator: 'implicitfast', iterations: 10, lsIterations: 20 },
   controllers: ['so101_position'],
-  joints: SO101_JOINTS.map(([id, rangeRad]) => ({ id, rangeRad, axis: [0, 0, 1], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED })),
-  actuators: SO101_JOINTS.map(([id]) => ({ id, jointId: id, controllerId: 'so101_position', command: 'position-rad', controlRangeRad: SO101_CONTROL_RANGES[id], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED })),
+  joints: so101Joints(),
+  actuators: so101Actuators(),
   bodies: [{ id: 'base' }, { id: 'gripper' }, { id: 'moving_jaw_so101_v1' }],
   evidence: {
     kinematics: PARAMETER_EVIDENCE.SOURCE_DERIVED,
@@ -79,5 +86,56 @@ export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
     'The Phase 2A-only base_proxy is visual-only and non-colliding so it cannot introduce source-unsupported contact.',
     'Servo gains/force settings are upstream simulation estimates, not hardware calibration.',
     'No grasp/block-transfer task or hardware-fidelity claim in Phase 2A.',
+  ],
+});
+
+export const SO101_MANIPULATION_MODEL_PACKAGE = registerModelPackage({
+  id: 'so101-manipulation-menagerie-8161bba-v1',
+  robotId: 'so101_follower',
+  modelId: 'robobuddy-so101-manipulation-v1',
+  source: {
+    ...SO101_SOURCE,
+    variant: 'Manipulation-ready self-contained adaptation of the pinned Menagerie SO-101 with source camera collision boxes and source 0.012 kg camera-mount mass restored through an explicit box-inertia surrogate',
+  },
+  license: 'Apache-2.0 for SO-101-derived model; repository-authored synthetic benchmark workcell is MIT',
+  asset: 'models/so101/manipulation.xml',
+  sha256: '0ed13e4b8f21558f8501d8d03fc26140c207cf05f4894ed108a13e58718d9125',
+  physics: { timestepSeconds: 0.005, integrator: 'implicitfast', iterations: 10, lsIterations: 20 },
+  controllers: ['so101_position'],
+  joints: so101Joints(),
+  actuators: so101Actuators(),
+  bodies: [{ id: 'base' }, { id: 'gripper' }, { id: 'camera_mount' }, { id: 'moving_jaw_so101_v1' }, { id: 'benchmark_block' }],
+  initialJointPositionsRad: {
+    shoulder_pan: 0,
+    shoulder_lift: -0.18,
+    elbow_flex: 0,
+    wrist_flex: 0,
+    wrist_roll: Math.PI / 2,
+    gripper: 0.60,
+  },
+  sceneConstraints: { fixtures: ['benchmark_work_surface', 'benchmark_target_region'], objects: ['benchmark_block'] },
+  benchmark: {
+    object: { id: 'benchmark_block', dimensionsM: [0.016, 0.012, 0.014], massKg: 0.020, inertiaKgM2: [5.6666667e-7, 7.5333333e-7, 6.6666667e-7], friction: [0.8, 0.005, 0.0001] },
+    workSurface: { topZM: 0.227, friction: [0.8, 0.005, 0.0001] },
+    target: { centerXYM: [0.358, -0.156], halfExtentsXYM: [0.030, 0.030] },
+    controllerVersion: 'so101-benchmark-transfer-v1',
+  },
+  evidence: {
+    kinematics: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    actuatedLinkInertias: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    gripperCollisionPrimitives: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    cameraMountMassAndCollisionBoxes: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    cameraMountInertiaDistribution: PARAMETER_EVIDENCE.ESTIMATED,
+    servoControllerParameters: PARAMETER_EVIDENCE.ESTIMATED,
+    benchmarkObjectAndSurface: PARAMETER_EVIDENCE.ESTIMATED,
+    hardwareAlignment: PARAMETER_EVIDENCE.CALIBRATION_REQUIRED,
+  },
+  limitations: [
+    'Controlled synthetic benchmark workcell for physical-manipulation verification; object dimensions, mass and surface friction are declared benchmark parameters, not measured laboratory hardware.',
+    'The source camera-mount mesh mass is restored as 0.012 kg using the pinned source camera collision boxes; the resulting box-derived inertia is an explicit approximation, not the source mesh inertia.',
+    'Source gripper collision primitives are retained, while upstream collision meshes/visual meshes remain omitted for browser economy; grasp conclusions apply only to this declared benchmark geometry.',
+    'Servo gains and 2.94 N m force range are upstream simulation estimates and are not calibrated measurements of the installed SO-101 servos.',
+    'The pinned Menagerie wrist_roll joint limit remains authoritative for this simulation package; the known wider Robot Studio source value is not substituted to make the task easier.',
+    'No hardware trajectory-error, backlash, compliance, fingertip-friction, work-surface-friction, servo-latency, or installed-tool calibration has been performed.',
   ],
 });

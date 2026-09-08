@@ -84,6 +84,27 @@ function observation() {
   return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts };
 }
 
+function applyDeclaredInitialState() {
+  if (!model || !data || !descriptor) throw new Error('No MuJoCo model is loaded');
+  mujoco.mj_resetData(model, data);
+  const initial = descriptor.initialJointPositionsRad || {};
+  if (!initial || typeof initial !== 'object' || Array.isArray(initial)) throw new Error('initialJointPositionsRad must be an object when provided');
+  for (const [jointId, raw] of Object.entries(initial)) {
+    const joint = jointState.get(jointId);
+    if (!joint) throw new Error(`Initial state references unknown joint ${jointId}`);
+    const value = Number(raw);
+    if (!Number.isFinite(value)) throw new Error(`Initial state for ${jointId} must be finite radians`);
+    if (joint.range.every(Number.isFinite) && (value < joint.range[0] || value > joint.range[1])) throw new RangeError(`Initial state ${value} is outside joint ${jointId} range ${joint.range[0]}..${joint.range[1]}`);
+    const actuator = positionActuatorForJoint(jointId);
+    if (actuator && (value < actuator.controlRange[0] || value > actuator.controlRange[1])) throw new RangeError(`Initial state ${value} is outside actuator ${actuator.id} control range ${actuator.controlRange[0]}..${actuator.controlRange[1]}`);
+    data.qpos[joint.qpos] = value;
+    if (actuator) data.ctrl[actuator.id] = value;
+  }
+  paused = false;
+  mujoco.mj_forward(model, data);
+  return observation();
+}
+
 function disposeModel() { try { data?.delete?.(); } catch {} try { model?.delete?.(); } catch {} data = null; model = null; descriptor = null; jointState = new Map(); actuatorState = new Map(); bodyState = new Map(); modelInfo = null; paused = false; }
 async function load(modelPackage) {
   if (!modelPackage?.id || !modelPackage?.asset || !modelPackage?.sha256 || !Array.isArray(modelPackage.joints) || !Array.isArray(modelPackage.actuators)) throw new Error('Worker requires a validated registered model package descriptor');
@@ -91,9 +112,9 @@ async function load(modelPackage) {
   const xml = await fetch(modelUrl, { cache: 'no-store' }).then((response) => { if (!response.ok) throw new Error(`MuJoCo model returned HTTP ${response.status}`); return response.text(); });
   const modelSha256 = await sha256Text(xml); if (modelSha256 !== modelPackage.sha256) throw new Error(`Model SHA-256 mismatch for ${modelPackage.id}`);
   model = mj.from_xml_string(xml); if (!model) throw new Error(`MuJoCo failed to compile ${modelPackage.id}`); data = new mj.MjData(model); if (!data) throw new Error(`MuJoCo failed to allocate data for ${modelPackage.id}`);
-  descriptor = structuredClone(modelPackage); resolveModelAddresses(modelSha256); paused = false; mj.mj_forward(model, data); return observation();
+  descriptor = structuredClone(modelPackage); resolveModelAddresses(modelSha256); return applyDeclaredInitialState();
 }
-function reset() { if (!model || !data) throw new Error('No MuJoCo model is loaded'); mujoco.mj_resetData(model, data); paused = false; mujoco.mj_forward(model, data); return observation(); }
+function reset() { if (!model || !data) throw new Error('No MuJoCo model is loaded'); return applyDeclaredInitialState(); }
 function step(count = 1) { if (!model || !data) throw new Error('No MuJoCo model is loaded'); if (paused) return observation(); if (!Number.isInteger(count) || count < 1 || count > MAX_STEP_BATCH) throw new RangeError(`step count must be an integer from 1 to ${MAX_STEP_BATCH}`); for (let index = 0; index < count; index += 1) mujoco.mj_step(model, data); return observation(); }
 function validatedJointTarget(jointId, targetValue) {
   if (!jointId || !jointState.has(jointId)) throw new Error(`Unknown declared joint ${jointId || '<missing>'}`);

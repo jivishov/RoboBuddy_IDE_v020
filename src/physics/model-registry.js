@@ -97,13 +97,37 @@ export function validateModelPackage(manifest) {
     if (joint.axis != null) finiteAxis(joint.axis, `joints[${index}].axis`);
     parameterEvidence(joint.evidence, `joints[${index}].evidence`);
   }
+  const jointIds = new Set(manifest.joints.map((item) => item.id));
+  if (manifest.initialJointPositionsRad != null) {
+    if (!manifest.initialJointPositionsRad || typeof manifest.initialJointPositionsRad !== 'object' || Array.isArray(manifest.initialJointPositionsRad)) {
+      throw new TypeError('initialJointPositionsRad must be an object when provided');
+    }
+    for (const [jointId, raw] of Object.entries(manifest.initialJointPositionsRad)) {
+      if (!jointIds.has(jointId)) throw new TypeError(`initialJointPositionsRad references unknown joint ${jointId}`);
+      const value = Number(raw);
+      if (!Number.isFinite(value)) throw new TypeError(`initialJointPositionsRad.${jointId} must be finite radians`);
+      const range = manifest.joints.find((joint) => joint.id === jointId)?.rangeRad;
+      if (range && (value < Number(range[0]) || value > Number(range[1]))) throw new RangeError(`initialJointPositionsRad.${jointId} is outside the declared joint range`);
+    }
+  }
 
   validateDescriptorList(manifest.actuators, 'actuators', ['id', 'jointId', 'controllerId', 'command']);
-  const jointIds = new Set(manifest.joints.map((item) => item.id));
   for (const [index, actuator] of manifest.actuators.entries()) {
     if (!jointIds.has(actuator.jointId)) throw new TypeError(`Actuator ${actuator.id} maps unknown joint ${actuator.jointId}`);
     if (actuator.controlRangeRad != null) finiteRange(actuator.controlRangeRad, `actuators[${index}].controlRangeRad`);
     parameterEvidence(actuator.evidence, `actuators[${index}].evidence`);
+  }
+
+  if (manifest.initialJointPositionsRad != null) {
+    const actuatorByJoint = new Map(manifest.actuators.filter((actuator) => actuator.command === 'position-rad').map((actuator) => [actuator.jointId, actuator]));
+    for (const [jointId, raw] of Object.entries(manifest.initialJointPositionsRad)) {
+      const actuator = actuatorByJoint.get(jointId);
+      if (!actuator) continue;
+      const value = Number(raw);
+      if (actuator.controlRangeRad && (value < Number(actuator.controlRangeRad[0]) || value > Number(actuator.controlRangeRad[1]))) {
+        throw new RangeError(`initialJointPositionsRad.${jointId} is outside actuator ${actuator.id} control range`);
+      }
+    }
   }
 
   if (manifest.bodies != null) validateDescriptorList(manifest.bodies, 'bodies', ['id']);

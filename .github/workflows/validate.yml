@@ -63,6 +63,7 @@ jobs:
           node --check tests/physics/vertical-slice-core.mjs
           node --check tests/physics/live-python-bridge-core.mjs
           node --check tests/physics/physical-python-runtime-core.mjs
+          node --check tests/physics/so101-manipulation-core.mjs
           node --check tests/physics-slice-browser.spec.mjs
           node --check tests/physics-load-failure-browser.spec.mjs
           node --check tests/so101-physics-browser.spec.mjs
@@ -85,6 +86,8 @@ jobs:
           node tests/physics/model-registry-core.mjs
           node tests/physics/live-python-bridge-core.mjs
           node tests/physics/physical-python-runtime-core.mjs
+      - name: SO-101 manipulation package contract checks
+        run: node tests/physics/so101-manipulation-core.mjs
       - name: MicroDuck asset and policy contracts
         run: |
           node tests/validate_microduck_assets.mjs
@@ -106,8 +109,15 @@ jobs:
         run: |
           python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
           python -m py_compile native/reference_runner.py
+          python -m py_compile native/so101_transfer_reference.py
           python native/reference_runner.py --model phase1 --target 0.8 --steps 500 > /tmp/robobuddy-native-reference.json
           python native/reference_runner.py --model so101 --joint shoulder_pan --target 0.4 --steps 100 > /tmp/robobuddy-native-so101.json
+          python native/so101_transfer_reference.py --trial positive > /tmp/robobuddy-so101-transfer-positive.json
+          python native/so101_transfer_reference.py --trial low-grip > /tmp/robobuddy-so101-transfer-low-grip.json
+          python native/so101_transfer_reference.py --trial heavy > /tmp/robobuddy-so101-transfer-heavy.json
+          python native/so101_transfer_reference.py --trial miss > /tmp/robobuddy-so101-transfer-miss.json
+          python native/so101_transfer_reference.py --trial outside > /tmp/robobuddy-so101-transfer-outside.json
+          python native/so101_transfer_reference.py --trial positive --timestep 0.0025 --iterations 20 > /tmp/robobuddy-so101-transfer-tight.json
           python - <<'PY'
           import json
           import math
@@ -134,6 +144,30 @@ jobs:
           assert abs(so101['initialJoints']['shoulder_pan']['positionRad'] - so101['joints']['shoulder_pan']['positionRad']) > 1e-4
           assert math.isfinite(so101['joints']['shoulder_pan']['velocityRadS'])
           print('Native SO-101 Phase 2A reference: OK')
+
+          positive = json.loads(Path('/tmp/robobuddy-so101-transfer-positive.json').read_text())
+          low_grip = json.loads(Path('/tmp/robobuddy-so101-transfer-low-grip.json').read_text())
+          heavy = json.loads(Path('/tmp/robobuddy-so101-transfer-heavy.json').read_text())
+          miss = json.loads(Path('/tmp/robobuddy-so101-transfer-miss.json').read_text())
+          outside = json.loads(Path('/tmp/robobuddy-so101-transfer-outside.json').read_text())
+          tight = json.loads(Path('/tmp/robobuddy-so101-transfer-tight.json').read_text())
+          assert positive['metrics']['success'] is True, positive['metrics']
+          assert positive['metrics']['lifted'] is True
+          assert positive['metrics']['physicallyCarried'] is True
+          assert positive['metrics']['inTarget'] is True
+          assert positive['metrics']['released'] is True
+          assert low_grip['metrics']['success'] is False, low_grip['metrics']
+          assert heavy['metrics']['success'] is False, heavy['metrics']
+          assert miss['metrics']['success'] is False, miss['metrics']
+          assert miss['metrics']['physicallyCarried'] is False
+          assert outside['metrics']['success'] is False, outside['metrics']
+          assert outside['metrics']['inTarget'] is False
+          assert tight['metrics']['success'] is True, tight['metrics']
+          base_final = positive['metrics']['finalPositionM']
+          tight_final = tight['metrics']['finalPositionM']
+          final_delta = math.sqrt(sum((a-b)**2 for a,b in zip(base_final, tight_final)))
+          assert final_delta <= 0.02, (base_final, tight_final, final_delta)
+          print('Native SO-101 P4 transfer/negative/sensitivity references: OK', {'finalDeltaM': final_delta})
           PY
       - name: HTML parse smoke test
         run: |
