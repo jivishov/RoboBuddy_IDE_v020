@@ -1,0 +1,101 @@
+name: OpenArm Phase 5A Fidelity
+
+on:
+  push:
+    branches: [main, "fix/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  openarm-phase5a:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Phase 5A syntax and static contracts
+        run: |
+          node --check src/task-catalog.js
+          node --check src/task-workspace.js
+          node --check src/simulator-host.js
+          node --check src/physics/mujoco-worker.js
+          node --check src/physics/openarm-model-package.js
+          node --check src/physics/openarm-scene.js
+          node --check src/physics/openarm-task-evaluator.js
+          node --check src/physics/openarm-physical-simulator.js
+          node --check src/physics/capabilities.js
+          node --check src/physics/ui-status.js
+          node --check src/webmcp/physical-agent-facade.js
+          node --check src/webmcp/robot-controls.js
+          node --check tests/physics/openarm-phase5a-core.mjs
+          node --check tests/openarm-ide-physical-browser.spec.mjs
+          node --check tests/webmcp-robot-controls.spec.mjs
+          node --check tests/webmcp.spec.mjs
+          node tests/physics/openarm-phase5a-core.mjs
+          node tests/validate_task_patch.mjs
+      - name: Native MuJoCo OpenArm Phase 5A reference and negative controls
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
+          python -m py_compile native/openarm_phase5a_reference.py
+          for trial in nominal miss weak-grip blocked-left outside loss short-budget; do
+            python native/openarm_phase5a_reference.py --trial "$trial" > "/tmp/openarm-${trial}.json"
+          done
+          python native/openarm_phase5a_reference.py --trial nominal --timestep 0.0005 > /tmp/openarm-tight.json
+          python - <<'PY'
+          import json, math
+          from pathlib import Path
+          load=lambda name: json.loads(Path(name).read_text())
+          nominal=load('/tmp/openarm-nominal.json')
+          assert nominal['engine']['version']=='3.11.0', nominal['engine']
+          assert abs(nominal['engine']['timestepSeconds']-0.001)<1e-12
+          assert nominal['success'] is True, nominal['metrics']
+          assert nominal['orderViolation'] is False
+          for key in ('flask','beaker'):
+              m=nominal['metrics'][key]
+              for flag in ('contact','lift','carry','release','support','settled','retreat','in_target'):
+                  assert m[flag] is True, (key, flag, m)
+              assert m['finalGrip'] is False and m['finalSupport'] is True
+              assert m['max_held'] >= 0.045
+              assert m['finalLinearSpeed'] <= 0.03
+          for trial in ('miss','weak-grip','blocked-left','outside','loss','short-budget'):
+              result=load(f'/tmp/openarm-{trial}.json')
+              assert result['success'] is False, (trial,result['metrics'])
+          blocked=load('/tmp/openarm-blocked-left.json')
+          assert blocked['blockedLeftTargetErrorRad'] is not None and blocked['blockedLeftTargetErrorRad'] > 0.03, blocked
+          tight=load('/tmp/openarm-tight.json')
+          assert tight['success'] is True, tight['metrics']
+          for key in ('flask','beaker'):
+              a=nominal['metrics'][key]['finalPositionM']; b=tight['metrics'][key]['finalPositionM']
+              delta=math.sqrt(sum((x-y)**2 for x,y in zip(a,b)))
+              assert delta <= 0.02, (key,a,b,delta)
+          print('Native OpenArm Phase 5A nominal/negative/sensitivity gate: OK')
+          PY
+      - name: Preserve OpenArm native evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openarm-phase5a-native-evidence
+          path: /tmp/openarm-*.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Install browser harness
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: OpenArm Phase 5A browser authority and WebMCP gates
+        run: npx playwright test tests/openarm-ide-physical-browser.spec.mjs tests/webmcp-robot-controls.spec.mjs tests/webmcp.spec.mjs --reporter=line
+      - name: Preserve OpenArm browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openarm-phase5a-browser-failure-evidence
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
