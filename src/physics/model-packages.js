@@ -60,7 +60,7 @@ export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
   physics: { timestepSeconds: 0.005, integrator: 'implicitfast', iterations: 10, lsIterations: 20 },
   controllers: ['so101_position'],
   joints: SO101_JOINTS.map(([id, rangeRad]) => ({ id, rangeRad, axis: [0, 0, 1], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED })),
-  actuators: SO101_JOINTS.map(([id]) => ({ id, jointId: id, controllerId: 'so101_position', command: 'position-rad', controlRangeRad: SO101_CONTROL_RANGES[id], evidence: PARAMETER_EVIDENCE.ESTIMATED })),
+  actuators: SO101_JOINTS.map(([id]) => ({ id, jointId: id, controllerId: 'so101_position', command: 'position-rad', controlRangeRad: SO101_CONTROL_RANGES[id], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED })),
   bodies: [{ id: 'base' }, { id: 'gripper' }, { id: 'moving_jaw_so101_v1' }],
   evidence: {
     kinematics: PARAMETER_EVIDENCE.SOURCE_DERIVED,
@@ -72,6 +72,7 @@ export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
   },
   limitations: [
     'Phase 2A articulated-plant validation package only; normal IDE capability is not promoted yet.',
+    'Actuator names, joint mappings and control ranges are source-derived from the pinned Menagerie MJCF; servo gains, effort behavior and hardware alignment remain estimated or calibration-required.',
     'The pinned Menagerie wrist_roll upper joint limit is 2.7438473 rad, while The Robot Studio source revision recorded by Menagerie uses about 2.8412063 rad; RoboBuddy preserves the pinned Menagerie simulation constraint and does not present it as a measured hardware limit.',
     'Upstream visual meshes, mesh gripper collisions, the camera-mount child and some nonessential source collision geometry are omitted from this self-contained browser validation MJCF.',
     'The omitted upstream camera-mount child carries a source mesh mass of 0.012 kg, so this adapted plant must not be described as dynamically identical to the full pinned Menagerie model.',
