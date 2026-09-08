@@ -1,12 +1,14 @@
 import { SourceRobotSimulator } from './source-simulator.js';
 import { MicroDuckPolicySimulator } from './microduck/policy-simulator.js';
 import { So101PhysicalSimulator } from './physics/so101-physical-simulator.js';
+import { OpenArmPhysicalSimulator } from './physics/openarm-physical-simulator.js';
 
 export class SimulatorHost {
   constructor(canvas, {
     sourceFactory = (target) => new SourceRobotSimulator(target, { externalClock: true }),
     microduckFactory = (target) => new MicroDuckPolicySimulator(target, { externalClock: true }),
     so101PhysicalFactory = (target) => new So101PhysicalSimulator(target),
+    openarmPhysicalFactory = (target) => new OpenArmPhysicalSimulator(target),
   } = {}) {
     this.canvas = canvas;
     this.epoch = 0;
@@ -16,6 +18,7 @@ export class SimulatorHost {
     this.sourceFactory = sourceFactory;
     this.microduckFactory = microduckFactory;
     this.so101PhysicalFactory = so101PhysicalFactory;
+    this.openarmPhysicalFactory = openarmPhysicalFactory;
     this.controllerPreemptHandler = () => {};
     this.disposed = false;
     this.animationFrame = requestAnimationFrame((time) => this.renderFrame(time));
@@ -28,9 +31,7 @@ export class SimulatorHost {
     this.backend?.renderFrame?.(time);
   }
 
-  syncLifecycleDiagnostics() {
-    this.canvas.dataset.simulatorHostPendingCount = String(this.pending.size);
-  }
+  syncLifecycleDiagnostics() { this.canvas.dataset.simulatorHostPendingCount = String(this.pending.size); }
 
   async setScenario(profileId, scenario, fallbackRest = {}) {
     const epoch = ++this.epoch;
@@ -39,11 +40,13 @@ export class SimulatorHost {
     previous?.dispose?.();
     for (const pendingBackend of this.pending) pendingBackend.dispose?.();
     this.pending.clear();
-    const physicalSo101 = profileId === 'so101' && scenario?.simulationMode === 'physical_mujoco';
+    const physical = scenario?.simulationMode === 'physical_mujoco';
     const backend = profileId === 'microduck'
       ? this.microduckFactory(this.canvas)
-      : physicalSo101
+      : physical && profileId === 'so101'
       ? this.so101PhysicalFactory(this.canvas)
+      : physical && profileId === 'openarm'
+      ? this.openarmPhysicalFactory(this.canvas)
       : this.sourceFactory(this.canvas);
     backend.setControllerPreemptHandler?.(this.controllerPreemptHandler);
     this.pending.add(backend);
@@ -51,14 +54,11 @@ export class SimulatorHost {
     backend.setHighContrastScene?.(this.highContrast);
     try { await backend.setScenario(profileId, scenario, fallbackRest); }
     catch (error) {
-      this.pending.delete(backend);
-      this.syncLifecycleDiagnostics();
-      backend.dispose();
+      this.pending.delete(backend); this.syncLifecycleDiagnostics(); backend.dispose();
       if (epoch === this.epoch) throw error;
       return false;
     }
-    this.pending.delete(backend);
-    this.syncLifecycleDiagnostics();
+    this.pending.delete(backend); this.syncLifecycleDiagnostics();
     if (epoch !== this.epoch) { backend.dispose(); return false; }
     this.backend = backend;
     this.canvas.dataset.simulatorHostEpoch = String(epoch);
