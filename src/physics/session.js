@@ -26,8 +26,7 @@ export class PhysicsSession {
       this.robotId = result?.robotId ?? scene.robotId;
       return { apiVersion: PHYSICS_BACKEND_API_VERSION, ...this.#context(), ...result };
     } catch (error) {
-      this.sceneRevision = null;
-      this.robotId = null;
+      this.#clearLoadedState();
       throw error;
     }
   }
@@ -36,7 +35,7 @@ export class PhysicsSession {
     this.#assertLoaded();
     this.epoch += 1;
     this.activeCommandId = null;
-    const result = await this.backend.reset({ ...structuredClone(options), ...this.#context() });
+    const result = await this.#runLoadedOperation(() => this.backend.reset({ ...structuredClone(options), ...this.#context() }));
     return { ...this.#context(), result };
   }
 
@@ -50,45 +49,45 @@ export class PhysicsSession {
       command,
       maxSteps,
     });
+    const result = await this.#runLoadedOperation(() => this.backend.acceptCommand(envelope));
     this.activeCommandId = envelope.commandId;
-    return this.backend.acceptCommand(envelope);
+    return result;
   }
 
-  advanceSteps(steps) {
+  async advanceSteps(steps) {
     this.#assertLoaded();
     if (!Number.isInteger(steps) || steps < 1) throw new RangeError('steps must be a positive integer');
-    return this.backend.advanceSteps(steps, this.#context());
+    return this.#runLoadedOperation(() => this.backend.advanceSteps(steps, this.#context()));
   }
 
-  getObservation(options = {}) {
+  async getObservation(options = {}) {
     this.#assertLoaded();
-    return this.backend.getObservation({ ...options, ...this.#context() });
+    return this.#runLoadedOperation(() => this.backend.getObservation({ ...options, ...this.#context() }));
   }
 
-  getDiagnostics() {
+  async getDiagnostics() {
     this.#assertLive();
-    return this.backend.getDiagnostics(this.#context());
+    const diagnostics = await this.backend.getDiagnostics(this.#context());
+    if (diagnostics?.loaded === false) this.#clearLoadedState();
+    return diagnostics;
   }
 
-  pause() {
+  async pause() {
     this.#assertLoaded();
-    return this.backend.pause(this.#context());
+    return this.#runLoadedOperation(() => this.backend.pause(this.#context()));
   }
 
-  resume() {
+  async resume() {
     this.#assertLoaded();
-    return this.backend.resume(this.#context());
+    return this.#runLoadedOperation(() => this.backend.resume(this.#context()));
   }
 
   async cancelRun(reason = 'cancelled') {
     this.#assertLoaded();
     this.epoch += 1;
-    const result = await this.backend.cancelRun({ reason, ...this.#context() });
+    const result = await this.#runLoadedOperation(() => this.backend.cancelRun({ reason, ...this.#context() }));
     this.activeCommandId = null;
-    if (result?.reloadRequired) {
-      this.sceneRevision = null;
-      this.robotId = null;
-    }
+    if (result?.reloadRequired) this.#clearLoadedState();
     return result;
   }
 
@@ -101,14 +100,32 @@ export class PhysicsSession {
     if (this.disposed) return;
     this.disposed = true;
     this.epoch += 1;
-    this.activeCommandId = null;
-    this.sceneRevision = null;
-    this.robotId = null;
+    this.#clearLoadedState();
     this.backend.dispose();
   }
 
   #context() {
     return { sessionId: this.sessionId, epoch: this.epoch };
+  }
+
+  async #runLoadedOperation(operation) {
+    try {
+      return await operation();
+    } catch (error) {
+      try {
+        const diagnostics = await this.backend.getDiagnostics(this.#context());
+        if (diagnostics?.loaded === false) this.#clearLoadedState();
+      } catch {
+        // Preserve the original operation failure. A diagnostic failure is not authority evidence.
+      }
+      throw error;
+    }
+  }
+
+  #clearLoadedState() {
+    this.activeCommandId = null;
+    this.sceneRevision = null;
+    this.robotId = null;
   }
 
   #assertLoaded() {
