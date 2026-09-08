@@ -17,14 +17,14 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
-      - name: Probe source-sized vessel and receiving-support envelopes
+      - name: Probe pinned dry-vessel physical-rest profile with original fingertip surrogate
         run: |
           python - <<'PY'
           import json, shutil, subprocess
           from pathlib import Path
 
           root = Path('.').resolve()
-          case_dir = Path('/tmp/openarm-probe-source-envelopes')
+          case_dir = Path('/tmp/openarm-probe-pinned-rest-profile')
           if case_dir.exists(): shutil.rmtree(case_dir)
           shutil.copytree(root, case_dir)
 
@@ -32,21 +32,26 @@ jobs:
           xml = xml_path.read_text()
           xml = xml.replace('size="0.009" class="left_fingertip"', 'size="0.008" class="left_fingertip"')
           xml = xml.replace('size="0.009" class="right_fingertip"', 'size="0.008" class="right_fingertip"')
-          # Legacy task receiving surfaces: hotplate 116 x 108 mm, gauze 96 mm diameter.
+          xml = xml.replace('name="left_source_support" type="box" pos="0.509 0.1535 1.020" size="0.035 0.035 0.015"', 'name="left_source_support" type="box" pos="0.509 0.1535 1.020" size="0.045 0.045 0.015"')
           xml = xml.replace('name="left_hotplate" type="box" pos="0.608 0.1535 1.020" size="0.045 0.045 0.015"', 'name="left_hotplate" type="box" pos="0.608 0.1535 1.020" size="0.058 0.054 0.015"')
           xml = xml.replace('name="right_ring_gauze" type="cylinder" pos="0.608 -0.1535 1.072" size="0.040 0.003"', 'name="right_ring_gauze" type="cylinder" pos="0.608 -0.1535 1.072" size="0.048 0.003"')
-          # Wider Erlenmeyer body/shoulder approximation while retaining the contact-height origin.
-          xml = xml.replace('<geom name="flask_body_geom" type="cylinder" pos="0 0 -0.020" size="0.018 0.030" class="vessel" rgba="0.38 0.72 0.86 0.85"/>', '<geom name="flask_body_geom" type="cylinder" pos="0 0 -0.020" size="0.040 0.030" class="vessel" rgba="0.38 0.72 0.86 0.85"/>\n      <geom name="flask_shoulder_geom" type="cylinder" pos="0 0 0.019" size="0.031 0.014" class="vessel" rgba="0.44 0.77 0.89 0.88"/>')
-          xml = xml.replace('size="0.010 0.015" class="vessel"', 'size="0.015 0.015" class="vessel"', 1)
-          # Pinned small-beaker envelope: 50 mm diameter x 60 mm height.
-          xml = xml.replace('<body name="beaker" pos="0.509 -0.1535 1.120">', '<body name="beaker" pos="0.509 -0.1535 1.105">')
-          xml = xml.replace('size="0.010 0.045" class="vessel"', 'size="0.025 0.030" class="vessel"')
+          old_flask = '''    <body name="flask" pos="0.509 0.1535 1.085">\n      <freejoint name="flask_free"/>\n      <inertial pos="0 0 0" mass="0.060" diaginertia="0.000055 0.000055 0.000030"/>\n      <geom name="flask_body_geom" type="cylinder" pos="0 0 -0.020" size="0.018 0.030" class="vessel" rgba="0.38 0.72 0.86 0.85"/>\n      <geom name="flask_grip_geom" type="cylinder" pos="0 0 0.035" size="0.010 0.015" class="vessel" rgba="0.50 0.82 0.92 0.90"/>\n    </body>'''
+          new_flask = '''    <body name="flask" pos="0.509 0.1535 1.092">\n      <freejoint name="flask_free"/>\n      <inertial pos="0 0 -0.015" mass="0.060" diaginertia="0.000088 0.000088 0.000046"/>\n      <geom name="flask_body_geom" type="cylinder" pos="0 0 -0.0295" size="0.039 0.0275" class="vessel" rgba="0.38 0.72 0.86 0.85"/>\n      <geom name="flask_shoulder_geom" type="cylinder" pos="0 0 0.012" size="0.031 0.014" class="vessel" rgba="0.44 0.77 0.89 0.88"/>\n      <geom name="flask_grip_geom" type="cylinder" pos="0 0 0.040" size="0.015 0.014" class="vessel" rgba="0.50 0.82 0.92 0.90"/>\n    </body>'''
+          if old_flask not in xml: raise SystemExit('baseline flask block not found')
+          xml = xml.replace(old_flask, new_flask, 1)
+          old_beaker = '''    <body name="beaker" pos="0.509 -0.1535 1.120">\n      <freejoint name="beaker_free"/>\n      <inertial pos="0 0 0" mass="0.050" diaginertia="0.000045 0.000045 0.000022"/>\n      <geom name="beaker_grip_geom" type="cylinder" size="0.010 0.045" class="vessel" rgba="0.58 0.82 0.94 0.82"/>\n    </body>'''
+          new_beaker = '''    <body name="beaker" pos="0.509 -0.1535 1.105">\n      <freejoint name="beaker_free"/>\n      <inertial pos="0 0 -0.002" mass="0.050" diaginertia="0.000023 0.000023 0.000016"/>\n      <geom name="beaker_grip_geom" type="cylinder" size="0.025 0.030" class="vessel" rgba="0.58 0.82 0.94 0.82"/>\n    </body>'''
+          if old_beaker not in xml: raise SystemExit('baseline beaker block not found')
+          xml = xml.replace(old_beaker, new_beaker, 1)
           xml_path.write_text(xml)
 
           runner_path = case_dir / 'native/openarm_v2_reference.py'
           runner = runner_path.read_text()
-          runner = runner.replace("'initial_z': 1.120,", "'initial_z': 1.105,")
+          runner = runner.replace("'half': np.array([0.045, 0.045]),", "'half': np.array([0.017, 0.013]),", 1)
+          runner = runner.replace("'initial_z': 1.085,", "'initial_z': 1.092,", 1)
           runner = runner.replace("'geoms': {'flask_body_geom', 'flask_grip_geom'},", "'geoms': {'flask_body_geom', 'flask_shoulder_geom', 'flask_grip_geom'},")
+          runner = runner.replace("'half': np.array([0.040, 0.040]),", "'half': np.array([0.021, 0.021]),", 1)
+          runner = runner.replace("'initial_z': 1.120,", "'initial_z': 1.105,")
           runner = runner.replace("('left_close', {'openarm_left_finger_joint1': 0.0}, 0.50)", "('left_close', {'openarm_left_finger_joint1': 0.05}, 0.50)")
           runner = runner.replace("arm('left', LEFT_LIFT, 0.0)", "arm('left', LEFT_LIFT, 0.05)")
           runner = runner.replace("arm('left', LEFT_TRANSFER, 0.0)", "arm('left', LEFT_TRANSFER, 0.05)")
@@ -65,18 +70,12 @@ jobs:
           runner_path.write_text(runner)
 
           result = json.loads(subprocess.check_output(['python', str(runner_path), '--trial', 'nominal'], cwd=case_dir, text=True))
-          concise = {
-              'success': result['metrics']['success'],
-              'flask': result['metrics']['flask'],
-              'beaker': result['metrics']['beaker'],
-              'modelSha256': result['model']['sha256'],
-              'controllerSha256': result['controller']['sha256'],
-          }
-          Path('/tmp/openarm-source-envelopes.json').write_text(json.dumps(concise, indent=2, sort_keys=True))
+          concise = {'success': result['metrics']['success'], 'flask': result['metrics']['flask'], 'beaker': result['metrics']['beaker']}
+          Path('/tmp/openarm-pinned-rest-profile.json').write_text(json.dumps(concise, indent=2, sort_keys=True))
           print(json.dumps(concise, indent=2, sort_keys=True))
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: openarm-source-envelopes-${{ github.sha }}
-          path: /tmp/openarm-source-envelopes.json
+          name: openarm-pinned-rest-profile-${{ github.sha }}
+          path: /tmp/openarm-pinned-rest-profile.json
           retention-days: 7
