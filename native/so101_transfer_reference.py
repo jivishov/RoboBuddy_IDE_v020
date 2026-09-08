@@ -26,6 +26,7 @@ TARGET_HALF = np.array([0.020, 0.030], dtype=float)
 SUPPORT_Z = 0.227
 BLOCK_HALF_Z = 0.007
 APPROACH_PAN_RAD = 0.005
+LOW_GRIP_FORCE_NM = 0.0001
 
 
 def ids(model):
@@ -58,8 +59,8 @@ def all_contact_pairs(model, data):
 def apply_test_profile(model, trial, block_body, gripper_act):
     profile = {"trial": trial, "lowGripForceNm": None, "payloadMassKg": float(model.body_mass[block_body])}
     if trial == "low-grip":
-        model.actuator_forcerange[2 * gripper_act : 2 * gripper_act + 2] = (-0.005, 0.005)
-        profile["lowGripForceNm"] = 0.005
+        model.actuator_forcerange[2 * gripper_act : 2 * gripper_act + 2] = (-LOW_GRIP_FORCE_NM, LOW_GRIP_FORCE_NM)
+        profile["lowGripForceNm"] = LOW_GRIP_FORCE_NM
     if trial == "heavy":
         factor = 37.5
         model.body_mass[block_body] *= factor
