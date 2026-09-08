@@ -20,6 +20,7 @@ jobs:
         run: |
           cat scripts/phase5a.runner.* > scripts/apply_openarm_phase5a.py
           python scripts/apply_openarm_phase5a.py
+          git checkout -- .github/workflows/validate.yml
           rm scripts/phase5a.payload.* scripts/phase5a.runner.* scripts/apply_openarm_phase5a.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
