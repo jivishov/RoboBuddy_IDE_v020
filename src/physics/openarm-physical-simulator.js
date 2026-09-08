@@ -9,6 +9,7 @@ import { OpenArmBimanualStackEvaluator } from './openarm-task-evaluator.js';
 
 const MAX_WEBMCP_ADVANCE_SECONDS = 2;
 const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
+const OPENARM_OBSERVATION_BATCH_STEPS = 20; // 20 ms at the pinned 0.001 s timestep.
 const PRESENTATION_GROUND_COLOR = 0x687378;
 const CANONICAL_OPENARM_MOUNT_TRANSLATION_MM = Object.freeze([185, 790, 0]);
 const NONPHYSICAL_CANONICAL_PARTS = new Set([
@@ -212,6 +213,8 @@ export class OpenArmPhysicalSimulator {
       hiddenNonphysicalParts: [...this.hiddenCanonicalParts],
       legacyBaseYawControlled: false,
       legacyBaseYawRendered: false,
+      observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS,
+      observationPeriodSeconds: OPENARM_OBSERVATION_BATCH_STEPS * Number(this.lastObservation?.engine?.timestepSeconds || 0.001),
     });
   }
   getTelemetry() {
@@ -317,7 +320,10 @@ export class OpenArmPhysicalSimulator {
     return rig;
   }
   async #createSession() {
-    const session = new PhysicsSession(new BrowserMuJoCoBackend({ workerUrl: new URL('./openarm-mujoco-worker.js', import.meta.url) }), { sessionId: `ide-openarm-v2-${++this.sessionSequence}` });
+    const session = new PhysicsSession(
+      new BrowserMuJoCoBackend({ workerUrl: new URL('./openarm-mujoco-worker.js', import.meta.url) }),
+      { sessionId: `ide-openarm-v2-${++this.sessionSequence}`, observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS },
+    );
     this.session = session;
     this.unsubscribeSession = session.subscribe(({ observation }) => this.#consumeObservation(observation));
     await session.loadScene(structuredClone(OPENARM_V2_PHASE5A_SCENE));
