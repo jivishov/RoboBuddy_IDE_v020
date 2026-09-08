@@ -43,6 +43,16 @@ def geom_name(model, geom_id):
     return mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_GEOM, int(geom_id)) or f"geom:{geom_id}"
 
 
+def all_contact_pairs(model, data):
+    pairs = set()
+    for i in range(data.ncon):
+        c = data.contact[i]
+        a = geom_name(model, c.geom1)
+        b = geom_name(model, c.geom2)
+        pairs.add(tuple(sorted((a, b))))
+    return [list(pair) for pair in sorted(pairs)]
+
+
 def apply_test_profile(model, trial, block_body, gripper_act):
     profile = {"trial": trial, "lowGripForceNm": None, "payloadMassKg": float(model.body_mass[block_body])}
     if trial == "low-grip":
@@ -144,6 +154,7 @@ def run_trial(trial: str, *, timestep=None, iterations=None):
             "fixedTipPositionM": np.array(data.geom_xpos[fixed_tip], dtype=float).tolist(),
             "movingTipPositionM": np.array(data.geom_xpos[moving_tip], dtype=float).tolist(),
             "blockContacts": end["contacts"],
+            "allContacts": all_contact_pairs(model, data),
         })
 
     stage("settle_initial", {}, 0.20)
