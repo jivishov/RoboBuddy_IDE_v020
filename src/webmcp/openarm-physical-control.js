@@ -53,6 +53,7 @@ export function createOpenArmPhysicalControlSchema() {
         additionalProperties: false,
       },
     ],
+    additionalProperties: false,
   };
 }
 
