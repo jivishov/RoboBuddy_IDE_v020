@@ -31,6 +31,10 @@ for (const name of SO101_PHASE2A_MODEL_PACKAGE.joints.map(({ id }) => id)) {
   assert.ok(so101Source.includes(`name="${name}"`), `SO-101 MJCF must contain declared joint/actuator ${name}`);
 }
 assert.ok(!so101Source.includes('<freejoint'), 'Phase 2A SO-101 validation plant must not acquire a hidden free root');
+assert.ok(
+  so101Source.includes('<geom name="base_proxy" type="box" size="0.045 0.045 0.055" pos="0 0 0.025" contype="0" conaffinity="0" group="2"/>'),
+  'Phase 2A diagnostic base proxy must remain visual-only and non-colliding',
+);
 
 assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE), 'registered package root must be immutable');
 assert.ok(Object.isFrozen(SO101_PHASE2A_MODEL_PACKAGE.physics), 'registered package physics settings must be immutable');
