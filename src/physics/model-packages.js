@@ -14,8 +14,8 @@ export const PHASE1_MODEL_PACKAGE = registerModelPackage({
   sha256: 'c8bfd81bb212afb88fd3ca173fc1235f1c1b45a79c3db0563ac22330ae7dab26',
   physics: { timestepSeconds: 0.002, integrator: 'RK4' },
   controllers: ['hinge_position'],
-  joints: [{ id: 'hinge', evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED }],
-  actuators: [{ id: 'hinge_position', jointId: 'hinge', controllerId: 'hinge_position', command: 'position-rad' }],
+  joints: [{ id: 'hinge', rangeRad: [-1.57, 1.57], axis: [0, 1, 0], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED }],
+  actuators: [{ id: 'hinge_position', jointId: 'hinge', controllerId: 'hinge_position', command: 'position-rad', controlRangeRad: [-1.2, 1.2], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED }],
   bodies: [{ id: 'free_box' }],
   sceneConstraints: { fixtures: ['floor', 'table'], objects: ['free_box'] },
   evidence: {
@@ -35,6 +35,15 @@ const SO101_JOINTS = [
   ['gripper', [-0.174533, 1.7453292]],
 ];
 
+const SO101_CONTROL_RANGES = Object.freeze({
+  shoulder_pan: [-1.91986, 1.91986],
+  shoulder_lift: [-1.74533, 1.74533],
+  elbow_flex: [-1.69, 1.69],
+  wrist_flex: [-1.65806, 1.65806],
+  wrist_roll: [-2.74385, 2.84121],
+  gripper: [-0.17453, 1.74533],
+});
+
 export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
   id: 'so101-phase2a-menagerie-8161bba',
   robotId: 'so101_follower',
@@ -43,7 +52,7 @@ export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
     url: 'https://github.com/google-deepmind/mujoco_menagerie/blob/8161bba264d7fa7c99ca301e91e7fb44737676ad/robotstudio_so101/so101.xml',
     revision: '8161bba264d7fa7c99ca301e91e7fb44737676ad',
     upstreamRevision: 'aec17bbc256d1a7342d53aaa4950595d4c30b40d',
-    variant: 'The Robot Studio SO-101 follower arm',
+    variant: 'The Robot Studio SO-101 follower arm; Phase 2A self-contained adaptation omits the source camera-mount child',
   },
   license: 'Apache-2.0',
   asset: 'models/so101/model.xml',
@@ -51,18 +60,20 @@ export const SO101_PHASE2A_MODEL_PACKAGE = registerModelPackage({
   physics: { timestepSeconds: 0.005, integrator: 'implicitfast', iterations: 10, lsIterations: 20 },
   controllers: ['so101_position'],
   joints: SO101_JOINTS.map(([id, rangeRad]) => ({ id, rangeRad, axis: [0, 0, 1], evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED })),
-  actuators: SO101_JOINTS.map(([id]) => ({ id, jointId: id, controllerId: 'so101_position', command: 'position-rad', evidence: PARAMETER_EVIDENCE.ESTIMATED })),
+  actuators: SO101_JOINTS.map(([id]) => ({ id, jointId: id, controllerId: 'so101_position', command: 'position-rad', controlRangeRad: SO101_CONTROL_RANGES[id], evidence: PARAMETER_EVIDENCE.ESTIMATED })),
   bodies: [{ id: 'base' }, { id: 'gripper' }, { id: 'moving_jaw_so101_v1' }],
   evidence: {
     kinematics: PARAMETER_EVIDENCE.SOURCE_DERIVED,
-    inertia: PARAMETER_EVIDENCE.SOURCE_DERIVED,
-    collisionPrimitives: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    actuatedLinkInertias: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    retainedCollisionPrimitives: PARAMETER_EVIDENCE.SOURCE_DERIVED,
     servoControllerParameters: PARAMETER_EVIDENCE.ESTIMATED,
+    cameraMountDynamics: PARAMETER_EVIDENCE.CALIBRATION_REQUIRED,
     hardwareAlignment: PARAMETER_EVIDENCE.CALIBRATION_REQUIRED,
   },
   limitations: [
     'Phase 2A articulated-plant validation package only; normal IDE capability is not promoted yet.',
-    'Upstream visual meshes and mesh-only gripper collisions are omitted from this self-contained browser validation MJCF.',
+    'Upstream visual meshes, mesh gripper collisions, the camera-mount child and some nonessential source collision geometry are omitted from this self-contained browser validation MJCF.',
+    'The omitted upstream camera-mount child carries a source mesh mass of 0.012 kg, so this adapted plant must not be described as dynamically identical to the full pinned Menagerie model.',
     'Servo gains/force settings are upstream simulation estimates, not hardware calibration.',
     'No grasp/block-transfer task or hardware-fidelity claim in Phase 2A.',
   ],
