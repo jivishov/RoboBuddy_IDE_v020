@@ -18,9 +18,9 @@ jobs:
           ref: fix/openarm-phase5a
       - name: Apply reviewed migration payload
         run: |
-          cat scripts/phase5a.runner.* > /tmp/apply_openarm_phase5a.py
-          python /tmp/apply_openarm_phase5a.py
-          rm scripts/phase5a.payload.* scripts/phase5a.runner.*
+          cat scripts/phase5a.runner.* > scripts/apply_openarm_phase5a.py
+          python scripts/apply_openarm_phase5a.py
+          rm scripts/phase5a.payload.* scripts/phase5a.runner.* scripts/apply_openarm_phase5a.py
           rm .github/workflows/openarm-phase5a-bootstrap.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
