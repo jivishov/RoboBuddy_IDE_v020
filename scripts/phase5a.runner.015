@@ -1,2 +1,0 @@
-# The bootstrap bot cannot modify workflow files. Keep those patches for the authorized connector pass.
-PATCHES = [patch for patch in PATCHES if not patch[0].startswith('.github/workflows/')]
