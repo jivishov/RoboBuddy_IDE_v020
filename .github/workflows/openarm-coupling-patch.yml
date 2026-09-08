@@ -1,4 +1,4 @@
-name: Guarded OpenArm coupling reset patch
+name: One-shot OpenArm Phase 5A fidelity repair
 
 on:
   push:
@@ -9,65 +9,260 @@ permissions:
 
 jobs:
   patch:
+    if: ${{ !contains(github.event.head_commit.message, '[openarm-fidelity-final]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Patch browser and native setup to satisfy source finger coupling at reset
+      - name: Apply source-aligned dry-workcell and causal-controller repair
         run: |
           python - <<'PY'
           from pathlib import Path
+          import hashlib
 
-          worker = Path('src/physics/openarm-mujoco-worker.js')
-          text = worker.read_text()
-          if 'let couplingState = new Map();' not in text:
-              text = text.replace('let jointState = new Map();\nlet actuatorState = new Map();', 'let jointState = new Map();\nlet couplingState = new Map();\nlet actuatorState = new Map();')
-              text = text.replace('  jointState = new Map(); actuatorState = new Map(); bodyState = new Map();', '  jointState = new Map(); couplingState = new Map(); actuatorState = new Map(); bodyState = new Map();')
-              marker = "  for (const actuator of descriptor.actuators) {"
-              insert = """  for (const coupling of descriptor.mechanicalCouplings || []) {\n    const driver = jointState.get(coupling.driverJointId);\n    if (!driver) throw new Error(`Mechanical coupling ${coupling.id} references unknown driver ${coupling.driverJointId}`);\n    if (jointState.has(coupling.followerJointId)) throw new Error(`Mechanical coupling follower ${coupling.followerJointId} collides with a declared command joint`);\n    const id = idFor('mjOBJ_JOINT', coupling.followerJointId);\n    const qpos = Number(model.jnt_qposadr[id]);\n    const dof = Number(model.jnt_dofadr[id]);\n    const range = [Number(model.jnt_range[id * 2]), Number(model.jnt_range[id * 2 + 1])];\n    const axis = [Number(model.jnt_axis[id * 3]), Number(model.jnt_axis[id * 3 + 1]), Number(model.jnt_axis[id * 3 + 2])];\n    const resolved = { ...coupling, driver, id, qpos, dof, range, axis, passiveCoupled: true };\n    couplingState.set(coupling.id, resolved);\n    jointState.set(coupling.followerJointId, { id, qpos, dof, range, axis, passiveCoupled: true });\n  }\n"""
-              text = text.replace(marker, insert + marker, 1)
-              old = "  paused = false;\n  mujoco.mj_forward(model, data);\n  return observation();"
-              new = """  for (const coupling of couplingState.values()) {\n    const driverValue = Number(data.qpos[coupling.driver.qpos]);\n    const followerValue = driverValue * Number(coupling.multiplier ?? 1) + Number(coupling.offsetRad ?? 0);\n    if (!Number.isFinite(followerValue)) throw new Error(`Mechanical coupling ${coupling.id} produced a non-finite setup value`);\n    if (coupling.range.every(Number.isFinite) && (followerValue < coupling.range[0] || followerValue > coupling.range[1])) throw new RangeError(`Mechanical coupling ${coupling.id} setup value ${followerValue} is outside follower range ${coupling.range[0]}..${coupling.range[1]}`);\n    data.qpos[coupling.qpos] = followerValue;\n  }\n  paused = false;\n  mujoco.mj_forward(model, data);\n  return observation();"""
-              if old not in text:
-                  raise SystemExit('worker setup insertion point not found')
+          def exact(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              seen = text.count(old)
+              if seen != count:
+                  raise SystemExit(f'{path}: expected {count} occurrences of {old!r}, found {seen}')
+              p.write_text(text.replace(old, new, count))
+
+          # Physical model: retain the original 8 mm fingertip surrogate and repair
+          # the task geometry from the pinned OpenArm task definition instead.
+          xml_path = Path('models/openarm_v2/manipulation.xml')
+          xml = xml_path.read_text()
+          for cls in ('left_fingertip', 'right_fingertip'):
+              old = f'size="0.009" class="{cls}"'
+              seen = xml.count(old)
+              if seen != 2:
+                  raise SystemExit(f'expected two 9 mm {cls} surrogates, found {seen}')
+              xml = xml.replace(old, f'size="0.008" class="{cls}"')
+          xml = xml.replace(
+              'name="left_source_support" type="box" pos="0.509 0.1535 1.020" size="0.035 0.035 0.015"',
+              'name="left_source_support" type="box" pos="0.509 0.1535 1.020" size="0.045 0.045 0.015"',
+              1,
+          )
+          xml = xml.replace(
+              'name="left_hotplate" type="box" pos="0.608 0.1535 1.020" size="0.045 0.045 0.015"',
+              'name="left_hotplate" type="box" pos="0.608 0.1535 1.020" size="0.058 0.054 0.015"',
+              1,
+          )
+          xml = xml.replace(
+              'name="right_ring_gauze" type="cylinder" pos="0.608 -0.1535 1.072" size="0.040 0.003"',
+              'name="right_ring_gauze" type="cylinder" pos="0.608 -0.1535 1.072" size="0.048 0.003"',
+              1,
+          )
+          old_flask = '''    <body name="flask" pos="0.509 0.1535 1.085">\n      <freejoint name="flask_free"/>\n      <inertial pos="0 0 0" mass="0.060" diaginertia="0.000055 0.000055 0.000030"/>\n      <geom name="flask_body_geom" type="cylinder" pos="0 0 -0.020" size="0.018 0.030" class="vessel" rgba="0.38 0.72 0.86 0.85"/>\n      <geom name="flask_grip_geom" type="cylinder" pos="0 0 0.035" size="0.010 0.015" class="vessel" rgba="0.50 0.82 0.92 0.90"/>\n    </body>'''
+          new_flask = '''    <body name="flask" pos="0.509 0.1535 1.092">\n      <freejoint name="flask_free"/>\n      <inertial pos="0 0 -0.015" mass="0.060" diaginertia="0.000088 0.000088 0.000046"/>\n      <geom name="flask_body_geom" type="cylinder" pos="0 0 -0.0295" size="0.039 0.0275" class="vessel" rgba="0.38 0.72 0.86 0.85"/>\n      <geom name="flask_shoulder_geom" type="cylinder" pos="0 0 0.012" size="0.031 0.014" class="vessel" rgba="0.44 0.77 0.89 0.88"/>\n      <geom name="flask_grip_geom" type="cylinder" pos="0 0 0.040" size="0.015 0.014" class="vessel" rgba="0.50 0.82 0.92 0.90"/>\n    </body>'''
+          if xml.count(old_flask) != 1:
+              raise SystemExit('baseline flask block did not match exactly once')
+          xml = xml.replace(old_flask, new_flask, 1)
+          old_beaker = '''    <body name="beaker" pos="0.509 -0.1535 1.120">\n      <freejoint name="beaker_free"/>\n      <inertial pos="0 0 0" mass="0.050" diaginertia="0.000045 0.000045 0.000022"/>\n      <geom name="beaker_grip_geom" type="cylinder" size="0.010 0.045" class="vessel" rgba="0.58 0.82 0.94 0.82"/>\n    </body>'''
+          new_beaker = '''    <body name="beaker" pos="0.509 -0.1535 1.105">\n      <freejoint name="beaker_free"/>\n      <inertial pos="0 0 -0.002" mass="0.050" diaginertia="0.000023 0.000023 0.000016"/>\n      <geom name="beaker_grip_geom" type="cylinder" size="0.025 0.030" class="vessel" rgba="0.58 0.82 0.94 0.82"/>\n    </body>'''
+          if xml.count(old_beaker) != 1:
+              raise SystemExit('baseline beaker block did not match exactly once')
+          xml = xml.replace(old_beaker, new_beaker, 1)
+          xml_path.write_text(xml)
+          model_hash = hashlib.sha256(xml_path.read_bytes()).hexdigest()
+
+          # Version the materially refined model/scene/controller and carry the
+          # pinned task-definition geometry into runtime metadata.
+          package = Path('src/physics/openarm-model-package.js')
+          text = package.read_text()
+          replacements = [
+              ("id: 'openarm-v2-phase5a-a8c9796-v1'", "id: 'openarm-v2-phase5a-a8c9796-v2'"),
+              ("modelId: 'robobuddy-openarm-v2-phase5a-v1'", "modelId: 'robobuddy-openarm-v2-phase5a-v2'"),
+              ("sha256: '323a345733dc45a4b3d7616e83ea5aef48cb099eb29855691530252b167f64b5'", f"sha256: '{model_hash}'"),
+              ("flask: { id: 'left_hotplate', centerXYM: [0.608, 0.1535], topZM: 1.035, halfExtentsXYM: [0.045, 0.045] }", "flask: { id: 'left_hotplate', centerXYM: [0.608, 0.1535], topZM: 1.035, halfExtentsXYM: [0.058, 0.054] }"),
+              ("beaker: { id: 'right_ring_gauze', centerXYM: [0.608, -0.1535], topZM: 1.075, halfExtentsXYM: [0.040, 0.040] }", "beaker: { id: 'right_ring_gauze', centerXYM: [0.608, -0.1535], topZM: 1.075, halfExtentsXYM: [0.048, 0.048] }"),
+              ("flask: { massKg: 0.060, initialPositionM: [0.509, 0.1535, 1.085], supportBottomZM: 1.035 }", "flask: { massKg: 0.060, initialPositionM: [0.509, 0.1535, 1.092], supportBottomZM: 1.035, sourceProfileM: { lowerRadius: 0.039, shoulderRadius: 0.031, neckRadius: 0.015, height: 0.114, centerOfMassFromBottom: 0.042 } }"),
+              ("beaker: { massKg: 0.050, initialPositionM: [0.509, -0.1535, 1.120], supportBottomZM: 1.075 }", "beaker: { massKg: 0.050, initialPositionM: [0.509, -0.1535, 1.105], supportBottomZM: 1.075, sourceProfileM: { radius: 0.025, height: 0.060, centerOfMassFromBottom: 0.028 } }"),
+              ("controllerVersion: 'openarm-v2-bimanual-stack-v1'", "controllerVersion: 'openarm-v2-bimanual-stack-v2'"),
+              ("dryTaskFixtureAndVesselGeometry: PARAMETER_EVIDENCE.ESTIMATED,", "dryTaskVesselAndReceiverGeometry: PARAMETER_EVIDENCE.SOURCE_DERIVED,\n    stagingSupportGeometry: PARAMETER_EVIDENCE.ESTIMATED,\n    vesselMassInertiaAndFriction: PARAMETER_EVIDENCE.ESTIMATED,"),
+              ("'The hotplate, ring stand/gauze, staging supports, flask and beaker are controlled dry benchmark geometry. Their dimensions, masses and friction are not measured laboratory hardware.'", "'The flask/beaker exterior envelopes and hotplate/gauze receiver dimensions are aligned to the pinned RoboBuddy task definition, but remain simulator benchmark geometry; staging supports, vessel mass/inertia, friction and contact material are estimates rather than measured laboratory hardware.'"),
+          ]
+          for old, new in replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'model package replacement did not match exactly once: {old}')
               text = text.replace(old, new, 1)
-              old_dispose = 'jointState = new Map(); actuatorState = new Map(); bodyState = new Map(); modelInfo = null; paused = false;'
-              new_dispose = 'jointState = new Map(); couplingState = new Map(); actuatorState = new Map(); bodyState = new Map(); modelInfo = null; paused = false;'
-              if old_dispose not in text:
-                  raise SystemExit('worker dispose insertion point not found')
-              text = text.replace(old_dispose, new_dispose, 1)
-              worker.write_text(text)
+          marker = "  benchmark: {\n"
+          addition = "  benchmark: {\n    taskGeometrySource: { repository: 'jivishov/RoboBuddy_AI', revision: '75fe2669c0ab0b029986de424c69162071174df8', scenarioId: 'openarm-04-filtration-workcell', path: 'missions/lab-assistant/v2/definitions/openarm/openarm-04-filtration-workcell.json' },\n"
+          if text.count(marker) != 1:
+              raise SystemExit('benchmark insertion point mismatch')
+          text = text.replace(marker, addition, 1)
+          package.write_text(text)
+
+          scene = Path('src/physics/openarm-scene.js')
+          text = scene.read_text()
+          scene_replacements = [
+              ("revision: 'phase5a-openarm-v2-bimanual-stack-v1'", "revision: 'phase5a-openarm-v2-bimanual-stack-v2'"),
+              ("objectGeoms: Object.freeze(['flask_body_geom', 'flask_grip_geom'])", "objectGeoms: Object.freeze(['flask_body_geom', 'flask_shoulder_geom', 'flask_grip_geom'])"),
+              ("targetHalfExtentsXYM: Object.freeze([0.045, 0.045])", "targetHalfExtentsXYM: Object.freeze([0.017, 0.013])"),
+              ("initialBodyZM: 1.085", "initialBodyZM: 1.092"),
+              ("targetHalfExtentsXYM: Object.freeze([0.040, 0.040])", "targetHalfExtentsXYM: Object.freeze([0.021, 0.021])"),
+              ("initialBodyZM: 1.120", "initialBodyZM: 1.105"),
+              ("id: 'openarm-v2-bimanual-stack-v1'", "id: 'openarm-v2-bimanual-stack-v2'"),
+              ("targetsRad: Object.freeze({ openarm_left_finger_joint1: 0 })", "targetsRad: Object.freeze({ openarm_left_finger_joint1: 0.05 })"),
+              ("armTargets('left', LEFT_LIFT, 0)", "armTargets('left', LEFT_LIFT, 0.05)"),
+              ("armTargets('left', LEFT_TRANSFER, 0)", "armTargets('left', LEFT_TRANSFER, 0.05)"),
+              ("armTargets('left', LEFT_PLACE, 0)", "armTargets('left', LEFT_PLACE, 0.05)"),
+              ("armTargets('left', LEFT_TRANSFER, 0.65)", "armTargets('left', LEFT_LIFT, 0.65)"),
+              ("targetsRad: Object.freeze({ openarm_right_finger_joint1: 0 })", "targetsRad: Object.freeze({ openarm_right_finger_joint1: -0.33 })"),
+              ("armTargets('right', RIGHT_LIFT, 0)", "armTargets('right', RIGHT_LIFT, -0.33)"),
+              ("armTargets('right', RIGHT_TRANSFER, 0)", "armTargets('right', RIGHT_TRANSFER, -0.33)"),
+              ("armTargets('right', RIGHT_PLACE, 0)", "armTargets('right', RIGHT_PLACE, -0.33)"),
+              ("armTargets('right', RIGHT_TRANSFER, -0.65)", "armTargets('right', RIGHT_LIFT, -0.65)"),
+              ("Left gripper closes into bilateral flask contact", "Left gripper establishes a maintained bilateral flask pinch"),
+              ("Right gripper closes into bilateral beaker contact", "Right gripper establishes a maintained bilateral beaker pinch"),
+          ]
+          for old, new in scene_replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'scene replacement mismatch: {old}')
+              text = text.replace(old, new, 1)
+          scene.write_text(text)
 
           native = Path('native/openarm_v2_reference.py')
           text = native.read_text()
-          if "PASSIVE_COUPLED_JOINTS =" not in text:
-              text = text.replace("ACTUATORS = [\n", "PASSIVE_COUPLED_JOINTS = {\n    'openarm_left_finger_joint2': 'openarm_left_finger_joint1',\n    'openarm_right_finger_joint2': 'openarm_right_finger_joint1',\n}\nACTUATORS = [\n", 1)
-              old = """    for joint, value in INITIAL.items():\n        data.qpos[int(model.jnt_qposadr[joints[joint]])] = value\n        data.ctrl[acts[joint]] = value\n    # Explicit negative setup intervention only; nominal free-object qpos is untouched."""
-              new = """    for joint, value in INITIAL.items():\n        data.qpos[int(model.jnt_qposadr[joints[joint]])] = value\n        data.ctrl[acts[joint]] = value\n    # The source equality constraint couples finger2 to finger1. Reset must begin\n    # on that mechanical manifold; otherwise the constraint impulse itself can\n    # strike nearby vessels before any commanded motion occurs.\n    for follower, driver in PASSIVE_COUPLED_JOINTS.items():\n        follower_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, follower)\n        driver_id = joints[driver]\n        data.qpos[int(model.jnt_qposadr[follower_id])] = data.qpos[int(model.jnt_qposadr[driver_id])]\n    # Explicit negative setup intervention only; nominal free-object qpos is untouched."""
-              if old not in text:
-                  raise SystemExit('native setup insertion point not found')
+          native_replacements = [
+              ("('left_close', {'openarm_left_finger_joint1': 0.0}, 0.50)", "('left_close', {'openarm_left_finger_joint1': 0.05}, 0.50)"),
+              ("arm('left', LEFT_LIFT, 0.0)", "arm('left', LEFT_LIFT, 0.05)"),
+              ("arm('left', LEFT_TRANSFER, 0.0)", "arm('left', LEFT_TRANSFER, 0.05)"),
+              ("arm('left', LEFT_PLACE, 0.0)", "arm('left', LEFT_PLACE, 0.05)"),
+              ("('left_retreat', arm('left', LEFT_TRANSFER, 0.65), 0.85)", "('left_retreat', arm('left', LEFT_LIFT, 0.65), 0.85)"),
+              ("('right_close', {'openarm_right_finger_joint1': 0.0}, 0.50)", "('right_close', {'openarm_right_finger_joint1': -0.33}, 0.50)"),
+              ("arm('right', RIGHT_LIFT, 0.0)", "arm('right', RIGHT_LIFT, -0.33)"),
+              ("arm('right', RIGHT_TRANSFER, 0.0)", "arm('right', RIGHT_TRANSFER, -0.33)"),
+              ("arm('right', RIGHT_PLACE, 0.0)", "arm('right', RIGHT_PLACE, -0.33)"),
+              ("('right_retreat', arm('right', RIGHT_TRANSFER, -0.65), 0.85)", "('right_retreat', arm('right', RIGHT_LIFT, -0.65), 0.85)"),
+              ("'half': np.array([0.045, 0.045])", "'half': np.array([0.017, 0.013])"),
+              ("'initial_z': 1.085", "'initial_z': 1.092"),
+              ("'geoms': {'flask_body_geom', 'flask_grip_geom'}", "'geoms': {'flask_body_geom', 'flask_shoulder_geom', 'flask_grip_geom'}"),
+              ("'half': np.array([0.040, 0.040])", "'half': np.array([0.021, 0.021])"),
+              ("'initial_z': 1.120", "'initial_z': 1.105"),
+              ("0.0 if stage_name != 'left_retreat' else 0.65", "0.05 if stage_name != 'left_retreat' else 0.65"),
+          ]
+          for old, new in native_replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'native replacement mismatch: {old}')
               text = text.replace(old, new, 1)
-              native.write_text(text)
+          release_old = """                if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:\n                    st['release'] = True\n                    st['release_time'] = float(data.time)\n"""
+          release_new = """                # Match the browser evaluator: any post-release gripper re-contact invalidates\n                # release/settle/retreat evidence until a new causal release is observed.\n                if st['release'] and held:\n                    st['release'] = False\n                    st['release_time'] = None\n                    st['settle_candidate'] = None\n                    st['settle_start'] = None\n                    st['settle_drift'] = None\n                    st['settled'] = False\n                    st['settled_ee'] = None\n                    st['settle_time'] = None\n                    st['retreat'] = False\n                    st['retreat_distance'] = 0.0\n                    st['retreat_time'] = None\n                if st['support_while_held'] and st['previous_held'] and not held and support and inside and near and not st['release']:\n                    st['release'] = True\n                    st['release_time'] = float(data.time)\n"""
+          if text.count(release_old) != 1:
+              raise SystemExit('native release block mismatch')
+          text = text.replace(release_old, release_new, 1)
+          model_marker = "        'model': {\n            'asset': str(MODEL_PATH.relative_to(ROOT)).replace('\\\\', '/'),"
+          model_insert = "        'model': {\n            'id': 'robobuddy-openarm-v2-phase5a-v2',\n            'packageId': 'openarm-v2-phase5a-a8c9796-v2',\n            'asset': str(MODEL_PATH.relative_to(ROOT)).replace('\\\\', '/'),"
+          if text.count(model_marker) != 1:
+              raise SystemExit('native model evidence insertion point mismatch')
+          text = text.replace(model_marker, model_insert, 1)
+          controller_marker = "        'controller': {\n            'sha256': canonical_json_hash(descriptor),"
+          controller_insert = "        'controller': {\n            'id': 'openarm-v2-bimanual-stack-v2',\n            'sha256': canonical_json_hash(descriptor),"
+          if text.count(controller_marker) != 1:
+              raise SystemExit('native controller evidence insertion point mismatch')
+          text = text.replace(controller_marker, controller_insert, 1)
+          native.write_text(text)
 
-          probe = Path('.github/workflows/openarm-design-probe.yml')
-          text = probe.read_text()
-          old = "j=id_(mujoco.mjtObj.mjOBJ_JOINT,f'openarm_{s}_finger_joint1'); data.qpos[int(model.jnt_qposadr[j])]=(0.65 if s=='left' else -0.65)"
-          new = """for finger_index in (1,2):\n                j=id_(mujoco.mjtObj.mjOBJ_JOINT,f'openarm_{s}_finger_joint{finger_index}'); data.qpos[int(model.jnt_qposadr[j])]=(0.65 if s=='left' else -0.65)"""
-          if old in text:
+          simulator = Path('src/physics/openarm-physical-simulator.js')
+          text = simulator.read_text()
+          sim_replacements = [
+              ("['left-source', box(0.07, 0.03, 0.07, supportMaterial), [0.509, 0.1535, 1.020]]", "['left-source', box(0.09, 0.03, 0.09, supportMaterial), [0.509, 0.1535, 1.020]]"),
+              ("['left-hotplate', box(0.09, 0.03, 0.09, darkMaterial), [0.608, 0.1535, 1.020]]", "['left-hotplate', box(0.116, 0.03, 0.108, darkMaterial), [0.608, 0.1535, 1.020]]"),
+              ("const gauze = cylinder(0.040, 0.006, supportMaterial)", "const gauze = cylinder(0.048, 0.006, supportMaterial)"),
+              ("[[[0.608, 0.1535, 1.036], [0.09, 0.001, 0.09]], [[0.608, -0.1535, 1.076], [0.08, 0.001, 0.08]]]", "[[[0.608, 0.1535, 1.036], [0.034, 0.001, 0.026]], [[0.608, -0.1535, 1.076], [0.042, 0.001, 0.042]]]"),
+          ]
+          for old, new in sim_replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'simulator replacement mismatch: {old}')
               text = text.replace(old, new, 1)
-          old = "j=id_(mujoco.mjtObj.mjOBJ_JOINT,f'openarm_{side}_finger_joint1'); data.qpos[int(model.jnt_qposadr[j])]=finger"
-          new = """for finger_index in (1,2):\n              j=id_(mujoco.mjtObj.mjOBJ_JOINT,f'openarm_{side}_finger_joint{finger_index}'); data.qpos[int(model.jnt_qposadr[j])]=finger"""
-          if old in text:
+          old_visual = """    const flaskBody = cylinder(0.018, 0.060, flaskMaterial); flaskBody.position.y = -20;\n    const flaskNeck = cylinder(0.010, 0.030, flaskMaterial); flaskNeck.position.y = 35;\n    flaskGroup.add(flaskBody, flaskNeck); this.objectMeshes.set('flask', flaskGroup); this.workcellRoot.add(flaskGroup);\n    const beakerMaterial = new THREE.MeshStandardMaterial({ color: 0x8dc8e3, transparent: true, opacity: 0.76, roughness: 0.30 });\n    const beaker = cylinder(0.010, 0.090, beakerMaterial); this.objectMeshes.set('beaker', beaker); this.workcellRoot.add(beaker);"""
+          new_visual = """    const flaskBody = cylinder(0.039, 0.055, flaskMaterial); flaskBody.position.y = -29.5;\n    const flaskShoulder = cylinder(0.031, 0.028, flaskMaterial); flaskShoulder.position.y = 12;\n    const flaskNeck = cylinder(0.015, 0.028, flaskMaterial); flaskNeck.position.y = 40;\n    flaskGroup.add(flaskBody, flaskShoulder, flaskNeck); this.objectMeshes.set('flask', flaskGroup); this.workcellRoot.add(flaskGroup);\n    const beakerMaterial = new THREE.MeshStandardMaterial({ color: 0x8dc8e3, transparent: true, opacity: 0.76, roughness: 0.30 });\n    const beaker = cylinder(0.025, 0.060, beakerMaterial); this.objectMeshes.set('beaker', beaker); this.workcellRoot.add(beaker);"""
+          if text.count(old_visual) != 1:
+              raise SystemExit('simulator vessel presentation block mismatch')
+          text = text.replace(old_visual, new_visual, 1)
+          simulator.write_text(text)
+
+          task_catalog = Path('src/task-catalog.js')
+          text = task_catalog.read_text()
+          old = "authority: 'MuJoCo PhysicsSession; browser primitive presentation consumes MuJoCo body observations'"
+          new = "authority: 'MuJoCo PhysicsSession; canonical OpenArm arm mesh and dry-workcell presentation consume MuJoCo observations only'"
+          if text.count(old) != 1:
+              raise SystemExit('task catalog authority wording mismatch')
+          task_catalog.write_text(text.replace(old, new, 1))
+
+          core = Path('tests/physics/openarm-phase5a-core.mjs')
+          text = core.read_text()
+          test_replacements = [
+              ("assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.stages.length, 15);", "assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.id, 'openarm-v2-bimanual-stack-v2');\nassert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.stages.length, 15);"),
+              ("flask = [0.509, 0.1535, 1.085]", "flask = [0.509, 0.1535, 1.092]"),
+              ("beaker = [0.509, -0.1535, 1.120]", "beaker = [0.509, -0.1535, 1.105]"),
+          ]
+          for old, new in test_replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'core test replacement mismatch: {old}')
               text = text.replace(old, new, 1)
-          probe.write_text(text)
+          text = text.replace('1.085]', '1.092]')
+          text = text.replace('1.120]', '1.105]')
+          text = text.replace('1.110]', '1.120]')
+          assertion_marker = "assert.equal((xml.match(/<freejoint\\b/g) || []).length, 2, 'flask and beaker must remain true free bodies');\n"
+          assertion_add = assertion_marker + "assert.equal((xml.match(/size=\"0.008\" class=\"left_fingertip\"/g) || []).length, 2, 'left fingertip surrogate must remain the reviewed 8 mm approximation');\nassert.equal((xml.match(/size=\"0.008\" class=\"right_fingertip\"/g) || []).length, 2, 'right fingertip surrogate must remain the reviewed 8 mm approximation');\nassert.ok(xml.includes('flask_shoulder_geom'), 'source-informed Erlenmeyer shoulder collider must be present');\nassert.ok(xml.includes('size=\"0.025 0.030\" class=\"vessel\"'), '50 mL beaker must use the pinned 50 x 60 mm envelope');\nassert.deepEqual(OPENARM_V2_PHASE5A_SCENE.taskGoal.flask.targetHalfExtentsXYM, [0.017, 0.013]);\nassert.deepEqual(OPENARM_V2_PHASE5A_SCENE.taskGoal.beaker.targetHalfExtentsXYM, [0.021, 0.021]);\n"
+          if text.count(assertion_marker) != 1:
+              raise SystemExit('core XML assertion insertion point mismatch')
+          text = text.replace(assertion_marker, assertion_add, 1)
+          core.write_text(text)
+
+          browser = Path('tests/openarm-phase5a-browser.spec.mjs')
+          text = browser.read_text()
+          browser_replacements = [
+              ("sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v1'", "sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v2'"),
+              ("id: 'robobuddy-openarm-v2-phase5a-v1'", "id: 'robobuddy-openarm-v2-phase5a-v2'"),
+              ("expect(initial.model.sha256).toBe('323a345733dc45a4b3d7616e83ea5aef48cb099eb29855691530252b167f64b5');", f"expect(initial.model.sha256).toBe('{model_hash}');"),
+          ]
+          for old, new in browser_replacements:
+              if text.count(old) != 1:
+                  raise SystemExit(f'browser test replacement mismatch: {old}')
+              text = text.replace(old, new, 1)
+          browser_marker = "  expect(initial.flask.linearVelocityMS).toHaveLength(3);\n  expect(initial.beaker.angularVelocityRadS).toHaveLength(3);\n"
+          browser_add = browser_marker + "  expect(initial.flask.positionM[2]).toBeCloseTo(1.092, 3);\n  expect(initial.beaker.positionM[2]).toBeCloseTo(1.105, 3);\n"
+          if text.count(browser_marker) != 1:
+              raise SystemExit('browser initial geometry assertion insertion point mismatch')
+          browser.write_text(text.replace(browser_marker, browser_add, 1))
+
+          provenance = Path('models/openarm_v2/PROVENANCE.md')
+          text = provenance.read_text()
+          old = "Those primitive collision shapes are an approximation and are not equivalent to the upstream mesh contact geometry. The fingertip capsule surrogate uses a 9 mm radius in this benchmark so a fully closed opposed-finger pose produces a small bilateral contact preload instead of an exactly tangent, numerically fragile 20 mm gap; this remains an estimated browser collision surrogate, not a source or hardware dimension."
+          new = "Those primitive collision shapes are an approximation and are not equivalent to the upstream mesh contact geometry. The reviewed fingertip capsule surrogate remains at its original 8 mm radius; task success is not obtained by enlarging invisible fingers. Instead, the controller maintains a bounded partial pinch while the vessel/receiver envelopes are aligned to the pinned task definition."
+          if text.count(old) != 1:
+              raise SystemExit('provenance fingertip paragraph mismatch')
+          text = text.replace(old, new, 1)
+          old = "The dry workcell fixtures and vessels are RoboBuddy synthetic benchmark geometry. They are not measurements of a specific installed hotplate, ring stand, flask, beaker, table, or OpenArm system. The unpowered hotplate and ring-stand/gauze support model rigid contact only; no thermal, fluid, vacuum, payload-certification, glass-compliance, tactile, force-sensor, or hardware-safety behavior is claimed. The vessel colliders are validated only for the direct exterior pinch/lift/place interactions in this task; they are not validated for insertion, pouring, filling, or liquid operations."
+          new = "The dry vessel and receiving-surface envelopes are source-informed from the pinned RoboBuddy task definition `jivishov/RoboBuddy_AI@75fe2669c0ab0b029986de424c69162071174df8`: the Erlenmeyer collider follows the declared ~39 mm lower radius / 31 mm shoulder / 15 mm neck and ~114 mm height profile, the small beaker uses the declared 50 mm diameter x 60 mm height envelope, the hotplate top is 116 x 108 mm, and the gauze receiver is 96 mm across. The visible pickup staging supports, vessel mass/inertia, friction and contact material remain controlled benchmark estimates rather than measurements of installed hardware. The unpowered hotplate and ring-stand/gauze support model rigid contact only; no thermal, fluid, vacuum, payload-certification, glass-compliance, tactile, force-sensor, or hardware-safety behavior is claimed. The vessel colliders are validated only for this direct exterior pinch/lift/place task; they are not validated for insertion, pouring, filling, or liquid operations."
+          if text.count(old) != 1:
+              raise SystemExit('provenance dry geometry paragraph mismatch')
+          provenance.write_text(text.replace(old, new, 1))
+
+          readme = Path('README.md')
+          text = readme.read_text()
+          old = 'OpenArm, LeKiwi, MicroDuck, Unitree G1, Panda, and ASIMOV remain separate later robot-specific migration work.'
+          new = 'LeKiwi, MicroDuck, Unitree G1, Panda, and ASIMOV remain separate later robot-specific migration work.'
+          if text.count(old) != 1:
+              raise SystemExit('README migration-status wording mismatch')
+          readme.write_text(text.replace(old, new, 1))
+
+          print('final OpenArm model sha256:', model_hash)
           PY
-      - name: Commit only when patch changed files
+      - name: Static syntax check before committing
         run: |
-          if git diff --quiet; then
-            echo "Coupling reset patch already present."
-            exit 0
-          fi
+          node --check src/physics/openarm-model-package.js
+          node --check src/physics/openarm-scene.js
+          node --check src/physics/openarm-physical-simulator.js
+          node --check tests/physics/openarm-phase5a-core.mjs
+          node --check tests/openarm-phase5a-browser.spec.mjs
+          python -m py_compile native/openarm_v2_reference.py
+          node tests/physics/openarm-phase5a-core.mjs
+      - name: Commit refined OpenArm implementation
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/physics/openarm-mujoco-worker.js native/openarm_v2_reference.py .github/workflows/openarm-design-probe.yml
-          git commit -m "fix(openarm): initialize coupled passive fingers on reset [coupling-patched]"
+          git add models/openarm_v2/manipulation.xml models/openarm_v2/PROVENANCE.md README.md native/openarm_v2_reference.py src/physics/openarm-model-package.js src/physics/openarm-scene.js src/physics/openarm-physical-simulator.js src/task-catalog.js tests/physics/openarm-phase5a-core.mjs tests/openarm-phase5a-browser.spec.mjs
+          git commit -m "fix(openarm): align causal task geometry and controller [openarm-fidelity-final]"
           git push
