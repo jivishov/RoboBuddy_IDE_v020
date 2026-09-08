@@ -2,13 +2,17 @@ import { IdeEditor } from './editor.js';
 import { PythonRuntime } from './python-runtime.js';
 import { SimulatorHost } from './simulator-host.js';
 import { PROFILES, validateAction, fidelityNoticeFor, LEROBOT_REVISION } from './profiles.js';
-import { TASK_PATCH_REVISION, defaultTaskId, isKinematicRigScenario, loadPatchedScenario, taskDescriptor, tasksForProfile } from './task-catalog.js';
+import { TASK_PATCH_REVISION, defaultTaskId, isKinematicRigScenario, isPhysicalMujocoScenario, loadPatchedScenario, taskDescriptor, tasksForProfile } from './task-catalog.js';
 import { buildPatchedWorkspace } from './task-workspace.js';
 import { applyTheme, readStoredTheme, THEMES } from './themes.js';
 import { AgentFacade } from './webmcp/agent-facade.js';
 import { createWebMcpRegistration } from './webmcp/register-ide-tools.js';
 import { MicroDuckControlDeck } from './microduck/control-deck.js';
 import { MicroDuckPythonBridge } from './microduck/python-bridge.js';
+import { PhysicalPythonRuntime } from './runtime/physical-python-runtime.js';
+import { LivePythonBridge } from './runtime/live-python-bridge.js';
+import { applyPhysicsPreviewStatus } from './physics/ui-status.js';
+import { installPhysicalAgentFacade } from './webmcp/physical-agent-facade.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -44,6 +48,17 @@ class App {
     this.runtime = new PythonRuntime();
     this.highContrastScene = true;
     this.sim = new SimulatorHost($('simCanvas'));
+    this.physicalRuntime = new PhysicalPythonRuntime({
+      bridgeFactory: () => {
+        const session = this.sim.getPhysicalSession();
+        if (!session) throw new Error('The active workspace has no authoritative physical session.');
+        return new LivePythonBridge(session);
+      },
+      onBoundary: (source, method) => this.showPhysicalBoundary(source, method),
+      onOutput: (output) => { this.console = output; this.renderPanels(); },
+      onState: ({ state }) => { $('simCanvas').dataset.physicalPythonState = state; },
+    });
+    this.physicalExecutionToken = null;
     this.microduckRuntime = new MicroDuckPythonBridge({
       simulator: this.sim,
       onBoundary: (source, method) => this.showMicroDuckBoundary(source, method),
@@ -87,7 +102,8 @@ class App {
   }
 
   isPolicyWorkspace() { return this.scenario?.simulationMode === 'policy_sim'; }
-  usesSourcePlant() { return Boolean(this.scenario) && !isKinematicRigScenario(this.scenario) && !this.isPolicyWorkspace(); }
+  isPhysicalWorkspace() { return isPhysicalMujocoScenario(this.scenario); }
+  usesSourcePlant() { return Boolean(this.scenario) && !this.isPhysicalWorkspace() && !isKinematicRigScenario(this.scenario) && !this.isPolicyWorkspace(); }
 
   isKinematicPoseWorkspace() { return isKinematicRigScenario(this.scenario); }
 
@@ -140,16 +156,17 @@ class App {
     $('robotSelect').value = id;
     const p = PROFILES[id];
     $('robotLabel').textContent = p.label;
-    $('driverLabel').textContent = p.driver;
-    $('driverStatus').textContent = p.driver;
+    const visibleDriver = id === 'so101' ? 'robobuddy.sim.v1 · browser MuJoCo' : p.driver;
+    $('driverLabel').textContent = visibleDriver;
+    $('driverStatus').textContent = visibleDriver;
     this.updateSimulationPresentation(p);
     this.updateExecutionControls();
-    this.setStatus(p.simulationMode === 'policy_sim' ? 'Loading local MicroDuck runtime visual…' : p.simulationMode === 'kinematic_pose' ? 'Loading Unitree canonical pose workspace…' : 'Loading reviewed mission and source plant…');
+    this.setStatus(id === 'so101' ? 'Loading SO-101 MuJoCo physical workspace…' : p.simulationMode === 'policy_sim' ? 'Loading local MicroDuck runtime visual…' : p.simulationMode === 'kinematic_pose' ? 'Loading Unitree canonical pose workspace…' : 'Loading reviewed mission and source plant…');
     try {
       const selectedTaskId = this.taskId;
       const scenario = await loadPatchedScenario(id, selectedTaskId);
       if (generation !== this.workspaceGeneration) return;
-      if (!scenario) throw new Error(`No pinned source task is configured for ${id}.`);
+      if (!scenario) throw new Error(`No configured task is available for ${id}.`);
       const starter = buildPatchedWorkspace(id, scenario);
       const files = this.loadStored({ scenario, profileId: id, taskId: selectedTaskId }) || starter;
       const simulatorReady = await this.queueSimulatorTransition(generation, () => (
@@ -168,8 +185,11 @@ class App {
       $('cameraModeLabel').hidden = !this.isPolicyWorkspace();
       this.setWorkspaceMutationEnabled(true);
       this.updateExecutionControls();
+      applyPhysicsPreviewStatus(id);
       this.emitAgentContextChange();
-      const source = p.simulationMode === 'policy_sim'
+      const source = this.isPhysicalWorkspace()
+        ? `MuJoCo ${scenario.modelPackage} · ${scenario.physicalApi.version}`
+        : p.simulationMode === 'policy_sim'
         ? 'pinned runtime monitor visual · 50 Hz policy simulation'
         : this.isKinematicPoseWorkspace()
         ? `canonical mesh ${this.scenario.canonicalModel.revision.slice(0, 12)}`
@@ -183,8 +203,8 @@ class App {
       this.files = { 'main.py': `# RoboBuddy workspace failed to load.\n# ${String(error.message || error)}\n` };
       this.renderFiles();
       this.openFile('main.py');
-      this.problem('error', p.simulationMode === 'policy_sim' ? 'MICRODUCK_RIG' : p.simulationMode === 'kinematic_pose' ? 'RIG_WORKSPACE' : 'SOURCE_TASK', String(error.message || error));
-      this.setStatus(p.simulationMode === 'policy_sim' ? 'MicroDuck runtime visual unavailable' : p.simulationMode === 'kinematic_pose' ? 'Unitree rig workspace unavailable' : 'Pinned source task unavailable');
+      this.problem('error', id === 'so101' ? 'PHYSICAL_WORKSPACE' : p.simulationMode === 'policy_sim' ? 'MICRODUCK_RIG' : p.simulationMode === 'kinematic_pose' ? 'RIG_WORKSPACE' : 'SOURCE_TASK', String(error.message || error));
+      this.setStatus(id === 'so101' ? 'SO-101 physical workspace unavailable' : p.simulationMode === 'policy_sim' ? 'MicroDuck runtime visual unavailable' : p.simulationMode === 'kinematic_pose' ? 'Unitree rig workspace unavailable' : 'Pinned source task unavailable');
       this.updateExecutionControls();
       this.emitAgentContextChange();
     }
@@ -204,7 +224,7 @@ class App {
 
   onEdit(file, value) {
     if (!this.workspaceMutationEnabled || this.workspaceStatus !== 'ready') return;
-    if (this.microduckRuntime.isActive()) this.cancelExecution('WORKSPACE_CHANGED');
+    if (this.microduckRuntime.isActive() || this.physicalRuntime.isActive()) this.cancelExecution('WORKSPACE_CHANGED');
     this.workspaceGeneration += 1;
     this.files[file] = value;
     this.dirty.add(file);
@@ -252,25 +272,32 @@ class App {
     const scenario = this.scenario;
     const kinematic = this.isKinematicPoseWorkspace();
     const policy = this.isPolicyWorkspace();
+    const physical = this.isPhysicalWorkspace();
     const labels = [];
     for (const item of scenario?.portablePython?.referenceActions || []) {
       const label = String(item.label || 'physical action');
       if (!labels.includes(label)) labels.push(label);
       if (labels.length >= 12) break;
     }
-    const sourceLabel = policy ? 'Pinned runtime hierarchy' : kinematic ? 'Canonical mesh source' : 'Pinned task source';
-    const sourceText = policy
+    const sourceLabel = physical ? 'Physical model / benchmark' : policy ? 'Pinned runtime hierarchy' : kinematic ? 'Canonical mesh source' : 'Pinned task source';
+    const sourceText = physical
+      ? `${scenario.modelPackage} · ${scenario.modelId} · ${scenario.physicalApi.version}`
+      : policy
       ? `${scenario.canonicalModel.repository}@${scenario.canonicalModel.revision.slice(0, 12)} · ${scenario.canonicalModel.sourcePath} · ${scenario.canonicalModel.geometry}`
       : kinematic
       ? `RoboBuddy_AI@${scenario.canonicalModel.revision.slice(0, 12)} · Unitree URDF ${scenario.canonicalModel.sourceRevision.slice(0, 12)} · ${scenario.canonicalModel.license}`
       : `RoboBuddy_AI@${TASK_PATCH_REVISION.slice(0, 12)}`;
-    $('taskPanel').innerHTML = `<h2>${escapeHtml(scenario?.title || p.task.title)}</h2><p>${escapeHtml(scenario?.brief || p.source)}</p><p><strong>${sourceLabel}:</strong> ${escapeHtml(sourceText)}</p><ol>${labels.map((label, index) => `<li class="${index === 0 ? 'task-current' : ''}">${escapeHtml(label)}</li>`).join('')}</ol><details><summary>Fidelity boundary</summary><p>${escapeHtml(p.task.limitations)}</p></details>`;
-    $('fidelityText').textContent = policy
+    $('taskPanel').innerHTML = `<h2>${escapeHtml(scenario?.title || p.task.title)}</h2><p>${escapeHtml(scenario?.brief || p.source)}</p><p><strong>${sourceLabel}:</strong> ${escapeHtml(sourceText)}</p><ol>${labels.map((label, index) => `<li class="${index === 0 ? 'task-current' : ''}">${escapeHtml(label)}</li>`).join('')}</ol><details><summary>Fidelity boundary</summary><p>${escapeHtml(physical ? scenario.limitations.join(' ') : p.task.limitations)}</p></details>`;
+    $('fidelityText').textContent = physical
+      ? `SO-101 uses one authoritative browser MuJoCo PhysicsSession. Rendering, live Python, WebMCP, and task evaluation consume that same state. ${scenario.limitations.join(' ')}`
+      : policy
       ? `${fidelityNoticeFor(this.profileId)} ${p.task.limitations}`
       : kinematic
       ? `${fidelityNoticeFor(this.profileId)} ${p.task.limitations}`
       : `${fidelityNoticeFor(this.profileId)} LeRobot revision ${LEROBOT_REVISION}. Task definitions, reference actions, collision/contact plant, and support rules are pinned to RoboBuddy_AI revision ${TASK_PATCH_REVISION}. ${p.task.limitations}`;
-    $('sideRobotSummary').textContent = policy
+    $('sideRobotSummary').textContent = physical
+      ? `${p.label}. Browser MuJoCo is the single physical authority for the rigid-body benchmark. The canonical mesh is presentation-only; actual joint/block state and task evidence come from MuJoCo observations. Hardware validation remains pending.`
+      : policy
       ? `${p.label}. Exact pinned ONNX policies and the official Apache-covered runtime visual; local winding/normals, configured lower-bill movement, rollers, contacts, sensors, and dynamics do not establish RL-environment or hardware parity.`
       : kinematic
       ? `${p.label}. Canonical 29-joint mesh pose view; telemetry is browser-held joint state and contact values are intentionally unavailable.`
@@ -288,7 +315,9 @@ class App {
 
   async resetWorkspace() {
     if (!this.workspaceMutationEnabled || this.workspaceStatus !== 'ready') return;
-    const prompt = this.isKinematicPoseWorkspace()
+    const prompt = this.isPhysicalWorkspace()
+      ? 'Reset all files for this SO-101 physical workspace to the live async MuJoCo starter?'
+      : this.isKinematicPoseWorkspace()
       ? 'Reset all files for this Unitree workspace to its browser-only kinematic-pose starter?'
       : this.isPolicyWorkspace()
       ? 'Reset all files for this MicroDuck workspace to its live browser-simulation Python starter?'
@@ -307,6 +336,7 @@ class App {
   }
 
   async prepare() {
+    if (this.isPhysicalWorkspace()) throw new Error('SO-101 physical workspaces execute live async Python and do not compile to replay events.');
     this.setStatus('Preparing Python…');
     this.problems = [];
     this.commands = [];
@@ -374,14 +404,17 @@ class App {
     const paused = this.executionState === 'paused';
     const pauseButton = $('pauseBtn');
     const policyReady = workspaceReady && this.isPolicyWorkspace();
+    const physical = workspaceReady && this.isPhysicalWorkspace();
     pauseButton.disabled = !active && !policyReady;
     pauseButton.textContent = paused ? '▶ Resume' : '⏸ Pause';
     pauseButton.title = paused ? 'Resume simulation' : 'Pause simulation';
     pauseButton.setAttribute('aria-label', paused ? 'Resume simulation' : 'Pause simulation');
     pauseButton.setAttribute('aria-pressed', String(paused));
     $('runBtn').disabled = active || !executableWorkspace;
-    $('stepBtn').disabled = (!this.isPolicyWorkspace() && active) || !executableWorkspace || (this.isPolicyWorkspace() && active && !paused);
-    $('cursorBtn').disabled = active || !executableWorkspace;
+    $('stepBtn').disabled = physical || (!this.isPolicyWorkspace() && active) || !executableWorkspace || (this.isPolicyWorkspace() && active && !paused);
+    $('stepBtn').title = physical ? 'SO-101 physical Python uses live async execution; edit code and use Run.' : 'Step physical action (F10)';
+    $('cursorBtn').disabled = physical || active || !executableWorkspace;
+    $('cursorBtn').title = physical ? 'Run to Cursor is not exposed for the live physical worker; use Run.' : 'Run to Cursor (Ctrl+F10)';
     $('resetBtn').disabled = !workspaceReady;
   }
 
@@ -405,7 +438,9 @@ class App {
   cancelExecution(reason = 'OPERATION_CANCELLED') {
     this.runToken++;
     if (this.microduckRuntime.isActive()) void this.microduckRuntime.cancel(reason);
+    if (this.physicalRuntime.isActive()) void this.physicalRuntime.cancel(reason);
     this.microduckExecutionToken = null;
+    this.physicalExecutionToken = null;
     this.executionState = 'idle';
     const waiter = this.pauseWaiter;
     this.pauseWaiter = null;
@@ -422,6 +457,21 @@ class App {
   }
 
   togglePause() {
+    if (this.workspaceStatus === 'ready' && this.isPhysicalWorkspace()) {
+      if (!this.physicalRuntime.isActive()) return;
+      if (this.executionState === 'paused') {
+        this.executionState = 'running';
+        void this.physicalRuntime.resume().catch((error) => this.problem('error', error.code || 'PHYSICAL_PAUSE', error.message));
+        this.updateExecutionControls();
+        this.setStatus('SO-101 live Python and MuJoCo resumed');
+      } else if (this.executionState === 'running') {
+        this.executionState = 'paused';
+        void this.physicalRuntime.pause().catch((error) => this.problem('error', error.code || 'PHYSICAL_PAUSE', error.message));
+        this.updateExecutionControls();
+        this.setStatus('SO-101 live Python and MuJoCo paused');
+      }
+      return;
+    }
     if (this.workspaceStatus === 'ready' && this.isPolicyWorkspace()) {
       if (this.microduckRuntime.isActive()) {
         if (this.executionState === 'paused') {
@@ -507,6 +557,7 @@ class App {
 
   async run() {
     if (this.workspaceStatus !== 'ready') return false;
+    if (this.isPhysicalWorkspace()) return this.runPhysicalSo101();
     if (this.isPolicyWorkspace()) return this.runMicroDuck('run');
     const token = this.beginExecution();
     if (token === null) return false;
@@ -537,8 +588,46 @@ class App {
     return completed;
   }
 
+  async runPhysicalSo101() {
+    const token = this.beginExecution();
+    if (token === null) return false;
+    this.physicalExecutionToken = token;
+    this.problems = [];
+    this.commands = [];
+    this.console = { stdout: '', stderr: '' };
+    let completed = false;
+    try {
+      if (!(await this.resetSimulation({ cancel: false }))) return false;
+      this.setStatus('Running live SO-101 physical Python against the authoritative MuJoCo session…');
+      const result = await this.physicalRuntime.start(this.files, {
+        workspaceEpoch: this.workspaceGeneration,
+        robotId: 'so101_follower',
+      });
+      if (token !== this.runToken) return false;
+      this.console = { stdout: result.stdout || '', stderr: result.stderr || '' };
+      const evaluation = this.sim.getTaskEvaluation();
+      this.editor.highlightLine(null);
+      $('simActionLabel').textContent = evaluation?.success ? 'Physical task complete' : 'Run complete · task incomplete';
+      this.setStatus(evaluation?.success ? 'Run complete · SO-101 physical block transfer succeeded' : 'Run complete · physical task criteria not yet satisfied');
+      this.renderPanels();
+      completed = true;
+      return true;
+    } catch (error) {
+      if (token === this.runToken && error.code !== 'OPERATION_CANCELLED') {
+        this.problem('error', error.code || 'PYTHON', error.message);
+        this.setStatus('SO-101 live physical Python run failed');
+      }
+      return false;
+    } finally {
+      this.physicalExecutionToken = null;
+      if (!completed && token === this.runToken) this.renderPanels();
+      this.finishExecution(token);
+    }
+  }
+
   async step() {
     if (this.workspaceStatus !== 'ready') return false;
+    if (this.isPhysicalWorkspace()) { this.setStatus('SO-101 physical Python is live async; use Run after editing the program.'); return false; }
     if (this.isPolicyWorkspace()) return this.stepMicroDuck();
     if (this.executionState !== 'idle') return;
     if (!this.prepared) {
@@ -562,6 +651,7 @@ class App {
 
   async runToCursor() {
     if (this.workspaceStatus !== 'ready') return false;
+    if (this.isPhysicalWorkspace()) { this.setStatus('Run to Cursor is disabled for the live physical Python worker; use Run.'); return false; }
     if (this.isPolicyWorkspace()) return this.runMicroDuck('cursor', { file: this.currentFile, line: this.editor.getCursorLine() });
     const token = this.beginExecution();
     if (token === null) return;
@@ -590,11 +680,20 @@ class App {
   }
 
   stop() {
+    const physicalPythonActive = this.physicalRuntime.isActive();
     this.cancelExecution('STOP');
-    if (this.isPolicyWorkspace()) this.sim.stop();
+    if (this.isPolicyWorkspace() || (this.isPhysicalWorkspace() && !physicalPythonActive)) void this.sim.stop();
     this.editor.highlightLine(null);
     $('simActionLabel').textContent = 'Stopped';
     this.setStatus('Simulation stopped');
+  }
+
+  showPhysicalBoundary(source, method) {
+    if (this.currentFile === source?.file) this.editor.highlightLine(source.line);
+    $('simActionLabel').textContent = `${source?.file || 'main.py'}:${source?.line || 1} · await ${method}()`;
+    this.commands.push({ file: source?.file || 'main.py', line: Number(source?.line) || 1, command: method });
+    if (this.commands.length > 100) this.commands.shift();
+    this.renderPanels();
   }
 
   showMicroDuckBoundary(source, method) {
@@ -683,21 +782,28 @@ class App {
 
   renderPanels() {
     const problems = $('problemsPanel');
-    problems.innerHTML = this.problems.length ? this.problems.map((item) => `<div class="problem ${item.level}"><strong>${item.code}</strong><div>${escapeHtml(item.message).replace(/\n/g, '<br>')}</div></div>`).join('') : this.isPolicyWorkspace() ? '<div class="problem info"><strong>MODELED</strong><div>No simulator faults. Camera imagery, frame-derived IMUs, 8×8 ToF, contacts, dynamics, and generated audio are browser models—not calibrated hardware signals.</div></div>' : '<div class="empty-state">No problems.</div>';
+    problems.innerHTML = this.problems.length ? this.problems.map((item) => `<div class="problem ${item.level}"><strong>${item.code}</strong><div>${escapeHtml(item.message).replace(/\n/g, '<br>')}</div></div>`).join('') : this.isPhysicalWorkspace() ? '<div class="problem info"><strong>PHYSICAL</strong><div>SO-101 state, contacts, block motion, and task evidence are read from the authoritative MuJoCo PhysicsSession. This is simulator evidence, not hardware calibration.</div></div>' : this.isPolicyWorkspace() ? '<div class="problem info"><strong>MODELED</strong><div>No simulator faults. Camera imagery, frame-derived IMUs, 8×8 ToF, contacts, dynamics, and generated audio are browser models—not calibrated hardware signals.</div></div>' : '<div class="empty-state">No problems.</div>';
     if (this.console.stdout || this.console.stderr) problems.innerHTML += `<div class="console-block">${this.console.stdout.split('\n').filter(Boolean).map((line) => `<div class="console-line">${escapeHtml(line)}</div>`).join('')}${this.console.stderr.split('\n').filter(Boolean).map((line) => `<div class="console-line stderr">${escapeHtml(line)}</div>`).join('')}</div>`;
     const kinematic = this.isKinematicPoseWorkspace();
+    const physical = this.isPhysicalWorkspace();
     const telemetry = this.sim.getTelemetry();
-    const telemetryNote = this.isPolicyWorkspace()
+    const telemetryNote = physical
+      ? 'ACTUAL MUJOCO GROUND-TRUTH STATE — SI units/radians from the single SO-101 PhysicsSession; not commanded targets and not hardware telemetry.'
+      : this.isPolicyWorkspace()
       ? 'MODELED MICRODUCK POLICY-SIM STATE — exact pinned ONNX inference over original approximate browser dynamics; not hardware telemetry or RL-environment parity.'
       : kinematic
       ? 'BROWSER-HELD KINEMATIC G1 JOINT STATE — not measured telemetry, controller state, or a physical robot observation.'
       : 'SIMULATED ACTUAL STATE FROM THE PINNED ROBObUDDY FIXED-STEP PLANT — not measured hardware telemetry.';
     $('telemetryPanel').innerHTML = `<div class="panel-note">${telemetryNote}</div><table><tr><th>Field</th><th>Modeled value</th></tr>${Object.entries(telemetry).map(([key, value]) => `<tr><td>${escapeHtml(key)}</td><td>${Number(value).toFixed(3)}</td></tr>`).join('')}</table>`;
-    $('commandsPanel').innerHTML = this.commands.length ? this.commands.map((command, index) => this.isPolicyWorkspace()
+    $('commandsPanel').innerHTML = this.commands.length ? this.commands.map((command, index) => physical
+      ? `<div class="command-row ${index === this.commands.length - 1 ? 'active' : ''}"><span>${index + 1}</span><span>${escapeHtml(`${command.file}:${command.line}`)}</span><code>${escapeHtml(command.command)}</code><span>live robobuddy.sim.v1</span></div>`
+      : this.isPolicyWorkspace()
       ? `<div class="command-row ${index === this.commands.length - 1 ? 'active' : ''}"><span>${index + 1}</span><span>${escapeHtml(`${command.file}:${command.line}`)}</span><code>${escapeHtml(command.command)}</code><span>browser simulation</span></div>`
-      : `<div class="command-row ${index === this.stepIndex - 1 ? 'active' : ''}"><span>${index + 1}</span><span>${escapeHtml(this.actionLabel(index))}</span><code>${escapeHtml(JSON.stringify(command.action))}</code><span>${kinematic ? 'kinematic pose' : 'physical target'}</span></div>`).join('') : this.isPolicyWorkspace() ? '<div class="empty-state">Run, Step, or Run to Cursor to execute live catalog-backed MicroDuck Python.</div>' : `<div class="empty-state">Run or Step Action to prepare the ${kinematic ? 'kinematic pose' : 'physical command'} queue.</div>`;
+      : `<div class="command-row ${index === this.stepIndex - 1 ? 'active' : ''}"><span>${index + 1}</span><span>${escapeHtml(this.actionLabel(index))}</span><code>${escapeHtml(JSON.stringify(command.action))}</code><span>${kinematic ? 'kinematic pose' : 'physical target'}</span></div>`).join('') : physical ? '<div class="empty-state">Run the live async SO-101 Python program to populate physical API boundaries.</div>' : this.isPolicyWorkspace() ? '<div class="empty-state">Run, Step, or Run to Cursor to execute live catalog-backed MicroDuck Python.</div>' : `<div class="empty-state">Run or Step Action to prepare the ${kinematic ? 'kinematic pose' : 'physical command'} queue.</div>`;
     const contacts = this.sim.getContacts();
-    const contactsNote = this.isPolicyWorkspace()
+    const contactsNote = physical
+      ? 'MUJOCO CONTACT / TASK EVIDENCE. Gripper contact, lift, carry, release, settling, and final target state are observation-derived; no synthetic contact/success events or hidden attachments.'
+      : this.isPolicyWorkspace()
       ? 'APPROXIMATE MUJOCO CONTACT STATE. Ball motion is contact-derived; no grasp attachment, physical parity, or hardware validation is claimed.'
       : kinematic
       ? 'G1 CONTACT / SUPPORT IS NOT SIMULATED. This panel reports the explicit kinematic boundary, not physical contact data.'
@@ -819,18 +925,11 @@ class App {
     const editor = $('editor');
     editor.inert = !this.workspaceMutationEnabled;
     editor.setAttribute('aria-disabled', String(!this.workspaceMutationEnabled));
-    for (const button of document.querySelectorAll('[data-action="import"], [data-action="resetWorkspace"]')) {
-      button.disabled = !this.workspaceMutationEnabled;
-    }
+    for (const button of document.querySelectorAll('[data-action="import"], [data-action="resetWorkspace"]')) button.disabled = !this.workspaceMutationEnabled;
   }
 
-  getAgentAccess() {
-    return this.agentAccess;
-  }
-
-  getExecutionState() {
-    return this.executionState;
-  }
+  getAgentAccess() { return this.agentAccess; }
+  getExecutionState() { return this.executionState; }
 
   onAgentAccessChange(listener) {
     this.agentAccessListeners.add(listener);
@@ -905,14 +1004,15 @@ class App {
 
     const profile = PROFILES[this.profileId];
     const policySimulation = profile?.simulationMode === 'policy_sim';
-    const sourcePlantAvailable = !policySimulation && !this.isKinematicPoseWorkspace();
+    const physicalSimulation = this.isPhysicalWorkspace();
+    const sourcePlantAvailable = !physicalSimulation && !policySimulation && !this.isKinematicPoseWorkspace();
     return deepFreeze({
       ...base,
       title: String(this.scenario.title || profile?.task?.title || ''),
       brief: String(this.scenario.brief || profile?.source || ''),
       robot: String(profile?.label || this.profileId),
-      simulationMode: policySimulation ? 'policy_sim' : sourcePlantAvailable ? 'source_plant' : 'kinematic_pose',
-      stateKind: policySimulation ? 'browser_policy_sim' : sourcePlantAvailable ? 'modeled_source_plant' : 'browser_kinematic_pose',
+      simulationMode: physicalSimulation ? 'physical_mujoco' : policySimulation ? 'policy_sim' : sourcePlantAvailable ? 'source_plant' : 'kinematic_pose',
+      stateKind: physicalSimulation ? 'mujoco_physical_state' : policySimulation ? 'browser_policy_sim' : sourcePlantAvailable ? 'modeled_source_plant' : 'browser_kinematic_pose',
       currentFile: this.currentFile,
       files: Object.fromEntries(Object.entries(this.files).map(([name, content]) => [name, String(content)])),
       simulation: {
@@ -921,6 +1021,8 @@ class App {
         preparedActionCount: this.commands.length,
         telemetry: { ...this.sim.getTelemetry() },
         contacts: { ...this.sim.getContacts() },
+        taskEvaluation: this.sim.getTaskEvaluation(),
+        physicalAuthority: this.sim.getPhysicalAuthorityToken(),
         problems: this.problems.map(({ level, code, message }) => ({ level, code, message })),
       },
     });
@@ -934,7 +1036,7 @@ class App {
       workspaceStatus: this.workspaceStatus,
       workspaceGeneration: this.workspaceGeneration,
       profileId: this.profileId,
-      simulationMode: profile?.simulationMode || null,
+      simulationMode: this.scenario?.simulationMode || profile?.simulationMode || null,
       simulationReady: this.workspaceStatus === 'ready' && this.sim.isReady(),
       simulatorEpoch: this.sim.getEpoch(),
     });
@@ -944,25 +1046,11 @@ class App {
     return this.workspaceStatus === 'ready' && this.profileId === 'microduck' && this.isPolicyWorkspace() && this.sim.isReady();
   }
 
-  executeAgentMicroduckCommand(command, args, context) {
-    return this.sim.executeCommand(command, args, context);
-  }
-
-  abortAgentMicroduckCommand(command, controllerId) {
-    return this.sim.abortCommand(command, { source: 'webmcp', controllerId });
-  }
-
-  isAgentMicroduckCommandComplete(command, controllerId) {
-    return this.sim.isCommandComplete(command, { source: 'webmcp', controllerId });
-  }
-
-  isAgentMicroduckControllerActive(controllerId) {
-    return this.sim.isControllerActive('webmcp', controllerId);
-  }
-
-  getAgentMicroduckState() {
-    return this.isAgentMicroduckSimulationReady() ? this.sim.getState() : null;
-  }
+  executeAgentMicroduckCommand(command, args, context) { return this.sim.executeCommand(command, args, context); }
+  abortAgentMicroduckCommand(command, controllerId) { return this.sim.abortCommand(command, { source: 'webmcp', controllerId }); }
+  isAgentMicroduckCommandComplete(command, controllerId) { return this.sim.isCommandComplete(command, { source: 'webmcp', controllerId }); }
+  isAgentMicroduckControllerActive(controllerId) { return this.sim.isControllerActive('webmcp', controllerId); }
+  getAgentMicroduckState() { return this.isAgentMicroduckSimulationReady() ? this.sim.getState() : null; }
 
   manageAgentMicroduckVisualCues(request) {
     if (!this.isAgentMicroduckSimulationReady()) return null;
@@ -983,11 +1071,7 @@ class App {
     this.editor.replaceLineRange(startLine, endLine, replacement);
     this.editor.highlightLine(workingStartLine);
     this.setStatus(`Agent drafted a temporary cooperative edit in ${file}; refresh reloads the saved workspace.`);
-    return {
-      file,
-      workspaceGeneration: this.workspaceGeneration,
-      workingStartLine,
-    };
+    return { file, workspaceGeneration: this.workspaceGeneration, workingStartLine };
   }
 
   closeMenus() {
@@ -1000,7 +1084,7 @@ class App {
   renderPalette(q) { const commands = this.commandsList().filter((c) => c.label.toLowerCase().includes(q.toLowerCase())); $('commandList').innerHTML = ''; commands.forEach((c) => { const b = document.createElement('button'); b.textContent = c.label; b.onclick = () => { $('commandPalette').hidden = true; c.run(); }; $('commandList').appendChild(b); }); }
   commandsList() {
     const themeCommands = Object.values(THEMES).map((theme) => ({ label: `Preferences: Color Theme — ${theme.label}`, run: () => this.setTheme(theme.id) }));
-    const stepLabel = this.isPolicyWorkspace() ? 'Run: Step MicroDuck Python boundary' : 'Run: Step physical action';
+    const stepLabel = this.isPhysicalWorkspace() ? 'Run: Step unavailable for live physical Python' : this.isPolicyWorkspace() ? 'Run: Step MicroDuck Python boundary' : 'Run: Step physical action';
     return [{ label: 'Run: Run simulation', run: () => this.run() }, { label: stepLabel, run: () => this.step() }, { label: 'Run: Run to cursor', run: () => this.runToCursor() }, { label: 'View: Toggle Explorer', run: () => this.toggleSidebar() }, { label: 'View: Toggle diagnostics panel', run: () => this.togglePanel() }, { label: 'View: Toggle high-contrast scene', run: () => this.toggleHighContrastScene() }, { label: 'View: Fit simulator', run: () => this.sim.fit() }, { label: 'Robot: Contact diagnostics', run: () => this.openBottom('contacts') }, { label: 'Robot: Simulated telemetry', run: () => this.openBottom('telemetry') }, { label: 'Help: About RoboBuddy IDE', run: () => this.openAbout() }, { label: 'File: Save draft', run: () => this.save() }, { label: 'File: Export workspace', run: () => this.exportWorkspace() }, ...themeCommands];
   }
 
@@ -1055,7 +1139,7 @@ function deepFreeze(value) {
 }
 
 const app = new App();
-const agentFacade = new AgentFacade(app);
+const agentFacade = installPhysicalAgentFacade(new AgentFacade(app));
 const webMcpRegistration = createWebMcpRegistration(agentFacade, {
   onRegistrationChange: (state) => app.setAgentRegistrationState(state),
 });
