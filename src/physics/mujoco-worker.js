@@ -10,7 +10,7 @@ const INTEGRATOR_CODES = Object.freeze({ Euler: 0, RK4: 1, implicit: 2, implicit
 let mujoco = null; let model = null; let data = null; let paused = false; let descriptor = null;
 let jointState = new Map(); let actuatorState = new Map(); let bodyState = new Map(); let modelInfo = null;
 
-function reply(id, ok, payload = null, error = null) { postMessage({ id, ok, payload, error }); }
+function reply(id, ok, payload = null, error = null) { postMessage({ id, op: null, ok, payload, error }); }
 async function ensureMuJoCo() { if (mujoco) return mujoco; mujoco = await loadMujoco({ locateFile: (path) => new URL(path, MUJOCO_BASE_URL).href }); return mujoco; }
 async function sha256Text(text) { if (!crypto?.subtle) throw new Error('Web Crypto is required to identify model bytes'); const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)); return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, '0')).join(''); }
 function enumValue(name) { const entry = mujoco?.mjtObj?.[name]; const value = entry && typeof entry === 'object' && 'value' in entry ? entry.value : entry; if (!Number.isInteger(Number(value))) throw new Error(`MuJoCo object enum ${name} is unavailable`); return Number(value); }
@@ -39,7 +39,16 @@ function resolveModelAddresses(modelSha256) {
     if (actuator.controlRangeRad) assertNumericArrayClose(controlRange, actuator.controlRangeRad, `Actuator ${actuator.id} control range`);
     actuatorState.set(actuator.id, { ...actuator, id, controlRange });
   }
-  for (const body of descriptor.bodies || []) bodyState.set(body.id, { id: idFor('mjOBJ_BODY', body.id) });
+  for (const body of descriptor.bodies || []) {
+    const state = { id: idFor('mjOBJ_BODY', body.id), freeJointDof: null };
+    if (body.freeJointId) {
+      const freeJointId = idFor('mjOBJ_JOINT', body.freeJointId);
+      const dof = Number(model.jnt_dofadr[freeJointId]);
+      if (!Number.isInteger(dof) || dof < 0) throw new Error(`Free-joint address is invalid for ${body.id}`);
+      state.freeJointDof = dof;
+    }
+    bodyState.set(body.id, state);
+  }
 
   const timestepSeconds = Number(model.opt?.timestep);
   if (!Number.isFinite(timestepSeconds) || Math.abs(timestepSeconds - Number(descriptor.physics.timestepSeconds)) > 1e-12) throw new Error(`Unexpected timestep ${timestepSeconds}; expected ${descriptor.physics.timestepSeconds}`);
@@ -72,14 +81,25 @@ function positionActuatorForJoint(jointId, { required = false } = {}) {
   return matches[0] || null;
 }
 function actuatorForJoint(jointId) { return positionActuatorForJoint(jointId, { required: true }); }
-function actuatorEffortNm(actuator) {
-  const value = Number(data?.actuator_force?.[actuator?.id]);
-  return Number.isFinite(value) ? value : null;
-}
+function actuatorEffortNm(actuator) { const value = Number(data?.actuator_force?.[actuator?.id]); return Number.isFinite(value) ? value : null; }
 function observation() {
   if (!model || !data || !descriptor || !modelInfo) return { simulationTime: 0, model: null, engine: null, joints: {}, bodies: {}, contactCount: 0, contactsReadable: false, contacts: [] };
-  const joints = {}; for (const [name, joint] of jointState) { const actuator = positionActuatorForJoint(name); joints[name] = { positionRad: Number(data.qpos[joint.qpos]), velocityRadS: Number(data.qvel[joint.dof]), targetRad: actuator ? Number(data.ctrl[actuator.id]) : null, effortNm: actuator ? actuatorEffortNm(actuator) : null, controlRangeRad: actuator ? [...actuator.controlRange] : null, jointRangeRad: [...joint.range] }; }
-  const bodies = {}; for (const [name, body] of bodyState) { const posOffset = body.id * 3; const quatOffset = body.id * 4; bodies[name] = { frame: 'mujoco_world', positionM: [Number(data.xpos[posOffset]), Number(data.xpos[posOffset + 1]), Number(data.xpos[posOffset + 2])], quaternionWxyz: [Number(data.xquat[quatOffset]), Number(data.xquat[quatOffset + 1]), Number(data.xquat[quatOffset + 2]), Number(data.xquat[quatOffset + 3])] }; }
+  const joints = {};
+  for (const [name, joint] of jointState) {
+    const actuator = positionActuatorForJoint(name);
+    joints[name] = { positionRad: Number(data.qpos[joint.qpos]), velocityRadS: Number(data.qvel[joint.dof]), targetRad: actuator ? Number(data.ctrl[actuator.id]) : null, effortNm: actuator ? actuatorEffortNm(actuator) : null, controlRangeRad: actuator ? [...actuator.controlRange] : null, jointRangeRad: [...joint.range] };
+  }
+  const bodies = {};
+  for (const [name, body] of bodyState) {
+    const posOffset = body.id * 3; const quatOffset = body.id * 4;
+    const record = { frame: 'mujoco_world', positionM: [Number(data.xpos[posOffset]), Number(data.xpos[posOffset + 1]), Number(data.xpos[posOffset + 2])], quaternionWxyz: [Number(data.xquat[quatOffset]), Number(data.xquat[quatOffset + 1]), Number(data.xquat[quatOffset + 2]), Number(data.xquat[quatOffset + 3])] };
+    if (body.freeJointDof != null) {
+      const d = body.freeJointDof;
+      record.linearVelocityMPerS = [Number(data.qvel[d]), Number(data.qvel[d + 1]), Number(data.qvel[d + 2])];
+      record.angularVelocityRadPerS = [Number(data.qvel[d + 3]), Number(data.qvel[d + 4]), Number(data.qvel[d + 5])];
+    }
+    bodies[name] = record;
+  }
   const contactState = readContacts();
   return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts };
 }
@@ -133,7 +153,6 @@ function command(payload = {}) {
     if (!payload.targetsRad || typeof payload.targetsRad !== 'object' || Array.isArray(payload.targetsRad) || !Object.keys(payload.targetsRad).length) throw new Error('set_joint_targets requires a non-empty targetsRad object');
     targets = payload.targetsRad;
   } else throw new Error(`Unsupported physical command: ${payload.type}`);
-
   const validated = Object.entries(targets).map(([jointId, targetRad]) => [jointId, validatedJointTarget(jointId, targetRad)]);
   for (const [, { actuator, target }] of validated) data.ctrl[actuator.id] = target;
   return observation();
@@ -141,6 +160,17 @@ function command(payload = {}) {
 
 self.onmessage = async (event) => {
   const { id, op, payload } = event.data || {};
-  try { let result; if (op === 'load') result = await load(payload?.modelPackage); else if (op === 'reset') result = reset(); else if (op === 'step') result = step(payload?.count); else if (op === 'observe') result = observation(); else if (op === 'command') result = command(payload); else if (op === 'pause') { paused = true; result = observation(); } else if (op === 'resume') { paused = false; result = observation(); } else if (op === 'dispose') { disposeModel(); result = true; } else throw new Error(`Unknown worker operation: ${op}`); reply(id, true, result); }
-  catch (error) { reply(id, false, null, String(error?.stack || error?.message || error)); }
+  try {
+    let result;
+    if (op === 'load') result = await load(payload?.modelPackage);
+    else if (op === 'reset') result = reset();
+    else if (op === 'step') result = step(payload?.count);
+    else if (op === 'observe') result = observation();
+    else if (op === 'command') result = command(payload);
+    else if (op === 'pause') { paused = true; result = observation(); }
+    else if (op === 'resume') { paused = false; result = observation(); }
+    else if (op === 'dispose') { disposeModel(); result = true; }
+    else throw new Error(`Unknown worker operation: ${op}`);
+    reply(id, true, result);
+  } catch (error) { reply(id, false, null, String(error?.stack || error?.message || error)); }
 };
