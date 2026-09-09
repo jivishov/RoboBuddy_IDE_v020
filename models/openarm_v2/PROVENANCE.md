@@ -45,6 +45,33 @@ Presentation joints are driven only from observed MuJoCo joint positions. Free v
 - Rendering consumes MuJoCo observations and does not advance simulation.
 - Live Python and bounded WebMCP route to the same `PhysicsSession` used by rendering and evaluation.
 
+## Observation cadence
+
+The evaluator is a consumer of authoritative observations, so the rate at which the browser
+samples MuJoCo is part of the software-observation contract rather than an implementation
+detail. The browser workspace declares a cadence of **2 physics steps (2 ms at the pinned
+0.001 s timestep)** and exposes it in the presentation audit as `observationBatchSteps` and
+`observationPeriodSeconds`.
+
+The cadence is chosen from measured physical evidence, not from whichever value happened to
+make a test pass. Evaluating the native reference at every 1 ms step shows that the narrowest
+causal condition this task depends on — the beaker in intended wire-gauze support contact
+while still bilaterally pinched — holds for only 3 ms and 4 ms in its two occurrences. A
+2-step period is therefore guaranteed to land inside any window of two or more physics steps.
+Coarser cadences were measured to miss it: a 20-step and a 50-step period both observe the
+beaker reaching its destination while never observing the support-while-held predecessor, and
+the evaluator correctly refuses to infer the unobserved causal transition.
+
+Sampling runs inside the MuJoCo worker: one request advances every requested step and returns
+the ordered ground-truth observations captured at the declared cadence. Sampling never
+advances physics a second time, never fabricates a state, and never emits task events; each
+returned entry is an ordinary observation of the actual MuJoCo state at that step. The command
+budget is charged the actual executed step count once per request, derived from the
+simulation-time delta.
+
+This cadence is an implementation/observation-conformance parameter. It is not a sensor
+sample rate of any assembled OpenArm and carries no hardware-calibration claim.
+
 ## Task evaluator evidence
 
 Success is observation-derived and requires, independently for the flask and beaker: simultaneous bilateral finger contact; lift with bilateral contact; physically maintained horizontal transport; intended support contact while the vessel is still bilaterally held; an observed transition from gripper contact to release while intended support contact persists; post-release support-contact, target-region, low-velocity and low-drift settling for the declared simulation-time dwell; and actual post-settle end-effector displacement of at least the declared retreat distance while the vessel remains supported. The two transfers must occur in the required sequential shared-world order.

@@ -17,6 +17,52 @@ const SCENE_KEYS = new Set([
 const PHYSICS_KEYS = new Set(['timestepSeconds', 'integrator', 'iterations', 'lsIterations']);
 const INTEGRATORS = new Set(['Euler', 'RK4', 'implicit', 'implicitfast']);
 
+// A backend may optionally advance many authoritative physics steps in one request and
+// return the ground-truth observations captured at a declared step cadence. This keeps a
+// fine observation resolution affordable without one cross-thread round trip per sample.
+// Backends without the capability keep their original single-observation advanceSteps.
+export const SAMPLED_ADVANCE_METHOD = 'advanceStepsObserved';
+export const MAX_ADVANCE_STEPS_PER_REQUEST = 100000;
+export const MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE = 2048;
+
+export function supportsSampledAdvance(backend) {
+  return typeof backend?.[SAMPLED_ADVANCE_METHOD] === 'function';
+}
+
+export function sampledObservationCount(stepCount, sampleEverySteps) {
+  if (!Number.isInteger(stepCount) || stepCount < 1) throw new RangeError('stepCount must be a positive integer');
+  if (!Number.isInteger(sampleEverySteps) || sampleEverySteps < 1) throw new RangeError('sampleEverySteps must be a positive integer');
+  const aligned = Math.floor(stepCount / sampleEverySteps);
+  // The true post-request state is always the last sample, even when the requested step
+  // count is not a whole number of sampling periods.
+  return aligned * sampleEverySteps === stepCount ? aligned : aligned + 1;
+}
+
+export function assertSampledObservations(result, { stepCount, sampleEverySteps, previousSimulationTimeSeconds = null } = {}) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) throw new TypeError('Sampled advance must return a result object');
+  if (!Number.isInteger(result.executedSteps) || result.executedSteps < 0) throw new TypeError('Sampled advance must report an integer executedSteps count');
+  if (result.executedSteps > stepCount) throw new RangeError(`Sampled advance executed ${result.executedSteps} steps for a request of ${stepCount}`);
+  const observations = result.observations;
+  if (!Array.isArray(observations) || !observations.length) throw new TypeError('Sampled advance must return at least one authoritative observation');
+  const maximum = sampledObservationCount(stepCount, sampleEverySteps);
+  if (observations.length > maximum) throw new RangeError(`Sampled advance returned ${observations.length} observations for a declared ${maximum}-sample cadence`);
+  let cursor = previousSimulationTimeSeconds == null ? null : Number(previousSimulationTimeSeconds);
+  for (const observation of observations) {
+    const time = Number(observation?.simulationTimeSeconds);
+    if (!Number.isFinite(time) || time < 0) throw new TypeError('Every sampled observation must carry a finite simulation time');
+    if (cursor != null) {
+      const ordered = result.executedSteps === 0 ? time === cursor : time > cursor;
+      if (!ordered) throw new RangeError('Sampled observations must be ordered by strictly increasing simulation time');
+    }
+    cursor = time;
+  }
+  const finalObservation = result.finalObservation ?? observations[observations.length - 1];
+  if (finalObservation !== observations[observations.length - 1]) {
+    throw new RangeError('The final sampled observation must be the last returned sample');
+  }
+  return { observations, finalObservation };
+}
+
 export function assertPhysicsBackend(backend) {
   const required = [
     'loadScene',

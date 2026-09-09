@@ -9,7 +9,13 @@ import { OpenArmBimanualStackEvaluator } from './openarm-task-evaluator.js';
 
 const MAX_WEBMCP_ADVANCE_SECONDS = 2;
 const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
-const OPENARM_OBSERVATION_BATCH_STEPS = 50; // 50 ms at the pinned 0.001 s timestep; matches native evidence sampling cadence.
+// Declared observation cadence, in authoritative MuJoCo steps. The narrowest causal event
+// this task depends on is the beaker's intended gauze support contact while the vessel is
+// still bilaterally pinched; native 1 ms evidence measures that overlap at only 3-4 ms, so a
+// sampling period of two physics steps (2 ms at the pinned 0.001 s timestep) is guaranteed to
+// land inside any window of two or more steps. Sampling happens inside the MuJoCo worker, so
+// this resolution costs one cross-thread request per advance rather than one per sample.
+const OPENARM_OBSERVATION_BATCH_STEPS = 2;
 const PRESENTATION_GROUND_COLOR = 0x687378;
 const CANONICAL_OPENARM_MOUNT_TRANSLATION_MM = Object.freeze([185, 790, 0]);
 const NONPHYSICAL_CANONICAL_PARTS = new Set([
@@ -111,6 +117,7 @@ export class OpenArmPhysicalSimulator {
     this.unsubscribeSession = null;
     this.evaluator = null;
     this.lastObservation = null;
+    this.presentationDirty = false;
     this.ready = false;
     this.disposed = false;
     this.highContrast = true;
@@ -160,6 +167,10 @@ export class OpenArmPhysicalSimulator {
 
   renderFrame() {
     if (this.disposed) return;
+    if (this.presentationDirty && this.lastObservation) {
+      this.#applyObservation(this.lastObservation);
+      this.presentationDirty = false;
+    }
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -334,12 +345,16 @@ export class OpenArmPhysicalSimulator {
     if (this.session) this.session.dispose();
     this.session = null;
     this.lastObservation = null;
+    this.presentationDirty = false;
   }
   #consumeObservation(observation) {
     if (!observation || this.disposed) return;
     this.lastObservation = structuredClone(observation);
     this.evaluator?.observe(observation);
-    this.#applyObservation(observation);
+    // The evaluator consumes every authoritative sample; the scene graph only ever shows the
+    // latest one, so presentation is pulled by the render loop instead of pushed per sample.
+    // Rendering still never advances physics.
+    this.presentationDirty = true;
     this.canvas.dataset.simulationClockS = String(Number(observation.simulationTimeSeconds || 0));
     const evaluation = this.getTaskEvaluation();
     this.canvas.dataset.physicalTaskSuccess = String(Boolean(evaluation?.success));

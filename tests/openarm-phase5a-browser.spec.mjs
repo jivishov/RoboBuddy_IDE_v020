@@ -78,8 +78,8 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
     mountTranslationMm: [185, 790, 0],
     legacyBaseYawControlled: false,
     legacyBaseYawRendered: false,
-    observationBatchSteps: 50,
-    observationPeriodSeconds: 0.05,
+    observationBatchSteps: 2,
+    observationPeriodSeconds: 0.002,
   });
   expect(initial.presentation.hiddenNonphysicalParts).toEqual([
     'openarm_body_link0_low_stand',

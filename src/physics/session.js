@@ -1,4 +1,4 @@
-import { assertPhysicalScene, assertPhysicsBackend, makeCommandEnvelope, PHYSICS_BACKEND_API_VERSION } from './backend-contract.js';
+import { assertPhysicalScene, assertPhysicsBackend, assertSampledObservations, makeCommandEnvelope, MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, PHYSICS_BACKEND_API_VERSION, supportsSampledAdvance } from './backend-contract.js';
 
 function uid(prefix) {
   return `${prefix}-${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
@@ -83,6 +83,8 @@ export class PhysicsSession {
     // but publish intermediate ground-truth observations at a declared physics-step
     // cadence. This prevents task evaluators/controllers from losing short-lived
     // physical contacts merely because a caller requested a long simulation interval.
+    if (supportsSampledAdvance(this.backend)) return this.#advanceSampled(steps, batch);
+
     let remaining = steps;
     let observation = null;
     while (remaining > 0) {
@@ -92,6 +94,30 @@ export class PhysicsSession {
       remaining -= chunk;
     }
     return observation;
+  }
+
+  // Sampling-capable backends execute the whole interval in the physics authority and
+  // return its ordered ground-truth samples in one response, so the observation cadence
+  // no longer costs one cross-thread round trip per sample. The session stays the sampling
+  // policy owner: it declares the cadence, validates ordering, and publishes each real
+  // observation through the ordinary subscriber mechanism.
+  async #advanceSampled(steps, sampleEverySteps) {
+    const maxStepsPerRequest = Math.min(sampleEverySteps * MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, MAX_ADVANCE_STEPS_PER_REQUEST);
+    let remaining = steps;
+    let previousSimulationTimeSeconds = null;
+    let finalObservation = null;
+    while (remaining > 0) {
+      const requested = Math.min(maxStepsPerRequest, remaining);
+      const result = await this.#runLoadedOperation(() => this.backend.advanceStepsObserved(requested, { ...this.#context(), sampleEverySteps }));
+      const { observations, finalObservation: last } = assertSampledObservations(result, { stepCount: requested, sampleEverySteps, previousSimulationTimeSeconds });
+      for (const observation of observations) this.#publishObservation(observation, 'advanceSteps');
+      previousSimulationTimeSeconds = Number(last.simulationTimeSeconds);
+      finalObservation = last;
+      remaining -= requested;
+      // A paused authority executes no physics; further requests cannot change that.
+      if (result.executedSteps === 0) break;
+    }
+    return finalObservation;
   }
 
   async getObservation(options = {}) {

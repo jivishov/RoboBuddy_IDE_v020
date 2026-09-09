@@ -114,4 +114,22 @@ assert.equal(noFakeRetreat.snapshot().flask.retreated, false);
 noFakeRetreat.observe(obs({ time: 0.60, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.668, 0.1535, 1.155] }));
 assert.equal(noFakeRetreat.snapshot().flask.retreated, true);
 
+// Declared observation cadence. Native 1 ms evidence measures the beaker's intended gauze
+// support contact while it is still bilaterally pinched at only 3-4 ms, so the browser
+// cadence must be short enough to land inside any window of two or more physics steps.
+const OPENARM_MEASURED_MIN_CAUSAL_WINDOW_STEPS = 3;
+const simulatorSource = fs.readFileSync(new URL('../../src/physics/openarm-physical-simulator.js', import.meta.url), 'utf8');
+const declaredCadence = Number(simulatorSource.match(/const OPENARM_OBSERVATION_BATCH_STEPS = (\d+);/)?.[1]);
+assert.ok(Number.isInteger(declaredCadence) && declaredCadence >= 1, 'the OpenArm workspace must declare an integer observation cadence in physics steps');
+assert.ok(
+  declaredCadence < OPENARM_MEASURED_MIN_CAUSAL_WINDOW_STEPS,
+  `observation cadence ${declaredCadence} steps cannot guarantee observing the measured ${OPENARM_MEASURED_MIN_CAUSAL_WINDOW_STEPS}-step support-while-held overlap`,
+);
+assert.ok(simulatorSource.includes('observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS'), 'the declared cadence must be the one the physical session actually uses');
+assert.ok(simulatorSource.includes('observationPeriodSeconds:'), 'the presentation audit must expose the observation period actually in force');
+// The evaluator consumes every authoritative sample; the renderer only ever shows the latest.
+assert.ok(simulatorSource.includes('this.presentationDirty = true;'), 'observations must mark presentation stale rather than drive the scene graph per sample');
+assert.ok(/renderFrame\(\) \{[\s\S]*?this\.#applyObservation\(this\.lastObservation\);/.test(simulatorSource), 'the render loop must pull the latest observed state instead of physics pushing it');
+assert.ok(!/#consumeObservation\(observation\) \{[\s\S]*?this\.#applyObservation\(observation\);/.test(simulatorSource), 'per-sample scene-graph updates must not be reintroduced');
+
 console.log('OpenArm V2 Phase 5A package/evaluator/WebMCP core checks: OK');

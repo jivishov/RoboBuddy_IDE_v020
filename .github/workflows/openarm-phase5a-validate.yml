@@ -24,6 +24,10 @@ jobs:
 
       - name: OpenArm Phase 5A syntax contracts
         run: |
+          node --check src/physics/backend-contract.js
+          node --check src/physics/session.js
+          node --check src/physics/browser-mujoco-backend.js
+          node --check src/physics/mujoco-worker.js
           node --check src/physics/openarm-model-package.js
           node --check src/physics/openarm-scene.js
           node --check src/physics/openarm-task-evaluator.js
@@ -33,6 +37,9 @@ jobs:
           node --check tests/physics/openarm-phase5a-core.mjs
           node --check tests/openarm-phase5a-browser.spec.mjs
           python -m py_compile native/openarm_v2_reference.py
+
+      - name: Shared physics session, backend and sampled-observation contracts
+        run: node tests/physics/vertical-slice-core.mjs
 
       - name: OpenArm Phase 5A model, controller and evaluator contracts
         run: node tests/physics/openarm-phase5a-core.mjs
