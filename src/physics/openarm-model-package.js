@@ -86,9 +86,9 @@ for (const side of ['left', 'right']) {
 }
 
 export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
-  id: 'openarm-v2-phase5a-a8c9796-v1',
+  id: 'openarm-v2-phase5a-a8c9796-v2',
   robotId: 'openarm_v2_bimanual',
-  modelId: 'robobuddy-openarm-v2-phase5a-v1',
+  modelId: 'robobuddy-openarm-v2-phase5a-v2',
   source: {
     url: `https://github.com/${OPENARM_V2_SOURCE.repository}/blob/${OPENARM_V2_SOURCE.revision}/${OPENARM_V2_SOURCE.sourcePath}`,
     revision: OPENARM_V2_SOURCE.revision,
@@ -96,7 +96,7 @@ export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
   },
   license: 'Apache-2.0 for OpenArm-derived plant; repository-authored dry benchmark fixtures are MIT',
   asset: 'models/openarm_v2/manipulation.xml',
-  sha256: 'db15fa4b4a9c120ec09762ff1f4e00d995675453ade1738707258f6f5bbc883f',
+  sha256: '960ecf32c0aa7c8b2b016c6f28a7a8afe8147ce6cb1cdfd9b91f550cd4fc27dc',
   physics: { timestepSeconds: 0.001, integrator: 'Euler' },
   controllers: ['openarm_v2_position'],
   joints,
@@ -130,6 +130,7 @@ export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
     objects: ['flask', 'beaker'],
   },
   benchmark: {
+    taskGeometrySource: { repository: 'jivishov/RoboBuddy_AI', revision: '75fe2669c0ab0b029986de424c69162071174df8', scenarioId: 'openarm-04-filtration-workcell', path: 'missions/lab-assistant/v2/definitions/openarm/openarm-04-filtration-workcell.json' },
     mountOriginM: [0.185, 0, 1.34],
     sourceHomeEeM: {
       left: [0.401, 0.1535, 1.12],
@@ -140,14 +141,14 @@ export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
       beakerTopZM: 1.075,
     },
     destinationSupports: {
-      flask: { id: 'left_hotplate', centerXYM: [0.608, 0.1535], topZM: 1.035, halfExtentsXYM: [0.045, 0.045] },
-      beaker: { id: 'right_ring_gauze', centerXYM: [0.608, -0.1535], topZM: 1.075, halfExtentsXYM: [0.040, 0.040] },
+      flask: { id: 'left_hotplate', centerXYM: [0.608, 0.1535], topZM: 1.035, halfExtentsXYM: [0.058, 0.054] },
+      beaker: { id: 'right_ring_gauze', centerXYM: [0.608, -0.1535], topZM: 1.075, halfExtentsXYM: [0.048, 0.048] },
     },
     objects: {
-      flask: { massKg: 0.060, initialPositionM: [0.509, 0.1535, 1.085], supportBottomZM: 1.035 },
-      beaker: { massKg: 0.050, initialPositionM: [0.509, -0.1535, 1.120], supportBottomZM: 1.075 },
+      flask: { massKg: 0.060, initialPositionM: [0.509, 0.1535, 1.092], supportBottomZM: 1.035, sourceProfileM: { lowerRadius: 0.039, shoulderRadius: 0.031, neckRadius: 0.015, height: 0.114, centerOfMassFromBottom: 0.042 } },
+      beaker: { massKg: 0.050, initialPositionM: [0.509, -0.1535, 1.105], supportBottomZM: 1.075, sourceProfileM: { radius: 0.025, height: 0.060, centerOfMassFromBottom: 0.028 } },
     },
-    controllerVersion: 'openarm-v2-bimanual-stack-v1',
+    controllerVersion: 'openarm-v2-bimanual-stack-v2',
   },
   evidence: {
     kinematicsAndMirroredFrames: PARAMETER_EVIDENCE.SOURCE_DERIVED,
@@ -156,13 +157,15 @@ export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
     actuatorGainsAndForceLimits: PARAMETER_EVIDENCE.SOURCE_DERIVED,
     mechanicalFingerCoupling: PARAMETER_EVIDENCE.SOURCE_DERIVED,
     primitiveCollisionSurrogates: PARAMETER_EVIDENCE.ESTIMATED,
-    dryTaskFixtureAndVesselGeometry: PARAMETER_EVIDENCE.ESTIMATED,
+    dryTaskVesselAndReceiverGeometry: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    stagingSupportGeometry: PARAMETER_EVIDENCE.ESTIMATED,
+    vesselMassInertiaAndFriction: PARAMETER_EVIDENCE.ESTIMATED,
     hardwareAlignment: PARAMETER_EVIDENCE.CALIBRATION_REQUIRED,
   },
   limitations: [
     'The plant preserves the pinned OpenArm V2 kinematic tree, mirrored axes/ranges, inertials and source simulation actuator semantics, but replaces upstream mesh collision geometry with explicit primitive surrogates for a self-contained browser package.',
     'Primitive collision surrogates are estimated and intentionally do not support claims about exact self-collision margins, fingertip pressure distribution, glass compliance, or installed-hardware clearances.',
-    'The hotplate, ring stand/gauze, staging supports, flask and beaker are controlled dry benchmark geometry. Their dimensions, masses and friction are not measured laboratory hardware.',
+    'The flask/beaker exterior envelopes and hotplate/gauze receiver dimensions are aligned to the pinned RoboBuddy task definition, but remain simulator benchmark geometry; staging supports, vessel mass/inertia, friction and contact material are estimates rather than measured laboratory hardware.',
     'Source actuator gains and force limits are simulator parameters from the pinned V2 model, not calibration of a particular assembled OpenArm.',
     'The only equality constraints are the source-derived left/right finger mechanical couplings. Passive finger2 qpos is initialized consistently with the coupled actuated finger1 at setup/reset; it is never exposed as a separate command surface.',
     'There is no object grasp weld, parent attachment, snap, teleport, or task-success state overwrite.',

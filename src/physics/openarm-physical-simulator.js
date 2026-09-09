@@ -9,6 +9,13 @@ import { OpenArmBimanualStackEvaluator } from './openarm-task-evaluator.js';
 
 const MAX_WEBMCP_ADVANCE_SECONDS = 2;
 const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
+// Declared observation cadence, in authoritative MuJoCo steps. The narrowest causal event
+// this task depends on is the beaker's intended gauze support contact while the vessel is
+// still bilaterally pinched; native 1 ms evidence measures that overlap at only 3-4 ms, so a
+// sampling period of two physics steps (2 ms at the pinned 0.001 s timestep) is guaranteed to
+// land inside any window of two or more steps. Sampling happens inside the MuJoCo worker, so
+// this resolution costs one cross-thread request per advance rather than one per sample.
+const OPENARM_OBSERVATION_BATCH_STEPS = 2;
 const PRESENTATION_GROUND_COLOR = 0x687378;
 const CANONICAL_OPENARM_MOUNT_TRANSLATION_MM = Object.freeze([185, 790, 0]);
 const NONPHYSICAL_CANONICAL_PARTS = new Set([
@@ -110,6 +117,7 @@ export class OpenArmPhysicalSimulator {
     this.unsubscribeSession = null;
     this.evaluator = null;
     this.lastObservation = null;
+    this.presentationDirty = false;
     this.ready = false;
     this.disposed = false;
     this.highContrast = true;
@@ -159,6 +167,10 @@ export class OpenArmPhysicalSimulator {
 
   renderFrame() {
     if (this.disposed) return;
+    if (this.presentationDirty && this.lastObservation) {
+      this.#applyObservation(this.lastObservation);
+      this.presentationDirty = false;
+    }
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
@@ -212,6 +224,8 @@ export class OpenArmPhysicalSimulator {
       hiddenNonphysicalParts: [...this.hiddenCanonicalParts],
       legacyBaseYawControlled: false,
       legacyBaseYawRendered: false,
+      observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS,
+      observationPeriodSeconds: OPENARM_OBSERVATION_BATCH_STEPS * Number(this.lastObservation?.engine?.timestepSeconds || 0.001),
     });
   }
   getTelemetry() {
@@ -317,7 +331,10 @@ export class OpenArmPhysicalSimulator {
     return rig;
   }
   async #createSession() {
-    const session = new PhysicsSession(new BrowserMuJoCoBackend({ workerUrl: new URL('./openarm-mujoco-worker.js', import.meta.url) }), { sessionId: `ide-openarm-v2-${++this.sessionSequence}` });
+    const session = new PhysicsSession(
+      new BrowserMuJoCoBackend({ workerUrl: new URL('./openarm-mujoco-worker.js', import.meta.url) }),
+      { sessionId: `ide-openarm-v2-${++this.sessionSequence}`, observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS },
+    );
     this.session = session;
     this.unsubscribeSession = session.subscribe(({ observation }) => this.#consumeObservation(observation));
     await session.loadScene(structuredClone(OPENARM_V2_PHASE5A_SCENE));
@@ -328,12 +345,16 @@ export class OpenArmPhysicalSimulator {
     if (this.session) this.session.dispose();
     this.session = null;
     this.lastObservation = null;
+    this.presentationDirty = false;
   }
   #consumeObservation(observation) {
     if (!observation || this.disposed) return;
     this.lastObservation = structuredClone(observation);
     this.evaluator?.observe(observation);
-    this.#applyObservation(observation);
+    // The evaluator consumes every authoritative sample; the scene graph only ever shows the
+    // latest one, so presentation is pulled by the render loop instead of pushed per sample.
+    // Rendering still never advances physics.
+    this.presentationDirty = true;
     this.canvas.dataset.simulationClockS = String(Number(observation.simulationTimeSeconds || 0));
     const evaluation = this.getTaskEvaluation();
     this.canvas.dataset.physicalTaskSuccess = String(Boolean(evaluation?.success));
@@ -371,26 +392,27 @@ export class OpenArmPhysicalSimulator {
     this.workcellRoot.add(mount);
 
     const fixtures = [
-      ['left-source', box(0.07, 0.03, 0.07, supportMaterial), [0.509, 0.1535, 1.020]],
-      ['left-hotplate', box(0.09, 0.03, 0.09, darkMaterial), [0.608, 0.1535, 1.020]],
+      ['left-source', box(0.09, 0.03, 0.09, supportMaterial), [0.509, 0.1535, 1.020]],
+      ['left-hotplate', box(0.116, 0.03, 0.108, darkMaterial), [0.608, 0.1535, 1.020]],
       ['right-source', box(0.07, 0.07, 0.07, supportMaterial), [0.509, -0.1535, 1.040]],
     ];
     for (const [name, mesh, position] of fixtures) { mesh.name = `visual-${name}`; mesh.position.copy(toThreePosition(position)); this.workcellRoot.add(mesh); }
     const post = cylinder(0.006, 0.07, darkMaterial); post.position.copy(toThreePosition([0.608, -0.235, 1.040])); post.name = 'visual-ring-post'; this.workcellRoot.add(post);
-    const gauze = cylinder(0.040, 0.006, supportMaterial); gauze.position.copy(toThreePosition([0.608, -0.1535, 1.072])); gauze.name = 'visual-ring-gauze'; this.workcellRoot.add(gauze);
+    const gauze = cylinder(0.048, 0.006, supportMaterial); gauze.position.copy(toThreePosition([0.608, -0.1535, 1.072])); gauze.name = 'visual-ring-gauze'; this.workcellRoot.add(gauze);
 
     const markerMaterial = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.40, depthWrite: false });
-    for (const [center, size] of [[[0.608, 0.1535, 1.036], [0.09, 0.001, 0.09]], [[0.608, -0.1535, 1.076], [0.08, 0.001, 0.08]]]) {
+    for (const [center, size] of [[[0.608, 0.1535, 1.036], [0.034, 0.001, 0.026]], [[0.608, -0.1535, 1.076], [0.042, 0.001, 0.042]]]) {
       const marker = box(size[0], size[1], size[2], markerMaterial); marker.position.copy(toThreePosition(center)); marker.userData.presentationOnly = true; this.targetMarkers.push(marker); this.workcellRoot.add(marker);
     }
 
     const flaskGroup = new THREE.Group();
     const flaskMaterial = new THREE.MeshStandardMaterial({ color: 0x69b8d8, transparent: true, opacity: 0.80, roughness: 0.28 });
-    const flaskBody = cylinder(0.018, 0.060, flaskMaterial); flaskBody.position.y = -20;
-    const flaskNeck = cylinder(0.010, 0.030, flaskMaterial); flaskNeck.position.y = 35;
-    flaskGroup.add(flaskBody, flaskNeck); this.objectMeshes.set('flask', flaskGroup); this.workcellRoot.add(flaskGroup);
+    const flaskBody = cylinder(0.039, 0.055, flaskMaterial); flaskBody.position.y = -29.5;
+    const flaskShoulder = cylinder(0.031, 0.028, flaskMaterial); flaskShoulder.position.y = 12;
+    const flaskNeck = cylinder(0.015, 0.028, flaskMaterial); flaskNeck.position.y = 40;
+    flaskGroup.add(flaskBody, flaskShoulder, flaskNeck); this.objectMeshes.set('flask', flaskGroup); this.workcellRoot.add(flaskGroup);
     const beakerMaterial = new THREE.MeshStandardMaterial({ color: 0x8dc8e3, transparent: true, opacity: 0.76, roughness: 0.30 });
-    const beaker = cylinder(0.010, 0.090, beakerMaterial); this.objectMeshes.set('beaker', beaker); this.workcellRoot.add(beaker);
+    const beaker = cylinder(0.025, 0.060, beakerMaterial); this.objectMeshes.set('beaker', beaker); this.workcellRoot.add(beaker);
     this.setHighContrastScene(this.highContrast);
   }
   #assertReady() { this.#assertNotDisposed(); if (!this.isReady()) throw new Error('OpenArm physical session is not ready'); }

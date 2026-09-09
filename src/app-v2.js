@@ -156,7 +156,11 @@ class App {
     $('robotSelect').value = id;
     const p = PROFILES[id];
     $('robotLabel').textContent = p.label;
-    const migratedPhysical = id === 'so101' || id === 'openarm';
+    // LeKiwi exposes both a physical workspace and the pinned legacy source-plant one, so the
+    // driver label follows the selected task rather than the profile. A legacy workspace is never
+    // presented as physical mode.
+    const migratedPhysical = id === 'so101' || id === 'openarm'
+      || (id === 'lekiwi' && taskDescriptor(id, this.taskId)?.simulationMode === 'physical_mujoco');
     const visibleDriver = migratedPhysical ? 'robobuddy.sim.v1 · browser MuJoCo' : p.driver;
     $('driverLabel').textContent = visibleDriver;
     $('driverStatus').textContent = visibleDriver;
@@ -186,7 +190,7 @@ class App {
       $('cameraModeLabel').hidden = !this.isPolicyWorkspace();
       this.setWorkspaceMutationEnabled(true);
       this.updateExecutionControls();
-      applyPhysicsPreviewStatus(id);
+      applyPhysicsPreviewStatus(id, { physical: this.isPhysicalWorkspace() });
       this.emitAgentContextChange();
       const source = this.isPhysicalWorkspace()
         ? `MuJoCo ${scenario.modelPackage} · ${scenario.physicalApi.version}`

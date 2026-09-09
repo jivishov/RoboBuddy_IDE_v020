@@ -1,5 +1,8 @@
 import { OPENARM_V2_PHASE5A_MODEL_PACKAGE } from './physics/openarm-model-package.js';
 import { OPENARM_V2_PHASE5A_SCENE, OPENARM_V2_BIMANUAL_CONTROLLER } from './physics/openarm-scene.js';
+import { LEKIWI_COURIER_PACKAGE } from './physics/lekiwi-model-package.js';
+import { LEKIWI_COURIER_CONTROLLER, LEKIWI_COURIER_ROUTE, LEKIWI_COURIER_SCENE, LEKIWI_WORKCELL } from './physics/lekiwi-scene.js';
+import { LEKIWI_SOURCE, LEROBOT_SOURCE } from './physics/lekiwi-source-audit.js';
 
 export const TASK_PATCH_REVISION = '75fe2669c0ab0b029986de424c69162071174df8';
 export const TASK_PATCH_SOURCE = 'jivishov/RoboBuddy_AI';
@@ -74,12 +77,13 @@ const OPENARM_PHYSICAL_SCENARIO = Object.freeze({
   schema: 'robobuddy.physical-workspace.v1',
   schemaVersion: 1,
   simulationMode: 'physical_mujoco',
-  workspaceRevision: 'openarm-v2-physical-bimanual-stack-v1',
+  workspaceRevision: 'openarm-v2-physical-bimanual-stack-v2',
   id: 'openarm-04-filtration-workcell',
   title: 'Bimanual Heater and Ring-Stand Stack',
   brief: 'Program both OpenArm V2 arms in one MuJoCo world. The left gripper must physically grasp, lift, carry, support, release and retreat from an empty flask on an unpowered hotplate; only then may the right gripper do the same with an empty beaker on the ring-stand gauze. Task success is based on observed contact, free-body motion and stable support, not legacy attachment state.',
   robotId: OPENARM_V2_PHASE5A_MODEL_PACKAGE.robotId,
   physicalSceneId: OPENARM_V2_PHASE5A_SCENE.id,
+  physicalSceneRevision: OPENARM_V2_PHASE5A_SCENE.revision,
   modelPackage: OPENARM_V2_PHASE5A_MODEL_PACKAGE.id,
   modelId: OPENARM_V2_PHASE5A_MODEL_PACKAGE.modelId,
   physicalApi: Object.freeze({ version: 'robobuddy.sim.v1', angleUnit: 'rad', timeUnit: 's', lengthUnit: 'm' }),
@@ -91,7 +95,7 @@ const OPENARM_PHYSICAL_SCENARIO = Object.freeze({
     legacyTaskRepository: TASK_PATCH_SOURCE,
     legacyTaskRevision: TASK_PATCH_REVISION,
     legacyTaskPath: 'missions/lab-assistant/v2/definitions/openarm/openarm-04-filtration-workcell.json',
-    authority: 'MuJoCo PhysicsSession; browser primitive presentation consumes MuJoCo body observations',
+    authority: 'MuJoCo PhysicsSession; canonical OpenArm arm mesh and dry-workcell presentation consume MuJoCo observations only',
   }),
   frames: Object.freeze({
     physics: 'MuJoCo right-handed Z-up world, metres/radians; OpenArm mount origin follows the pinned V2 cell relationship',
@@ -108,6 +112,68 @@ const OPENARM_PHYSICAL_SCENARIO = Object.freeze({
   limitations: Object.freeze([...OPENARM_V2_PHASE5A_MODEL_PACKAGE.limitations]),
 });
 export const OPENARM_PHYSICAL_TASKS = Object.freeze([Object.freeze({ profileId: 'openarm', id: OPENARM_PHYSICAL_SCENARIO.id, title: OPENARM_PHYSICAL_SCENARIO.title, robotId: OPENARM_PHYSICAL_SCENARIO.robotId, simulationMode: OPENARM_PHYSICAL_SCENARIO.simulationMode, physicalSceneId: OPENARM_PHYSICAL_SCENARIO.physicalSceneId })]);
+
+const LEKIWI_PHYSICAL_SCENARIO = Object.freeze({
+  schema: 'robobuddy.physical-workspace.v1',
+  schemaVersion: 1,
+  simulationMode: 'physical_mujoco',
+  workspaceRevision: LEKIWI_COURIER_SCENE.revision,
+  id: 'lekiwi-physical-beaker-courier',
+  title: 'Physical Beaker Courier',
+  brief: 'Drive the LeKiwi V1 holonomic base to the transfer bench through real omni-wheel/ground contact, physically pinch the empty beaker by its rim, carry it to the marked receiving zone, set it down until the worktop supports it, release, and drive home. Every base movement comes from bounded wheel actuation; task success is read from the observed base and beaker, never from the commands you send.',
+  robotId: LEKIWI_COURIER_PACKAGE.robotId,
+  physicalSceneId: LEKIWI_COURIER_SCENE.id,
+  physicalSceneRevision: LEKIWI_COURIER_SCENE.revision,
+  modelPackage: LEKIWI_COURIER_PACKAGE.id,
+  modelId: LEKIWI_COURIER_PACKAGE.modelId,
+  physicalApi: Object.freeze({ version: 'robobuddy.sim.v1', angleUnit: 'rad', timeUnit: 's', lengthUnit: 'm', chassisUnits: Object.freeze({ 'x.vel': 'm/s', 'y.vel': 'm/s', 'theta.vel': 'deg/s' }) }),
+  canonicalModel: Object.freeze({
+    repository: LEKIWI_SOURCE.repository,
+    revision: LEKIWI_SOURCE.revision,
+    sourcePath: 'URDF/LeKiwi.urdf',
+    variant: LEKIWI_SOURCE.variant,
+    apiCompatibilityRepository: LEROBOT_SOURCE.repository,
+    apiCompatibilityRevision: LEROBOT_SOURCE.revision,
+    legacyTaskRepository: TASK_PATCH_SOURCE,
+    legacyTaskRevision: TASK_PATCH_REVISION,
+    legacyTaskPath: 'missions/lab-assistant/v2/definitions/lekiwi/lekiwi-01-beaker-courier.json',
+    authority: 'MuJoCo PhysicsSession; the canonical LeKiwi mesh consumes observed base and joint state only',
+  }),
+  frames: Object.freeze({
+    physics: 'MuJoCo right-handed Z-up world, metres/radians; the LeKiwi base frame is x forward, y left, z up with its origin at the wheel centroid at axle height',
+    rendering: 'Three.js Y-up millimetres derived from the observed MuJoCo base transform; rendering never integrates the base and never advances physics',
+  }),
+  route: Object.freeze({
+    planner: LEKIWI_COURIER_ROUTE.plannerSource,
+    outbound: LEKIWI_COURIER_ROUTE.outbound,
+    inbound: LEKIWI_COURIER_ROUTE.inbound,
+    homeXYM: LEKIWI_WORKCELL.homeXYM,
+    serviceStopXYM: LEKIWI_WORKCELL.serviceStopXYM,
+    restrictedStopXYM: LEKIWI_WORKCELL.restrictedStopXYM,
+  }),
+  portablePython: Object.freeze({
+    referenceActions: Object.freeze(LEKIWI_COURIER_CONTROLLER.stages.map((stage) => Object.freeze({
+      label: stage.label,
+      kind: stage.kind,
+      hold_seconds: stage.durationSeconds ?? null,
+      targetsRad: stage.armTargetsRad ? Object.freeze({ ...stage.armTargetsRad, arm_gripper: stage.gripperRad }) : Object.freeze({}),
+      waypoints: stage.waypoints ?? null,
+      timeout_seconds: stage.timeoutSeconds ?? null,
+    }))),
+  }),
+  taskEvaluation: Object.freeze({
+    source: 'MuJoCo base and beaker free-body poses/velocities plus named gripper and worktop contacts',
+    requires: Object.freeze(['physically stopped at the service stop', 'bilateral rim pinch', 'lift clear of the worktop', 'carried horizontal travel while held', 'worktop support while still gripped inside the receiving zone', 'sustained release', 'contact-supported settle dwell', 'measured base path length', 'physically stopped return home', 'no restricted-stop entry']),
+    syntheticSuccessEvents: false,
+  }),
+  limitations: Object.freeze([...LEKIWI_COURIER_PACKAGE.limitations]),
+});
+export const LEKIWI_PHYSICAL_TASKS = Object.freeze([Object.freeze({ profileId: 'lekiwi', id: LEKIWI_PHYSICAL_SCENARIO.id, title: LEKIWI_PHYSICAL_SCENARIO.title, robotId: LEKIWI_PHYSICAL_SCENARIO.robotId, simulationMode: LEKIWI_PHYSICAL_SCENARIO.simulationMode, physicalSceneId: LEKIWI_PHYSICAL_SCENARIO.physicalSceneId })]);
+// The pinned legacy LeKiwi workspace stays selectable and explicitly labeled beside the physical
+// one. It is the source-plant workspace, not a fallback: a physical backend that fails to load
+// surfaces its error rather than quietly loading this.
+export const LEKIWI_LEGACY_TASKS = Object.freeze(PATCH_TASKS.lekiwi.map((item) => Object.freeze({ ...item, title: `${item.title} (legacy source plant)` })));
+const LEKIWI_TASKS = Object.freeze([...LEKIWI_PHYSICAL_TASKS, ...LEKIWI_LEGACY_TASKS]);
 
 const UNITREE_G1_RIG_SCENARIO = Object.freeze({
   schema: 'robobuddy.ide-rig-inspection.v1', simulationMode: 'kinematic_pose', workspaceRevision: 'unitree-g1-rig-v1', id: 'unitree-g1-kinematic-pose-inspection', title: 'Unitree G1 29-DoF Kinematic Pose Inspection', brief: 'Inspect the canonical Unitree G1 mesh through bounded named joint poses. This workspace deliberately has no collision/contact plant, gait, balance, or hardware-control claim.', robotId: 'unitree_g1_29dof',
@@ -129,6 +195,7 @@ const cache = new Map();
 export function tasksForProfile(profileId) {
   if (profileId === 'openarm') return OPENARM_PHYSICAL_TASKS;
   if (profileId === 'so101') return SO101_PHYSICAL_TASKS;
+  if (profileId === 'lekiwi') return LEKIWI_TASKS;
   if (profileId === 'unitree') return UNITREE_G1_RIG_TASKS;
   if (profileId === 'microduck') return MICRODUCK_TASKS;
   return PATCH_TASKS[profileId] || [];
@@ -138,10 +205,13 @@ export function taskDescriptor(profileId, taskId) { return tasksForProfile(profi
 
 export async function loadPatchedScenario(profileId, taskId) {
   const legacySo101 = profileId === 'so101' ? PATCH_TASKS.so101.find((item) => item.id === taskId) : null;
-  const descriptor = legacySo101 || taskDescriptor(profileId, taskId);
+  const legacyLekiwi = profileId === 'lekiwi' ? PATCH_TASKS.lekiwi.find((item) => item.id === taskId) : null;
+  const descriptor = legacySo101 || legacyLekiwi || taskDescriptor(profileId, taskId);
   if (!descriptor) return null;
   if (descriptor.simulationMode === 'physical_mujoco') {
-    return structuredClone(profileId === 'openarm' ? OPENARM_PHYSICAL_SCENARIO : SO101_PHYSICAL_SCENARIO);
+    if (profileId === 'openarm') return structuredClone(OPENARM_PHYSICAL_SCENARIO);
+    if (profileId === 'lekiwi') return structuredClone(LEKIWI_PHYSICAL_SCENARIO);
+    return structuredClone(SO101_PHYSICAL_SCENARIO);
   }
   if (descriptor.simulationMode === 'kinematic_pose') return structuredClone(UNITREE_G1_RIG_SCENARIO);
   if (descriptor.simulationMode === 'policy_sim') return structuredClone(MICRODUCK_SCENARIO);
@@ -174,6 +244,19 @@ export function taskPatchProvenance(descriptor) {
       scenarioId: descriptor.id,
       physicalSceneId: descriptor.physicalSceneId,
       modelPackage: OPENARM_PHYSICAL_SCENARIO.modelPackage,
+      simulationMode: 'physical_mujoco',
+    };
+    if (descriptor.profileId === 'lekiwi') return {
+      repository: 'jivishov/RoboBuddy_IDE_v020',
+      upstreamRepository: LEKIWI_SOURCE.repository,
+      upstreamRevision: LEKIWI_SOURCE.revision,
+      apiCompatibilityRepository: LEROBOT_SOURCE.repository,
+      apiCompatibilityRevision: LEROBOT_SOURCE.revision,
+      legacyTaskRepository: TASK_PATCH_SOURCE,
+      legacyTaskRevision: TASK_PATCH_REVISION,
+      scenarioId: descriptor.id,
+      physicalSceneId: descriptor.physicalSceneId,
+      modelPackage: LEKIWI_PHYSICAL_SCENARIO.modelPackage,
       simulationMode: 'physical_mujoco',
     };
     return { repository: 'jivishov/RoboBuddy_IDE_v020', scenarioId: descriptor.id, physicalSceneId: descriptor.physicalSceneId, modelPackage: SO101_PHYSICAL_SCENARIO.modelPackage, simulationMode: 'physical_mujoco' };

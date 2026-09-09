@@ -54,13 +54,13 @@
     <geom name="cell_table" type="box" pos="0.41 0 1.000" size="0.41 0.55 0.005" class="fixture" rgba="0.78 0.77 0.73 1"/>
 
     <!-- Left pickup pedestal and unpowered hotplate. -->
-    <geom name="left_source_support" type="box" pos="0.509 0.1535 1.020" size="0.035 0.035 0.015" class="fixture" rgba="0.60 0.61 0.63 1"/>
-    <geom name="left_hotplate" type="box" pos="0.608 0.1535 1.020" size="0.045 0.045 0.015" class="fixture" rgba="0.22 0.23 0.25 1"/>
+    <geom name="left_source_support" type="box" pos="0.509 0.1535 1.020" size="0.045 0.045 0.015" class="fixture" rgba="0.60 0.61 0.63 1"/>
+    <geom name="left_hotplate" type="box" pos="0.608 0.1535 1.020" size="0.058 0.054 0.015" class="fixture" rgba="0.22 0.23 0.25 1"/>
 
     <!-- Right pickup pedestal and ring-stand/gauze support. -->
     <geom name="right_source_support" type="box" pos="0.509 -0.1535 1.040" size="0.035 0.035 0.035" class="fixture" rgba="0.60 0.61 0.63 1"/>
     <geom name="right_ring_post" type="cylinder" pos="0.608 -0.235 1.040" size="0.006 0.035" class="fixture" rgba="0.32 0.33 0.35 1"/>
-    <geom name="right_ring_gauze" type="cylinder" pos="0.608 -0.1535 1.072" size="0.040 0.003" class="fixture" rgba="0.56 0.57 0.58 1"/>
+    <geom name="right_ring_gauze" type="cylinder" pos="0.608 -0.1535 1.072" size="0.048 0.003" class="fixture" rgba="0.56 0.57 0.58 1"/>
 
     <!-- Source V2 cell mounting relationship: arm origin at x=.185,z=1.34. -->
     <body name="openarm_mount" pos="0.185 0 1.34">
@@ -170,16 +170,17 @@
     </body>
 
     <!-- Dry free-body vessels. Ordinary task execution never writes their qpos/qvel. -->
-    <body name="flask" pos="0.509 0.1535 1.085">
+    <body name="flask" pos="0.509 0.1535 1.092">
       <freejoint name="flask_free"/>
-      <inertial pos="0 0 0" mass="0.060" diaginertia="0.000055 0.000055 0.000030"/>
-      <geom name="flask_body_geom" type="cylinder" pos="0 0 -0.020" size="0.018 0.030" class="vessel" rgba="0.38 0.72 0.86 0.85"/>
-      <geom name="flask_grip_geom" type="cylinder" pos="0 0 0.035" size="0.010 0.015" class="vessel" rgba="0.50 0.82 0.92 0.90"/>
+      <inertial pos="0 0 -0.015" mass="0.060" diaginertia="0.000088 0.000088 0.000046"/>
+      <geom name="flask_body_geom" type="cylinder" pos="0 0 -0.0295" size="0.039 0.0275" class="vessel" rgba="0.38 0.72 0.86 0.85"/>
+      <geom name="flask_shoulder_geom" type="cylinder" pos="0 0 0.012" size="0.031 0.014" class="vessel" rgba="0.44 0.77 0.89 0.88"/>
+      <geom name="flask_grip_geom" type="cylinder" pos="0 0 0.040" size="0.015 0.014" class="vessel" rgba="0.50 0.82 0.92 0.90"/>
     </body>
-    <body name="beaker" pos="0.509 -0.1535 1.120">
+    <body name="beaker" pos="0.509 -0.1535 1.105">
       <freejoint name="beaker_free"/>
-      <inertial pos="0 0 0" mass="0.050" diaginertia="0.000045 0.000045 0.000022"/>
-      <geom name="beaker_grip_geom" type="cylinder" size="0.010 0.045" class="vessel" rgba="0.58 0.82 0.94 0.82"/>
+      <inertial pos="0 0 -0.002" mass="0.050" diaginertia="0.000023 0.000023 0.000016"/>
+      <geom name="beaker_grip_geom" type="cylinder" size="0.025 0.030" class="vessel" rgba="0.58 0.82 0.94 0.82"/>
     </body>
   </worldbody>
 

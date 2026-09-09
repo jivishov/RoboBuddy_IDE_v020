@@ -46,6 +46,7 @@ function newObjectState(spec) {
     carrySeen: false,
     supportWhileHeldSeen: false,
     releaseSeen: false,
+    releaseInvalidationCount: 0,
     settled: false,
     retreated: false,
     carryAnchorPositionM: null,
@@ -64,6 +65,21 @@ function newObjectState(spec) {
     bilateralContactObservationCount: 0,
     supportObservationCount: 0,
   };
+}
+
+function invalidateReleaseEvidence(state) {
+  state.releaseSeen = false;
+  state.releaseInvalidationCount += 1;
+  state.releaseTimeSeconds = null;
+  state.releaseEePositionM = null;
+  state.settleCandidatePositionM = null;
+  state.settleCandidateTimeSeconds = null;
+  state.settleDriftM = null;
+  state.settleTimeSeconds = null;
+  state.settled = false;
+  state.settledEePositionM = null;
+  state.retreatTimeSeconds = null;
+  state.retreated = false;
 }
 
 export class OpenArmBimanualStackEvaluator {
@@ -155,6 +171,12 @@ export class OpenArmBimanualStackEvaluator {
       state.supportWhileHeldTimeSeconds = simulationTimeSeconds;
     }
 
+    // A release is only causal evidence while it remains a release. If the
+    // gripper touches the vessel again, a prior transient contact loss cannot
+    // remain credited toward settle/retreat success. A later clean release can
+    // establish new evidence after the re-contact.
+    if (state.releaseSeen && gripperContact) invalidateReleaseEvidence(state);
+
     if (!state.releaseSeen
       && state.supportWhileHeldSeen
       && previousGripperContact
@@ -238,6 +260,7 @@ export class OpenArmBimanualStackEvaluator {
       carrySeen: state.carrySeen,
       supportWhileHeldSeen: state.supportWhileHeldSeen,
       releaseSeen: state.releaseSeen,
+      releaseInvalidationCount: state.releaseInvalidationCount,
       settled: state.settled,
       retreated: state.retreated,
       currentGripperContact: state.currentGripperContact,
@@ -275,7 +298,7 @@ export class OpenArmBimanualStackEvaluator {
       orderViolation: this.orderViolation,
       flask,
       beaker,
-      evidence: 'MuJoCo body motion, free-joint velocities, simultaneous named bilateral fingertip/vessel contact, intended support contact while still physically held, observed release transition, contact-supported simulation-time dwell, and measured post-settle end-effector retreat. No object weld, parenting, snap, teleport or synthetic success event is used. Primitive collision surrogates and dry workcell parameters are simulator estimates, not hardware calibration.',
+      evidence: 'MuJoCo body motion, free-joint velocities, simultaneous named bilateral fingertip/vessel contact, intended support contact while still physically held, a sustained observed release transition that is invalidated by any later re-contact, contact-supported simulation-time dwell, and measured post-settle end-effector retreat. No object weld, parenting, snap, teleport or synthetic success event is used. Primitive collision surrogates and dry workcell parameters are simulator estimates, not hardware calibration.',
     });
   }
 }

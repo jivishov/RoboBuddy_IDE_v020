@@ -22,9 +22,9 @@ The source cell mounting relationship is preserved: the bimanual arm origin is l
 
 ## Browser physical-model adaptation
 
-The upstream visual and collision meshes are not redistributed as MuJoCo collision assets in this Phase 5A package. Robot collision geometry is represented by explicitly declared primitive surrogates so the browser model remains self-contained. Those primitive collision shapes are an approximation and are not equivalent to the upstream mesh contact geometry.
+The upstream visual and collision meshes are not redistributed as MuJoCo collision assets in this Phase 5A package. Robot collision geometry is represented by explicitly declared primitive surrogates so the browser model remains self-contained. Those primitive collision shapes are an approximation and are not equivalent to the upstream mesh contact geometry. The reviewed fingertip capsule surrogate remains at its original 8 mm radius; task success is not obtained by enlarging invisible fingers. Instead, the controller maintains a bounded partial pinch while the vessel/receiver envelopes are aligned to the pinned task definition.
 
-The dry workcell fixtures and vessels are RoboBuddy synthetic benchmark geometry. They are not measurements of a specific installed hotplate, ring stand, flask, beaker, table, or OpenArm system. The unpowered hotplate and ring-stand/gauze support model rigid contact only; no thermal, fluid, vacuum, payload-certification, glass-compliance, tactile, force-sensor, or hardware-safety behavior is claimed. The vessel colliders are validated only for the direct exterior pinch/lift/place interactions in this task; they are not validated for insertion, pouring, filling, or liquid operations.
+The dry vessel and receiving-surface envelopes are source-informed from the pinned RoboBuddy task definition `jivishov/RoboBuddy_AI@75fe2669c0ab0b029986de424c69162071174df8`: the Erlenmeyer collider follows the declared ~39 mm lower radius / 31 mm shoulder / 15 mm neck and ~114 mm height profile, the small beaker uses the declared 50 mm diameter x 60 mm height envelope, the hotplate top is 116 x 108 mm, and the gauze receiver is 96 mm across. The visible pickup staging supports, vessel mass/inertia, friction and contact material remain controlled benchmark estimates rather than measurements of installed hardware. The unpowered hotplate and ring-stand/gauze support model rigid contact only; no thermal, fluid, vacuum, payload-certification, glass-compliance, tactile, force-sensor, or hardware-safety behavior is claimed. The vessel colliders are validated only for this direct exterior pinch/lift/place task; they are not validated for insertion, pouring, filling, or liquid operations.
 
 ## Presentation model and physical authority
 
@@ -44,6 +44,33 @@ Presentation joints are driven only from observed MuJoCo joint positions. Free v
 - The only equality constraints are the two source-defined gripper finger couplings.
 - Rendering consumes MuJoCo observations and does not advance simulation.
 - Live Python and bounded WebMCP route to the same `PhysicsSession` used by rendering and evaluation.
+
+## Observation cadence
+
+The evaluator is a consumer of authoritative observations, so the rate at which the browser
+samples MuJoCo is part of the software-observation contract rather than an implementation
+detail. The browser workspace declares a cadence of **2 physics steps (2 ms at the pinned
+0.001 s timestep)** and exposes it in the presentation audit as `observationBatchSteps` and
+`observationPeriodSeconds`.
+
+The cadence is chosen from measured physical evidence, not from whichever value happened to
+make a test pass. Evaluating the native reference at every 1 ms step shows that the narrowest
+causal condition this task depends on — the beaker in intended wire-gauze support contact
+while still bilaterally pinched — holds for only 3 ms and 4 ms in its two occurrences. A
+2-step period is therefore guaranteed to land inside any window of two or more physics steps.
+Coarser cadences were measured to miss it: a 20-step and a 50-step period both observe the
+beaker reaching its destination while never observing the support-while-held predecessor, and
+the evaluator correctly refuses to infer the unobserved causal transition.
+
+Sampling runs inside the MuJoCo worker: one request advances every requested step and returns
+the ordered ground-truth observations captured at the declared cadence. Sampling never
+advances physics a second time, never fabricates a state, and never emits task events; each
+returned entry is an ordinary observation of the actual MuJoCo state at that step. The command
+budget is charged the actual executed step count once per request, derived from the
+simulation-time delta.
+
+This cadence is an implementation/observation-conformance parameter. It is not a sensor
+sample rate of any assembled OpenArm and carries no hardware-calibration claim.
 
 ## Task evaluator evidence
 

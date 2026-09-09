@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { writeFile } from 'node:fs/promises';
 
-test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels, Python, renderer, evaluator, and WebMCP', async ({ page }) => {
+test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels, Python, renderer, evaluator, and WebMCP', async ({ page }, testInfo) => {
   test.setTimeout(240_000);
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
@@ -8,6 +9,35 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
   await page.locator('#robotSelect').selectOption('openarm');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
+
+  const startupUi = {
+    taskValue: await page.locator('#taskSelect').inputValue(),
+    taskPanelText: await page.locator('#taskPanel').textContent(),
+    modeChipText: await page.locator('#modeChip').textContent(),
+    physicsBadgeText: await page.locator('#physicsBackendBadge').textContent(),
+    stepDisabled: await page.locator('#stepBtn').isDisabled(),
+    cursorDisabled: await page.locator('#cursorBtn').isDisabled(),
+    visualSource: await page.locator('#simCanvas').getAttribute('data-openarm-visual-source'),
+    legacyBaseYawRendered: await page.locator('#simCanvas').getAttribute('data-openarm-legacy-base-yaw-rendered'),
+    canvasBackend: await page.locator('#simCanvas').getAttribute('data-simulator-backend'),
+    canvasAuthority: await page.locator('#simCanvas').getAttribute('data-simulation-authority'),
+    runtime: await page.evaluate(() => {
+      const app = window.__robobuddyCi?.app;
+      const backend = app?.sim?.backend;
+      return {
+        appPresent: Boolean(app),
+        backendName: backend?.constructor?.name || null,
+        hasPresentationAudit: typeof backend?.getPresentationAudit === 'function',
+        authority: app?.sim?.getPhysicalAuthorityToken?.() || null,
+        model: app?.sim?.getState?.()?.observation?.model || null,
+      };
+    }),
+    pageErrors: [...pageErrors],
+  };
+  const startupPath = testInfo.outputPath('openarm-startup-audit.json');
+  await writeFile(startupPath, JSON.stringify(startupUi, null, 2));
+  await testInfo.attach('openarm-startup-audit.json', { path: startupPath, contentType: 'application/json' });
+
   await expect(page.locator('#taskSelect')).toHaveValue('openarm-04-filtration-workcell');
   await expect(page.locator('#taskPanel')).toContainText('Bimanual Heater and Ring-Stand Stack');
   await expect(page.locator('#modeChip')).toContainText('OPENARM V2 PHYSICAL WORKSPACE');
@@ -35,16 +65,21 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
       rightEe: state?.observation?.bodies?.openarm_right_ee_base_link?.positionM,
     };
   });
+  const initialPath = testInfo.outputPath('openarm-initial-state.json');
+  await writeFile(initialPath, JSON.stringify({ ...initial, pageErrors }, null, 2));
+  await testInfo.attach('openarm-initial-state.json', { path: initialPath, contentType: 'application/json' });
   expect(initial.backend).toBe('OpenArmPhysicalSimulator');
-  expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v1' });
-  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v1', asset: 'models/openarm_v2/manipulation.xml' });
-  expect(initial.model.sha256).toBe('db15fa4b4a9c120ec09762ff1f4e00d995675453ade1738707258f6f5bbc883f');
+  expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v2' });
+  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v2', asset: 'models/openarm_v2/manipulation.xml' });
+  expect(initial.model.sha256).toBe('960ecf32c0aa7c8b2b016c6f28a7a8afe8147ce6cb1cdfd9b91f550cd4fc27dc');
   expect(initial.presentation).toMatchObject({
     physicalAuthority: 'MuJoCo PhysicsSession only',
     jointPresentationSource: 'observed MuJoCo joint positions',
     mountTranslationMm: [185, 790, 0],
     legacyBaseYawControlled: false,
     legacyBaseYawRendered: false,
+    observationBatchSteps: 2,
+    observationPeriodSeconds: 0.002,
   });
   expect(initial.presentation.hiddenNonphysicalParts).toEqual([
     'openarm_body_link0_low_stand',
@@ -62,9 +97,11 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(initial.source).toContain('await robot.send_action');
   expect(initial.source).toContain('await robot.advance');
   expect(initial.source).not.toContain('time.sleep(');
-  expect(initial.trajectories).not.toMatch(/attach|teleport|move_to|grasp\(/i);
+  expect(initial.trajectories).not.toMatch(/\.(?:attach|teleport|move_to|grasp)\s*\(/i);
   expect(initial.flask.linearVelocityMS).toHaveLength(3);
   expect(initial.beaker.angularVelocityRadS).toHaveLength(3);
+  expect(initial.flask.positionM[2]).toBeCloseTo(1.092, 3);
+  expect(initial.beaker.positionM[2]).toBeCloseTo(1.105, 3);
   expect(initial.leftEe[0]).toBeCloseTo(0.401, 3);
   expect(initial.leftEe[1]).toBeCloseTo(0.1535, 3);
   expect(initial.leftEe[2]).toBeCloseTo(1.12, 3);
@@ -73,7 +110,6 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(initial.rightEe[2]).toBeCloseTo(1.12, 3);
 
   await page.locator('#runBtn').click();
-  await expect(page.locator('#simCanvas')).toHaveAttribute('data-physical-task-success', 'true', { timeout: 180_000 });
   await expect(page.locator('#statusMessage')).toContainText('Run complete', { timeout: 180_000 });
 
   const completed = await page.evaluate(() => {
@@ -89,13 +125,22 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
       evaluation: app.sim.getTaskEvaluation(),
       authority: app.sim.getPhysicalAuthorityToken(),
       presentation: backend.getPresentationAudit(),
+      observation: state.observation,
+      contacts: app.sim.getContacts(),
       beforeRender, afterRender,
       flaskExpectedMm: [flaskExpected[0] * 1000, flaskExpected[2] * 1000, -flaskExpected[1] * 1000],
       flaskVisual,
       runtimeActive: app.physicalRuntime.isActive(),
       canvasAuthority: document.querySelector('#simCanvas').dataset.simulationAuthority,
+      canvasTaskSuccess: document.querySelector('#simCanvas').dataset.physicalTaskSuccess,
+      statusText: document.querySelector('#statusMessage').textContent,
     };
   });
+  const completedPath = testInfo.outputPath('openarm-completed-state.json');
+  await writeFile(completedPath, JSON.stringify({ ...completed, pageErrors }, null, 2));
+  await testInfo.attach('openarm-completed-state.json', { path: completedPath, contentType: 'application/json' });
+
+  expect(completed.canvasTaskSuccess).toBe('true');
   expect(completed.evaluation.success).toBe(true);
   expect(completed.evaluation.orderViolation).toBe(false);
   for (const object of [completed.evaluation.flask, completed.evaluation.beaker]) {

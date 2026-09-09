@@ -1,4 +1,11 @@
+import { bodyToWheelRadS, degreesPerSecondToRadians, MAX_WHEEL_RAD_S } from '../physics/lekiwi-kinematics.js';
+
 export const LIVE_SIM_API_VERSION = 'robobuddy.sim.v1';
+
+// LeKiwi keeps the public LeRobot chassis fields. They are a *request*: the bridge converts them
+// through the pinned Kiwi body-to-wheel mapping into bounded wheel velocity targets, and MuJoCo
+// decides the resulting base motion. get_observation() always returns achieved state.
+const CHASSIS_FIELDS = Object.freeze(['x.vel', 'y.vel', 'theta.vel']);
 
 const DEFAULT_TIMEOUT_MS = 15000;
 const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
@@ -31,13 +38,30 @@ function boundedTargets(action) {
   const entries = Object.entries(action);
   if (!entries.length) throw new TypeError('action must contain at least one joint target');
   const targetsRad = {};
+  const chassis = {};
   for (const [jointId, raw] of entries) {
+    if (CHASSIS_FIELDS.includes(jointId)) {
+      const value = Number(raw);
+      if (!Number.isFinite(value)) throw new TypeError(`Chassis request ${jointId} must be finite`);
+      chassis[jointId] = value;
+      continue;
+    }
     if (!jointId || jointId.endsWith('.pos')) throw new TypeError(`Physical API joint ${jointId || '<empty>'} must use the declared joint id, not legacy .pos fields`);
     const targetRad = Number(raw);
     if (!Number.isFinite(targetRad)) throw new TypeError(`Target for ${jointId} must be finite radians`);
     targetsRad[jointId] = targetRad;
   }
-  return targetsRad;
+  return { targetsRad, chassis, hasChassis: Object.keys(chassis).length > 0 };
+}
+
+function chassisWheelTargets(chassis) {
+  const body = {
+    x: Number(chassis['x.vel'] ?? 0),
+    y: Number(chassis['y.vel'] ?? 0),
+    thetaRadS: degreesPerSecondToRadians(chassis['theta.vel'] ?? 0),
+  };
+  const { targetsRadS, saturated, scale } = bodyToWheelRadS(body, undefined, { maxWheelRadS: MAX_WHEEL_RAD_S });
+  return { body, targetsRadS: { ...targetsRadS }, saturated, scale };
 }
 
 function ownerFromDiagnostics(diagnostics) {
@@ -95,9 +119,13 @@ export class LivePythonBridge {
   async sendAction(action, { commandId, maxSteps = DEFAULT_ACTION_STEP_BUDGET } = {}) {
     await this.#assertOwner();
     if (!Number.isInteger(maxSteps) || maxSteps < 1) throw new RangeError('maxSteps must be a positive integer');
-    const targetsRad = boundedTargets(action);
+    const { targetsRad, chassis, hasChassis } = boundedTargets(action);
+    const wheels = hasChassis ? chassisWheelTargets(chassis) : null;
+    const command = hasChassis
+      ? { type: 'set_mixed_targets', targetsRad, targetsRadS: wheels.targetsRadS }
+      : { type: 'set_joint_targets', targetsRad };
     const accepted = await this.#withTimeout(this.session.sendCommand(
-      { type: 'set_joint_targets', targetsRad },
+      command,
       { ...(commandId ? { commandId: String(commandId) } : {}), maxSteps },
     ));
     return {
@@ -105,9 +133,15 @@ export class LivePythonBridge {
       status: String(accepted?.status || 'accepted'),
       commandId: accepted?.commandId || commandId || null,
       acceptedTargetsRad: structuredClone(targetsRad),
+      ...(hasChassis ? {
+        requestedChassisVelocity: structuredClone(chassis),
+        acceptedWheelTargetsRadS: structuredClone(wheels.targetsRadS),
+        wheelCommandSaturated: wheels.saturated,
+        chassisNote: 'requestedChassisVelocity is a bounded command, not a measurement; read achieved motion from get_observation()',
+      } : {}),
       remainingSteps: accepted?.remainingSteps ?? null,
       observation: accepted?.observation ? structuredClone(accepted.observation) : null,
-      units: { jointPosition: 'rad', jointVelocity: 'rad/s', time: 's' },
+      units: { jointPosition: 'rad', jointVelocity: 'rad/s', wheelVelocity: 'rad/s', chassisLinear: 'm/s', chassisAngular: 'deg/s', time: 's' },
     };
   }
 
@@ -141,7 +175,8 @@ export class LivePythonBridge {
     controllerPeriodSeconds = DEFAULT_CONTROLLER_PERIOD_SECONDS,
   } = {}) {
     await this.#assertOwner();
-    const requested = boundedTargets(targets);
+    const { targetsRad: requested, hasChassis } = boundedTargets(targets);
+    if (hasChassis) throw new TypeError('wait_for_goal accepts joint targets only; chassis velocity requests are not goal conditions');
     const tolerance = finitePositive(toleranceRad, 'toleranceRad');
     const timeout = finiteNonNegative(timeoutSeconds, 'timeoutSeconds');
     const controllerPeriod = finitePositive(controllerPeriodSeconds, 'controllerPeriodSeconds');

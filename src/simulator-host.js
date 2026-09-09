@@ -2,6 +2,7 @@ import { SourceRobotSimulator } from './source-simulator.js';
 import { MicroDuckPolicySimulator } from './microduck/policy-simulator.js';
 import { So101PhysicalSimulator } from './physics/so101-physical-simulator.js';
 import { OpenArmPhysicalSimulator } from './physics/openarm-physical-simulator.js';
+import { LeKiwiPhysicalSimulator } from './physics/lekiwi-physical-simulator.js';
 
 export class SimulatorHost {
   constructor(canvas, {
@@ -9,6 +10,7 @@ export class SimulatorHost {
     microduckFactory = (target) => new MicroDuckPolicySimulator(target, { externalClock: true }),
     so101PhysicalFactory = (target) => new So101PhysicalSimulator(target),
     openarmPhysicalFactory = (target) => new OpenArmPhysicalSimulator(target),
+    lekiwiPhysicalFactory = (target) => new LeKiwiPhysicalSimulator(target),
   } = {}) {
     this.canvas = canvas;
     this.epoch = 0;
@@ -20,6 +22,7 @@ export class SimulatorHost {
     this.microduckFactory = microduckFactory;
     this.so101PhysicalFactory = so101PhysicalFactory;
     this.openarmPhysicalFactory = openarmPhysicalFactory;
+    this.lekiwiPhysicalFactory = lekiwiPhysicalFactory;
     this.controllerPreemptHandler = () => {};
     this.disposed = false;
     this.animationFrame = requestAnimationFrame((time) => this.renderFrame(time));
@@ -46,6 +49,8 @@ export class SimulatorHost {
       ? this.so101PhysicalFactory(this.canvas)
       : physical && profileId === 'openarm'
       ? this.openarmPhysicalFactory(this.canvas)
+      : physical && profileId === 'lekiwi'
+      ? this.lekiwiPhysicalFactory(this.canvas)
       : this.sourceFactory(this.canvas);
     backend.setControllerPreemptHandler?.(this.controllerPreemptHandler);
     this.pending.add(backend);
@@ -73,6 +78,17 @@ export class SimulatorHost {
   isHighContrastSceneEnabled() { return this.backend?.isHighContrastSceneEnabled?.() ?? this.highContrast; }
   applyAction(...args) { return this.backend?.applyAction?.(...args); }
   applyPhysicalTargets(...args) { return this.backend?.applyPhysicalTargets?.(...args); }
+  // Physical mobile-manipulation paths. These fail loudly rather than returning undefined:
+  // the WebMCP and live-Python callers treat the result as an accepted command, so a missing
+  // backend method must surface as an error instead of a silent no-op.
+  applyChassisVelocity(...args) {
+    if (typeof this.backend?.applyChassisVelocity !== 'function') throw new Error('The active simulator backend has no physical chassis-velocity path.');
+    return this.backend.applyChassisVelocity(...args);
+  }
+  applyArmTargets(...args) {
+    if (typeof this.backend?.applyArmTargets !== 'function') throw new Error('The active simulator backend has no physical arm-target path.');
+    return this.backend.applyArmTargets(...args);
+  }
   advanceTime(...args) { return this.backend?.advanceTime?.(...args); }
   advanceBase(...args) { return this.backend?.advanceBase?.(...args); }
   getTelemetry() { return this.backend?.getTelemetry?.() || {}; }

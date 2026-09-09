@@ -1,9 +1,9 @@
-import { assertPhysicalScene, assertPhysicsBackend, PHYSICS_BACKEND_API_VERSION, PhysicsBackendState } from './backend-contract.js';
+import { assertPhysicalScene, assertPhysicsBackend, MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, PHYSICS_BACKEND_API_VERSION, PhysicsBackendState, sampledObservationCount } from './backend-contract.js';
 import { requireModelPackage } from './model-registry.js';
 import './model-packages.js';
 
 const MAX_TRACE_EVENTS = 512;
-const MAX_STEP_BATCH = 100000;
+const MAX_STEP_BATCH = MAX_ADVANCE_STEPS_PER_REQUEST;
 const STEP_TIME_TOLERANCE_SECONDS = 1e-9;
 const WORLD_FRAME = Object.freeze({ id: 'mujoco_world', handedness: 'right-handed', upAxis: '+Z', linearUnit: 'm', angularUnit: 'rad' });
 
@@ -100,6 +100,52 @@ export class BrowserMuJoCoBackend {
       return observation;
     } catch (error) {
       if (generation === this.generation && this.loaded) this.#failLoadedScene('runtime step failed');
+      throw error;
+    }
+  }
+
+  // Optional sampled-advance capability. The physics authority stays in the worker: one
+  // request executes every requested MuJoCo step and returns the ground-truth observations
+  // captured at the declared step cadence, so a fine observation resolution no longer costs
+  // one cross-thread round trip per sample. Executed steps are still derived from the
+  // actual simulation-time delta and charged to the command budget exactly once.
+  async advanceStepsObserved(stepCount = 1, context = {}) {
+    this.#assertLoaded(); this.#assertContext(context);
+    if (!Number.isInteger(stepCount) || stepCount < 1 || stepCount > MAX_STEP_BATCH) throw new RangeError(`stepCount must be an integer from 1 to ${MAX_STEP_BATCH}`);
+    const sampleEverySteps = context.sampleEverySteps;
+    if (!Number.isInteger(sampleEverySteps) || sampleEverySteps < 1) throw new RangeError('sampleEverySteps must be a positive integer');
+    const expectedSamples = sampledObservationCount(stepCount, sampleEverySteps);
+    if (expectedSamples > MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE) throw new RangeError(`A ${stepCount}-step advance sampled every ${sampleEverySteps} steps needs ${expectedSamples} observations; the bounded response carries at most ${MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE}`);
+    if (this.commandBudget && stepCount > this.commandBudget.remainingSteps) throw new RangeError(`Step request ${stepCount} exceeds remaining command budget ${this.commandBudget.remainingSteps}`);
+    const generation = this.generation; const previousTime = Number(this.lastObservation?.simulationTimeSeconds ?? 0); const wasPaused = this.state === PhysicsBackendState.PAUSED;
+    if (!wasPaused) this.state = PhysicsBackendState.RUNNING;
+    try {
+      const raw = await this.#call('stepSampled', { count: stepCount, sampleEverySteps }); this.#assertGeneration(generation, context);
+      const rawObservations = Array.isArray(raw?.observations) ? raw.observations : null;
+      if (!rawObservations?.length) throw new Error('MuJoCo sampled advance returned no authoritative observations');
+      const observations = rawObservations.map((sample) => this.#decorateObservation(sample));
+      let cursor = previousTime; let executedSteps = 0;
+      for (const [index, observation] of observations.entries()) {
+        const steps = this.#executedSteps(cursor, observation.simulationTimeSeconds, observation.engine.timestepSeconds);
+        if (wasPaused && steps !== 0) throw new Error(`Paused MuJoCo advanced ${steps} steps`);
+        if (!wasPaused && steps < 1) throw new Error('MuJoCo sampled observations are not strictly ordered in simulation time');
+        executedSteps += steps;
+        cursor = observation.simulationTimeSeconds;
+        const cadencePosition = index === observations.length - 1 ? stepCount : (index + 1) * sampleEverySteps;
+        if (!wasPaused && executedSteps !== cadencePosition) throw new Error(`MuJoCo sample ${index + 1} lands ${executedSteps} steps into the advance instead of the declared ${cadencePosition}`);
+      }
+      if (wasPaused && observations.length !== 1) throw new Error('A paused sampled advance must return exactly one unchanged observation');
+      if (!wasPaused && observations.length !== expectedSamples) throw new Error(`MuJoCo returned ${observations.length} samples for a declared ${expectedSamples}-sample cadence`);
+      if (executedSteps !== (wasPaused ? 0 : stepCount)) throw new Error(`MuJoCo advanced ${executedSteps} steps for a request of ${stepCount}`);
+      const finalObservation = observations[observations.length - 1];
+      this.lastObservation = finalObservation; if (this.commandBudget) this.commandBudget.remainingSteps -= executedSteps;
+      this.state = wasPaused ? PhysicsBackendState.PAUSED : PhysicsBackendState.READY;
+      // Bounded evidence: one trace event per sampled advance records the cadence and how
+      // many authoritative samples it produced, not every intermediate observation.
+      this.#record('advanceStepsObserved', { requestedSteps: stepCount, executedSteps, sampleEverySteps, sampleCount: observations.length, initialSimulationTimeSeconds: previousTime, finalSimulationTimeSeconds: finalObservation.simulationTimeSeconds, commandId: this.commandBudget?.commandId ?? null, remainingSteps: this.commandBudget?.remainingSteps ?? null, observation: finalObservation });
+      return { observations, finalObservation, executedSteps, sampleEverySteps };
+    } catch (error) {
+      if (generation === this.generation && this.loaded) this.#failLoadedScene('runtime sampled step failed');
       throw error;
     }
   }
