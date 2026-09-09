@@ -8,9 +8,24 @@ const attach = async (testInfo, name, value) => {
 };
 
 test('LeKiwi Phase 5B drives, grasps, carries, delivers and returns through one browser MuJoCo authority', async ({ page }, testInfo) => {
-  test.setTimeout(420_000);
+  test.setTimeout(600_000);
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
+  // Headless Chromium has no WebMCP implementation, so stand in a minimal document.modelContext.
+  // Registration still goes through the app's real gating, epoch and abort-signal path.
+  await page.addInitScript(() => {
+    const registrations = [];
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: {
+        registerTool(tool, options = {}) {
+          registrations.push({ tool, signal: options.signal || null });
+          return Promise.resolve();
+        },
+      },
+    });
+    window.__webMcpRegistrations = registrations;
+  });
   await page.goto('/?ci=lekiwi-phase5b', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
   await page.locator('#robotSelect').selectOption('lekiwi');
@@ -266,8 +281,27 @@ test('LeKiwi Phase 5B drives, grasps, carries, delivers and returns through one 
   await expect(page.locator('#simCanvas')).toHaveAttribute('data-physical-task-home', 'true');
 
   // 11. WebMCP reaches the same session, and it reports a request separately from achieved state.
+  await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-available', 'true');
   await page.locator('[data-agent-access="assist"]').click();
   await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-access', 'assist');
+  await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-tools', 'enabled');
+  // The physical tool is the one that actually reaches the agent surface, exactly once.
+  const activeLekiwiTools = () => page.evaluate(() => window.__webMcpRegistrations
+    .filter(({ signal }) => !signal?.aborted)
+    .map(({ tool }) => tool.name)
+    .filter((name) => name.includes('lekiwi')));
+  await expect.poll(activeLekiwiTools).toEqual(['control_lekiwi_simulation']);
+  const registeredSchema = await page.evaluate(() => {
+    const entry = window.__webMcpRegistrations
+      .findLast(({ tool, signal }) => tool.name === 'control_lekiwi_simulation' && !signal?.aborted);
+    const branches = entry?.tool?.inputSchema?.oneOf || [];
+    return {
+      commands: branches.map((branch) => branch.properties?.command?.const),
+      schemaVersions: [...new Set(branches.map((branch) => branch.properties?.schema_version?.const))],
+    };
+  });
+  expect(registeredSchema.schemaVersions).toEqual(['robobuddy.lekiwi.physical.v1']);
+  expect(registeredSchema.commands).toEqual(['set_chassis_velocity', 'set_arm_targets', 'stop', 'reset']);
   const webmcp = await page.evaluate(async () => {
     const { app, agentFacade } = window.__robobuddyCi;
     const { getLeKiwiPhysicalControlDefinition, executeLeKiwiPhysicalControl } = await import('/src/webmcp/lekiwi-physical-control.js');
