@@ -473,6 +473,31 @@ assert.ok(!/catch[\s\S]*sourceFactory/.test(hostPhysicalBranch), 'a failed physi
 const controls = read('src/webmcp/robot-controls.js');
 assert.match(controls, /profileId === 'lekiwi' && context\.simulationMode === 'physical_mujoco'/);
 
+// --- 12. the WebMCP tool's host surface actually exists ------------------------------------------
+// The physical control tool reaches the plant through app.sim (SimulatorHost), so every method it
+// calls must be declared there. A missing delegation is invisible until a browser runs the tool.
+const webmcpSource = read('src/webmcp/lekiwi-physical-control.js');
+const hostMethods = new Set([...host.matchAll(/^\s{2}(?:async\s+)?([A-Za-z][A-Za-z0-9]*)\s*\(/gm)].map((match) => match[1]));
+const hostCalls = [...new Set([...webmcpSource.matchAll(/facade\.app\.sim\.([A-Za-z0-9_]+)/g)].map((match) => match[1]))];
+assert.ok(hostCalls.includes('applyChassisVelocity'), 'the physical tool must drive the chassis through the host');
+for (const name of hostCalls) assert.ok(hostMethods.has(name), `SimulatorHost is missing ${name}, which the LeKiwi WebMCP tool calls`);
+// Those physical paths must fail loudly rather than returning undefined, which a caller would
+// otherwise treat as an accepted command.
+const hostMethodSource = (name) => {
+  const start = host.indexOf(`\n  ${name}(...args) {`);
+  assert.ok(start > 0, `cannot locate SimulatorHost.${name}`);
+  return host.slice(start, host.indexOf('\n  }', start) + 4);
+};
+for (const [name, pattern] of [['applyChassisVelocity', /no physical chassis-velocity path/], ['applyArmTargets', /no physical arm-target path/]]) {
+  const body = hostMethodSource(name);
+  assert.match(body, pattern, `SimulatorHost.${name} must reject an unsupported backend explicitly`);
+  const method = new Function(`return ({ ${body.slice(3)} }).${name};`)();
+  const calls = [];
+  assert.deepEqual(method.call({ backend: { [name]: (...args) => { calls.push(args); return { status: 'accepted' }; } } }, { probe: 1 }), { status: 'accepted' });
+  assert.deepEqual(calls, [[{ probe: 1 }]]);
+  assert.throws(() => method.call({ backend: {} }, {}), pattern);
+}
+
 console.log('LeKiwi Phase 5B core contracts: OK');
 console.log('  reconciliation rows:', LEKIWI_RECONCILIATION.length);
 console.log('  registered model packages:', LEKIWI_MODEL_PACKAGES.map((pkg) => pkg.id).join(', '));

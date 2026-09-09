@@ -78,6 +78,17 @@ export class SimulatorHost {
   isHighContrastSceneEnabled() { return this.backend?.isHighContrastSceneEnabled?.() ?? this.highContrast; }
   applyAction(...args) { return this.backend?.applyAction?.(...args); }
   applyPhysicalTargets(...args) { return this.backend?.applyPhysicalTargets?.(...args); }
+  // Physical mobile-manipulation paths. These fail loudly rather than returning undefined:
+  // the WebMCP and live-Python callers treat the result as an accepted command, so a missing
+  // backend method must surface as an error instead of a silent no-op.
+  applyChassisVelocity(...args) {
+    if (typeof this.backend?.applyChassisVelocity !== 'function') throw new Error('The active simulator backend has no physical chassis-velocity path.');
+    return this.backend.applyChassisVelocity(...args);
+  }
+  applyArmTargets(...args) {
+    if (typeof this.backend?.applyArmTargets !== 'function') throw new Error('The active simulator backend has no physical arm-target path.');
+    return this.backend.applyArmTargets(...args);
+  }
   advanceTime(...args) { return this.backend?.advanceTime?.(...args); }
   advanceBase(...args) { return this.backend?.advanceBase?.(...args); }
   getTelemetry() { return this.backend?.getTelemetry?.() || {}; }
