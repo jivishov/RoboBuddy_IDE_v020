@@ -5,6 +5,14 @@ This records the physical MicroDuck workspace. It is a **separate** record from
 demonstrator and remains accurate for that workspace. Neither supersedes the other: the two
 workspaces coexist, carry different backends, and carry different evidence labels.
 
+Both are entered by name from the workspace selector. `microduck-policy-demonstrator` is the
+default because it is the profile's complete learner surface, the roller and roller-crouch
+variants, the control deck, camera modes, visual cues, generated audio and the peripheral
+models, none of which the physical workspace claims. `microduck-physical-locomotion` is
+selected deliberately and carries its own mode chip, sim badge, driver label and capability
+record. Neither workspace is ever entered as a fallback for the other: if the physical backend
+fails to start, it fails, and nothing routes the run to the demonstrator.
+
 ## 1. Pinned sources
 
 Phase 5C is a matched-environment integration, so it pins two sources. Neither is authority
@@ -295,20 +303,34 @@ its bounded advance, cancellation mid-run leaving no further actuator writes, un
 capabilities reaching nothing, a declared perturbation clearing the controller feedback, and
 the three state views staying separate.
 
-### Browser lane: not run here
+### Browser lane: run, and how the environment was made to allow it
 
-`tests/microduck-phase5c-browser.spec.mjs` is committed and registered in the Playwright
-config. It could **not** be executed in the environment this work was done in: the sandbox's
-egress proxy denies `cdn.jsdelivr.net`, which the application's import map uses for three.js
-and Pyodide, so the app never reaches "Ready". This is not specific to the MicroDuck spec -
-the pre-existing `tests/browser-smoke.spec.mjs` fails identically in the same environment. The
-MicroDuck browser journey therefore remains **unrun**, and the `microduck-lifecycle-core`
-suite above was written to cover as much of that ground as is reachable without a browser.
+`tests/microduck-phase5c-browser.spec.mjs` is committed, registered in the Playwright config,
+and **both of its journeys pass** in headless Chromium against real MuJoCo WASM and the real
+deployed ONNX policies.
 
-The same environment also blocks `tests/validate_task_patch.mjs`, which fetches a pinned task
-from `jivishov/RoboBuddy_AI` over the network (HTTP 403). That failure is likewise
-pre-existing and unrelated to Phase 5C; it reproduces with the Phase 5C task-catalog change
-reverted.
+Getting there took work, because the sandbox this was developed in denies `cdn.jsdelivr.net`
+at the egress gateway, and the application loads three.js, CodeMirror, Pyodide and the pinned
+RoboBuddy_AI meshes from it, so the app never reached "Ready". The application was **not**
+changed for this. Instead the run was performed against local copies of exactly the pinned
+artefacts: `three@0.180.0` and `codemirror@5.65.16` from the npm registry, and the
+`jivishov/RoboBuddy_AI@66d18a02` meshes from a read-only clone of that pinned revision, served
+by a throwaway static server. Every one of those source-URL redirections was reverted before
+committing; the committed tree still loads all of them from the pinned CDN URLs, which is what
+CI exercises.
+
+Pyodide could not be obtained locally, so the four MicroDuck tests that execute Python, plus
+one WebMCP test that runs a program, still fail in that sandbox. So does one control-deck
+timing check, whose `ground_pick` skill needs 2.68 s of policy time inside a 5 s poll and does
+not get it under software-rendered WebGL. To attribute those honestly rather than assume,
+the identical suite was run from a worktree of the merge-base commit (`f9fe6cc`, before this
+branch) with the same local-asset redirections: it fails **exactly the same tests**, 14 passed
+/ 5 failed against this branch's 15 passed / 5 failed on the same specs. None of the five is
+caused by Phase 5C.
+
+The same environment blocks `tests/validate_task_patch.mjs`, which fetches a pinned task from
+`jivishov/RoboBuddy_AI` over the network (HTTP 403). That failure is likewise pre-existing and
+unrelated to Phase 5C; it reproduces with the Phase 5C task-catalog change reverted.
 
 ## 6. What is not claimed
 

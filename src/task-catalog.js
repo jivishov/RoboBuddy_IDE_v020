@@ -236,11 +236,14 @@ const MICRODUCK_PHYSICAL_SCENARIO = Object.freeze({
 export const MICRODUCK_PHYSICAL_TASKS = Object.freeze([Object.freeze({ profileId: 'microduck', id: MICRODUCK_PHYSICAL_SCENARIO.id, title: MICRODUCK_PHYSICAL_SCENARIO.title, robotId: MICRODUCK_PHYSICAL_SCENARIO.robotId, simulationMode: MICRODUCK_PHYSICAL_SCENARIO.simulationMode, physicalSceneId: MICRODUCK_PHYSICAL_SCENARIO.physicalSceneId })]);
 
 const MICRODUCK_SCENARIO = Object.freeze({ schema: 'robobuddy.microduck-workspace.v1', simulationMode: 'policy_sim', workspaceRevision: 'microduck-cycle04-live-python-v1', id: 'microduck-policy-demonstrator', title: 'MicroDuck Articulated Policy Demonstrator', robotId: 'microduck_runtime_visual', variant: 'walking', brief: 'Run live async Python against the exact pinned policies and approximate browser dynamics while inspecting the official compact runtime visual and modeled state.', canonicalModel: Object.freeze({ repository: 'pollen-robotics/microduck', revision: '590b986bd8c0d50ae02cb3ea2f59c463b6828168', sourcePath: 'robotctl/assets/duck.bin', hierarchySourcePath: 'kinematics/assets/alpha/robot_walk.xml', geometry: 'official compact robotctl monitor mesh' }), frames: Object.freeze({ geometry: 'Source Z-up metres converted to Three.js Y-up and displayed at millimetre scale', hierarchy: 'pinned runtime XML and DUCK v1 body records', mouthRollersContacts: 'original configured approximations' }), portablePython: Object.freeze({ referenceActions: Object.freeze([]) }) });
-// The physical workspace is the default. The reference-aligned policy demonstrator stays
-// selectable beside it with its own truthful legacy labelling - it is a deliberate choice,
-// never a fallback for a failed physical backend.
+// Both MicroDuck workspaces are first-class and each is entered by name. The demonstrator stays
+// first because it is the profile's complete learner surface - roller and roller-crouch variants,
+// the control deck, camera modes, visual cues, generated audio and the peripheral models - none of
+// which the physical locomotion workspace claims. Demoting it would remove those features from the
+// default MicroDuck rather than add anything to it. Selecting either workspace is a deliberate act:
+// neither is ever entered as a fallback for the other, and each carries only its own labelling.
 const MICRODUCK_LEGACY_TASKS = Object.freeze([Object.freeze({ profileId: 'microduck', id: MICRODUCK_SCENARIO.id, title: MICRODUCK_SCENARIO.title, robotId: MICRODUCK_SCENARIO.robotId, simulationMode: 'policy_sim' })]);
-const MICRODUCK_TASKS = Object.freeze([...MICRODUCK_PHYSICAL_TASKS, ...MICRODUCK_LEGACY_TASKS]);
+const MICRODUCK_TASKS = Object.freeze([...MICRODUCK_LEGACY_TASKS, ...MICRODUCK_PHYSICAL_TASKS]);
 
 const cache = new Map();
 

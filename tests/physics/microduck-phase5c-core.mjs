@@ -76,9 +76,22 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 let passed = 0;
 const failures = [];
 
+// A rejected async check must be recorded as a failure, not escape as an unhandled rejection that
+// kills the run before the summary. Pending checks are drained before the summary is printed.
+const pending = [];
 function check(name, fn) {
-  try { fn(); passed += 1; console.log(`  ok  ${name}`); }
-  catch (error) { failures.push(name); console.log(`FAIL  ${name}\n      ${error?.message || error}`); }
+  try {
+    const result = fn();
+    if (result && typeof result.then === 'function') {
+      pending.push(result.then(
+        () => { passed += 1; console.log(`  ok  ${name}`); },
+        (error) => { failures.push(name); console.log(`FAIL  ${name}\n      ${error?.message || error}`); },
+      ));
+      return;
+    }
+    passed += 1;
+    console.log(`  ok  ${name}`);
+  } catch (error) { failures.push(name); console.log(`FAIL  ${name}\n      ${error?.message || error}`); }
 }
 function assert(condition, message) { if (!condition) throw new Error(message); }
 function close(actual, expected, tolerance, message) {
@@ -610,5 +623,59 @@ check('the reference runner and the browser share the same declared constants', 
   assert(runner.includes('MOUTH_WIRE_INDEX = 9'), 'the native runner uses a different mouth index');
 });
 
+check('both MicroDuck workspaces are entered by name, and neither inherits the other\'s labelling', async () => {
+  const { tasksForProfile, defaultTaskId, loadPatchedScenario } = await import('../../src/task-catalog.js');
+  const { physicsCapabilityFor } = await import('../../src/physics/capabilities.js');
+
+  const tasks = tasksForProfile('microduck');
+  assert(tasks.length === 2, `MicroDuck should expose both workspaces, saw ${tasks.length}`);
+  const demonstrator = tasks.find((item) => item.id === 'microduck-policy-demonstrator');
+  const physical = tasks.find((item) => item.id === 'microduck-physical-locomotion');
+  assert(demonstrator && demonstrator.simulationMode === 'policy_sim', 'the policy demonstrator is no longer a selectable MicroDuck workspace');
+  assert(physical && physical.simulationMode === 'physical_mujoco', 'the physical locomotion workspace is no longer a selectable MicroDuck workspace');
+
+  // The demonstrator stays the default because it is the profile's complete learner surface:
+  // roller variants, the control deck, camera modes, visual cues, audio and peripherals, none of
+  // which the physical workspace claims. Flipping this silently removes those features from the
+  // default MicroDuck and breaks the established browser suite that exercises them, so it is
+  // pinned here rather than left to import order.
+  assert(defaultTaskId('microduck') === 'microduck-policy-demonstrator',
+    `the default MicroDuck workspace changed to ${defaultTaskId('microduck')}`);
+
+  const physicalScenario = await loadPatchedScenario('microduck', 'microduck-physical-locomotion');
+  const demoScenario = await loadPatchedScenario('microduck', 'microduck-policy-demonstrator');
+  assert(physicalScenario.simulationMode === 'physical_mujoco', 'the physical workspace no longer loads a physical scenario');
+  assert(demoScenario.simulationMode === 'policy_sim', 'the demonstrator no longer loads its own scenario');
+  assert(physicalScenario.id !== demoScenario.id, 'the two MicroDuck workspaces collapsed onto one scenario');
+
+  // Each workspace carries only its own claim. The demonstrator must never acquire the physical
+  // badge, and the physical workspace must never be presented as approximate dynamics.
+  const physicalCapability = physicsCapabilityFor('microduck', { physical: true });
+  const legacyCapability = physicsCapabilityFor('microduck', { physical: false });
+  assert(physicalCapability.backend === 'browser-mujoco', 'the physical MicroDuck workspace lost its browser-mujoco backend claim');
+  assert(legacyCapability.backend === 'legacy', 'the MicroDuck demonstrator acquired a non-legacy backend claim');
+  assert(physicalCapability.evidence !== legacyCapability.evidence, 'the two MicroDuck workspaces now make the same evidence claim');
+});
+
+check('the physical MicroDuck workspace has its own chip, badge and summary', () => {
+  const source = readFileSync(resolve(ROOT, 'src/physics/ui-status.js'), 'utf8');
+  // Without these the physical workspace falls through to the profile's demonstrator labelling and
+  // is presented as APPROXIMATE DYNAMICS, which is a false claim about a MuJoCo authority.
+  assert(/microduck: 'MICRODUCK ALPHA PHYSICAL WORKSPACE · MUJOCO AUTHORITY'/.test(source), 'the physical MicroDuck mode chip is missing');
+  assert(/microduck: 'MUJOCO CONTACT LOCOMOTION[^']*NOT HARDWARE CALIBRATION'/.test(source), 'the physical MicroDuck sim badge is missing');
+  assert(/microduck: 'MicroDuck alpha\. Browser MuJoCo is the single physical authority/.test(source), 'the physical MicroDuck side summary is missing');
+  assert(/the root is never driven/.test(source), 'the physical MicroDuck summary stopped disclaiming root drive');
+
+  const app = readFileSync(resolve(ROOT, 'src/app-v2.js'), 'utf8');
+  // The labels must follow the selected workspace. Reading the profile here badges the physical
+  // MicroDuck with the demonstrator's driver and mode.
+  assert(/const selectedMode = taskDescriptor\(id, this\.taskId\)\?\.simulationMode \|\| p\.simulationMode;/.test(app),
+    'the workspace labels no longer follow the selected task');
+  assert(/\(id === 'lekiwi' \|\| id === 'microduck'\) && selectedMode === 'physical_mujoco'/.test(app),
+    'the physical MicroDuck workspace no longer reports the physical driver');
+  assert(/updateSimulationPresentation\(p, selectedMode\)/.test(app), 'the presentation no longer receives the selected mode');
+});
+
+await Promise.all(pending);
 console.log(`\nMicroDuck Phase 5C core: ${passed} passed, ${failures.length} failed`);
 if (failures.length) { console.error(`failed: ${failures.join(', ')}`); process.exit(1); }

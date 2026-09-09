@@ -214,9 +214,11 @@ jobs:
           python tests/validate_starters.py
           python tests/execute_starters.py
 
+      # package-lock.json is deliberately untracked in this repository, so `npm ci` cannot run.
+      # This mirrors the install line the established fidelity workflow already uses.
       - name: MicroDuck physical browser journey
         run: |
-          npm ci
+          npm install --ignore-scripts --no-audit --no-fund
           npx playwright install --with-deps chromium
           npx playwright test tests/microduck-phase5c-browser.spec.mjs --reporter=line
 

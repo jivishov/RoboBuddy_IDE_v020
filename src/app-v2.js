@@ -107,9 +107,11 @@ class App {
 
   isKinematicPoseWorkspace() { return isKinematicRigScenario(this.scenario); }
 
-  updateSimulationPresentation(profile) {
-    const kinematic = profile?.simulationMode === 'kinematic_pose';
-    const policy = profile?.simulationMode === 'policy_sim';
+  updateSimulationPresentation(profile, selectedMode = profile?.simulationMode) {
+    // The selected workspace decides the labels, not the profile. MicroDuck's profile mode is the
+    // demonstrator's, so reading it here would badge the physical workspace APPROXIMATE DYNAMICS.
+    const kinematic = selectedMode === 'kinematic_pose';
+    const policy = selectedMode === 'policy_sim';
     $('modeChip').textContent = policy
       ? 'POLICY DEMONSTRATOR · APPROXIMATE DYNAMICS · HW VALIDATION PENDING'
       : kinematic
@@ -156,17 +158,19 @@ class App {
     $('robotSelect').value = id;
     const p = PROFILES[id];
     $('robotLabel').textContent = p.label;
-    // LeKiwi exposes both a physical workspace and the pinned legacy source-plant one, so the
+    // LeKiwi and MicroDuck each expose a physical workspace beside a non-physical one, so the
     // driver label follows the selected task rather than the profile. A legacy workspace is never
-    // presented as physical mode.
+    // presented as physical mode, and a physical workspace never inherits the profile's
+    // demonstrator label.
+    const selectedMode = taskDescriptor(id, this.taskId)?.simulationMode || p.simulationMode;
     const migratedPhysical = id === 'so101' || id === 'openarm'
-      || (id === 'lekiwi' && taskDescriptor(id, this.taskId)?.simulationMode === 'physical_mujoco');
+      || ((id === 'lekiwi' || id === 'microduck') && selectedMode === 'physical_mujoco');
     const visibleDriver = migratedPhysical ? 'robobuddy.sim.v1 · browser MuJoCo' : p.driver;
     $('driverLabel').textContent = visibleDriver;
     $('driverStatus').textContent = visibleDriver;
-    this.updateSimulationPresentation(p);
+    this.updateSimulationPresentation(p, selectedMode);
     this.updateExecutionControls();
-    this.setStatus(migratedPhysical ? `Loading ${p.shortLabel} MuJoCo physical workspace…` : p.simulationMode === 'policy_sim' ? 'Loading local MicroDuck runtime visual…' : p.simulationMode === 'kinematic_pose' ? 'Loading Unitree canonical pose workspace…' : 'Loading reviewed mission and source plant…');
+    this.setStatus(migratedPhysical ? `Loading ${p.shortLabel} MuJoCo physical workspace…` : selectedMode === 'policy_sim' ? 'Loading local MicroDuck runtime visual…' : selectedMode === 'kinematic_pose' ? 'Loading Unitree canonical pose workspace…' : 'Loading reviewed mission and source plant…');
     try {
       const selectedTaskId = this.taskId;
       const scenario = await loadPatchedScenario(id, selectedTaskId);
