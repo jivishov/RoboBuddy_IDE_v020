@@ -279,6 +279,33 @@ Across commanded velocities 0.30-0.50 m/s at the deployed tuning the agreement r
    agree in both models, which is why recovery is claimed for those and this case is recorded
    here instead.
 
+### Session and lifecycle
+
+`tests/physics/microduck-lifecycle-core.mjs` drives the real `PhysicsSession`,
+`BrowserMuJoCoBackend` and `MicroDuckController` through a scripted stand-in for the MuJoCo
+worker. It checks the parts the browser lane would otherwise be the only witness to: the
+declared setup path and its allowlist, the command budget, exactly `decimation` physics steps
+per controller tick, ordinary control writing actuator targets and nothing else, a torque-off
+condition removing the actuator command while the policy keeps producing targets, pause
+freezing simulated time, cancellation, stale-epoch and foreign-session rejection, reset
+clearing the controller feedback state, every published sample reaching the evaluator, and
+dispose releasing the worker.
+
+### Browser lane: not run here
+
+`tests/microduck-phase5c-browser.spec.mjs` is committed and registered in the Playwright
+config. It could **not** be executed in the environment this work was done in: the sandbox's
+egress proxy denies `cdn.jsdelivr.net`, which the application's import map uses for three.js
+and Pyodide, so the app never reaches "Ready". This is not specific to the MicroDuck spec -
+the pre-existing `tests/browser-smoke.spec.mjs` fails identically in the same environment. The
+MicroDuck browser journey therefore remains **unrun**, and the `microduck-lifecycle-core`
+suite above was written to cover as much of that ground as is reachable without a browser.
+
+The same environment also blocks `tests/validate_task_patch.mjs`, which fetches a pinned task
+from `jivishov/RoboBuddy_AI` over the network (HTTP 403). That failure is likewise
+pre-existing and unrelated to Phase 5C; it reproduces with the Phase 5C task-catalog change
+reverted.
+
 ## 6. What is not claimed
 
 * **No hardware validation.** No measurement of an assembled MicroDuck was used anywhere in
@@ -310,7 +337,8 @@ Across commanded velocities 0.30-0.50 m/s at the deployed tuning the agreement r
 
 ```bash
 python scripts/generate_microduck_models.py --check     # models are byte-reproducible
-node   tests/physics/microduck-phase5c-core.mjs         # 29 contract/conformance gates
+node   tests/physics/microduck-phase5c-core.mjs         # 30 contract/conformance gates
+node   tests/physics/microduck-lifecycle-core.mjs       # 13 session/lifecycle gates
 python native/microduck_reference.py --trial all        # every physical trial and negative control
 python native/microduck_reference.py --trial walk --timestep 0.001   # numerical sensitivity
 python native/microduck_reference.py --fixture assets/microduck/fixtures/controller-conformance.json

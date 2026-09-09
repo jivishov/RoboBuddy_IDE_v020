@@ -531,6 +531,7 @@ check('the physical path contains no synthetic root, ball, boundary or recovery 
     'src/physics/microduck-capabilities.js',
     'src/physics/microduck-model-package.js',
     'src/webmcp/microduck-physical-control.js',
+    'src/runtime/microduck-physical-bridge.js',
   ];
   // Legacy synthetic behaviour lives in these modules and must not be reachable from the
   // physical path at all.
@@ -577,6 +578,20 @@ check('the physical path contains no synthetic root, ball, boundary or recovery 
   const commandBody = worker.slice(commandStart, commandEnd);
   assert(/data\.ctrl\[actuator\.id\]/.test(commandBody), 'the command path does not write actuator targets');
   assert(!/qpos|qvel/.test(commandBody), 'the command path touches physical state directly');
+});
+
+check('the live-Python surface exposes commands and skills, never joint or state writes', () => {
+  const source = readFileSync(resolve(ROOT, 'src/runtime/microduck-physical-bridge.js'), 'utf8');
+  // The learner-facing command surface is the robot's own bounded command, not joint targets.
+  assert(/COMMAND_FIELDS = Object\.freeze\(\['vx', 'vy', 'vyaw'/.test(source), 'the Python command surface changed shape');
+  assert(!source.includes('set_joint_targets'), 'the Python bridge can write joint targets directly');
+  assert(!source.includes('applySetup'), 'the Python bridge can reach the declared setup path');
+  assert(!/set_trunk_orientation|set_object_pose|set_actuation_enabled/.test(source), 'the Python bridge can write physical state');
+  // A reset is never a recovery and never a success.
+  assert(/countsAsRecovery: false/.test(source), 'the Python reset does not disclaim being a recovery');
+  // The three views stay separate, so a program cannot mistake a request for a measurement.
+  assert(/requested: state\.requested/.test(source) && /controller: state\.controller/.test(source) && /actual: state\.actual/.test(source),
+    'the Python observation stopped separating request, controller decision and actual state');
 });
 
 check('the physical simulator declares only the allowlisted setup operations', () => {

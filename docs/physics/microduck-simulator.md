@@ -1,5 +1,14 @@
 # MicroDuck browser policy demonstrator
 
+> **This document describes the legacy reference-aligned policy demonstrator, and it remains
+> accurate for that workspace.** Since Phase 5C, MicroDuck also has a separate *physical*
+> workspace on the shared MuJoCo single-authority backend, documented in
+> [`microduck-provenance.md`](./microduck-provenance.md). The two coexist and carry different
+> backends, capabilities and evidence labels. The demonstrator below is selected deliberately;
+> it is never used as a fallback when the physical backend fails. Nothing in this document
+> applies to the physical workspace, and nothing in the physical record revises the historical
+> evidence recorded here.
+
 This workspace is a reference-aligned policy demonstrator, not a validated MicroDuck physics twin.
 
 The browser dynamics use a configured MuJoCo surrogate at a fixed 5 ms step. It preserves the policy's fourteen joint targets, gravity, field bounds, ball response, and a bounded root-motion approximation so the starter program visibly traverses the field. The source-backed hierarchy and mesh drive the articulated visual, not a validated locomotion/contact plant. The bounded damped-Gauss-Newton `look` solver remains the only Cartesian IK feature; learner-facing leg controls are joint-space policy targets, not a leg-target IK API.

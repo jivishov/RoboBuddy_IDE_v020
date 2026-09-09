@@ -99,7 +99,10 @@ export class BrowserMuJoCoBackend {
     this.#assertLoaded(); this.#assertContext(context);
     const type = String(payload?.type || '');
     if (!this.setupOperations.has(type)) throw new Error(`Setup operation ${type || '<missing>'} is not declared by this backend`);
-    if (this.commandBudget) throw new Error('Setup may not run while a bounded command is still executing');
+    // Refused only while a bounded command still has steps left to run. A budget that has
+    // been fully spent is finished, not active - treating it as active would make every
+    // declared perturbation after the first advance impossible.
+    if (this.commandBudget && this.commandBudget.remainingSteps > 0) throw new Error('Setup may not run while a bounded command is still executing');
     const generation = this.generation;
     try {
       const raw = await this.#call('setup', payload); this.#assertGeneration(generation, context);
