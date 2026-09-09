@@ -40,6 +40,7 @@ jobs:
           node --check tests/physics/lekiwi-phase5b-core.mjs
           node --check tests/lekiwi-phase5b-browser.spec.mjs
           node --check tests/lekiwi-conformance-browser.spec.mjs
+          node --check tests/lekiwi-presentation-browser.spec.mjs
           python -m py_compile scripts/generate_lekiwi_models.py
           python -m py_compile scripts/lekiwi_courier_scene.py
           python -m py_compile native/lekiwi_reference.py
@@ -75,6 +76,8 @@ jobs:
           python native/lekiwi_reference.py --trial restricted-route > /tmp/lekiwi-restricted-route.json
           python native/lekiwi_reference.py --trial base-motion --timestep 0.001 > /tmp/lekiwi-base-motion-tight.json
           python native/lekiwi_reference.py --trial courier --timestep 0.001 > /tmp/lekiwi-courier-tight.json
+          python native/lekiwi_reference.py --trial wheel-reference --timestep 0.001 > /tmp/lekiwi-wheel-reference-tight.json
+          python native/lekiwi_reference.py --trial traction-reduced --timestep 0.001 > /tmp/lekiwi-traction-reduced-tight.json
 
       - name: Retain native LeKiwi evidence
         if: always()
@@ -105,6 +108,8 @@ jobs:
           courier = load('courier')
           tight_base = load('base-motion-tight')
           tight_courier = load('courier-tight')
+          tight_wheel = load('wheel-reference-tight')
+          tight_traction = load('traction-reduced-tight')
           negatives = {n: load(n) for n in
                        ('missed-grasp', 'weak-grip', 'dropped-payload', 'insufficient-budget', 'restricted-route')}
 
@@ -121,6 +126,8 @@ jobs:
               assert report['source']['lerobot'].endswith('@7e241bd630a3719a56157a497ce5d08f244784f1'), report['source']
           assert abs(courier['engine']['timestepSeconds'] - 0.002) < 1e-12, courier['engine']
           assert abs(tight_courier['engine']['timestepSeconds'] - 0.001) < 1e-12, tight_courier['engine']
+          assert abs(tight_wheel['engine']['timestepSeconds'] - 0.001) < 1e-12, tight_wheel['engine']
+          assert abs(tight_traction['engine']['timestepSeconds'] - 0.001) < 1e-12, tight_traction['engine']
 
           # --- single-wheel reference gate ---------------------------------------------
           w = wheel['metrics']
@@ -243,7 +250,17 @@ jobs:
           assert tc['success'] is True, tc
           delta = math.dist(c['finalBeakerM'], tc['finalBeakerM'])
           assert delta <= 0.01, (c['finalBeakerM'], tc['finalBeakerM'], delta)
-          print('LeKiwi timestep sensitivity: OK', {'finalBeakerDeltaM': round(delta, 6)})
+          tw = tight_wheel['metrics']
+          assert abs(tw['grounded']['driveDirectionM'] - w['grounded']['driveDirectionM']) < 0.02, (w['grounded'], tw['grounded'])
+          assert abs(tw['anisotropyRatio'] - w['anisotropyRatio']) < 0.35, (w['anisotropyRatio'], tw['anisotropyRatio'])
+          ttr = tight_traction['metrics']
+          assert abs(ttr['travelRatio_0.5s'] - tr['travelRatio_0.5s']) < 0.08, (tr['travelRatio_0.5s'], ttr['travelRatio_0.5s'])
+          assert ttr['reduced_0.5s']['slipRatio'] > 0.5, ttr['reduced_0.5s']
+          print('LeKiwi timestep sensitivity: OK', {
+              'finalBeakerDeltaM': round(delta, 6),
+              'wheelAnisotropy1ms': round(tw['anisotropyRatio'], 4),
+              'tractionRatio1ms': round(ttr['travelRatio_0.5s'], 4),
+          })
           PY
 
       - name: Install browser harness
@@ -256,6 +273,9 @@ jobs:
 
       - name: LeKiwi IDE physical end-to-end gate
         run: npx playwright test tests/lekiwi-phase5b-browser.spec.mjs --reporter=line
+
+      - name: LeKiwi canonical presentation alignment and wheel-animation gate
+        run: npx playwright test tests/lekiwi-presentation-browser.spec.mjs --reporter=line
 
       - name: Retain LeKiwi browser causal evidence
         if: always()
