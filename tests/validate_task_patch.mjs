@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import {
+  LEKIWI_PHYSICAL_TASKS,
   OPENARM_PHYSICAL_TASKS,
   PATCH_TASKS,
   SO101_LEGACY_TASK_CLASSIFICATION,
@@ -19,7 +20,9 @@ const expected = {
 for (const [profileId, ids] of Object.entries(expected)) {
   const configured = (PATCH_TASKS[profileId] || []).map((item) => item.id);
   if (JSON.stringify(configured) !== JSON.stringify(ids)) throw new Error(`${profileId} task catalog drift: ${configured}`);
-  if (profileId === 'openarm') continue; // OpenArm descriptor remains pinned provenance; the normal catalog is now the physical V2 migration.
+  // OpenArm and LeKiwi descriptors remain pinned provenance; their normal catalogs are now the
+  // migrated physical workspaces, asserted separately below.
+  if (profileId === 'openarm' || profileId === 'lekiwi') continue;
   for (const id of ids) {
     const scenario = await loadPatchedScenario(profileId, id);
     const actions = scenario.portablePython.referenceActions;
@@ -48,6 +51,25 @@ for (const forbidden of ['time.sleep(', 'lerobot', '.grasp(', '.attach(', '.tele
 if (!openarmWorkspace['trajectories.py'].includes('openarm_left_joint1') || !openarmWorkspace['trajectories.py'].includes('openarm_right_joint1')) throw new Error('OpenArm trajectories must expose both V2 arms as radian targets');
 if (!openarmWorkspace['workcell.py'].includes('calibration')) throw new Error('OpenArm workcell must preserve calibration boundary');
 
+const visibleLekiwi = tasksForProfile('lekiwi');
+if (visibleLekiwi.length !== 1 || visibleLekiwi[0].id !== 'lekiwi-01-beaker-courier' || visibleLekiwi[0].simulationMode !== 'physical_mujoco') throw new Error(`LeKiwi physical catalog drift: ${JSON.stringify(visibleLekiwi)}`);
+if (LEKIWI_PHYSICAL_TASKS[0].physicalSceneId !== 'p5b-lekiwi-beaker-courier') throw new Error('LeKiwi physical scene id drifted');
+const lekiwiScenario = await loadPatchedScenario('lekiwi', 'lekiwi-01-beaker-courier');
+if (lekiwiScenario.modelPackage !== 'lekiwi-courier-efa608d-v1') throw new Error('LeKiwi physical model package drifted');
+if (lekiwiScenario.physicalSceneRevision !== 'p5b-lekiwi-beaker-courier-v1') throw new Error('LeKiwi physical scene revision drifted');
+if (lekiwiScenario.robotId !== 'lekiwi_v1_mobile_manipulator') throw new Error('LeKiwi physical robot identity drifted');
+if (lekiwiScenario.canonicalModel.revision !== 'efa608d7ee5a495a4803b1d28cd0c955b4f1e033') throw new Error('LeKiwi official source pin drifted');
+if (lekiwiScenario.canonicalModel.apiCompatibilityRevision !== '7e241bd630a3719a56157a497ce5d08f244784f1') throw new Error('LeRobot compatibility pin drifted');
+if (lekiwiScenario.canonicalModel.legacyTaskRevision !== TASK_PATCH_REVISION) throw new Error('LeKiwi legacy task provenance drifted');
+const lekiwiWorkspace = buildPatchedWorkspace('lekiwi', lekiwiScenario);
+for (const file of ['main.py', 'trajectories.py', 'robot_config.py', 'workcell.py']) if (!lekiwiWorkspace[file]) throw new Error(`LeKiwi physical starter missing ${file}`);
+for (const token of ['from robobuddy.sim import connect', 'await connect(', 'await robot.send_action(', 'await robot.advance(', 'await robot.get_observation()', 'x.vel', 'waypoint_reached', 'base_pose']) {
+  if (!lekiwiWorkspace['main.py'].includes(token) && !lekiwiWorkspace['trajectories.py'].includes(token)) throw new Error(`LeKiwi live physical starter missing ${token}`);
+}
+for (const forbidden of ['time.sleep(', 'lerobot', '.grasp(', '.attach(', '.teleport(', '.move_to(', 'LeKiwiClient']) if (lekiwiWorkspace['main.py'].includes(forbidden)) throw new Error(`LeKiwi physical starter exposes forbidden/legacy behavior ${forbidden}`);
+if (!lekiwiWorkspace['trajectories.py'].includes('lekiwi_base')) throw new Error('LeKiwi starter must read the authoritative base body');
+if (!lekiwiWorkspace['workcell.py'].includes('calibration')) throw new Error('LeKiwi workcell must preserve the calibration boundary');
+
 const visibleSo101 = tasksForProfile('so101');
 if (visibleSo101.length !== 1 || visibleSo101[0].id !== 'so101-physical-block-transfer' || visibleSo101[0].simulationMode !== 'physical_mujoco') throw new Error(`SO-101 physical catalog must expose only the validated block transfer: ${JSON.stringify(visibleSo101)}`);
 for (const legacyId of expected.so101) {
@@ -65,7 +87,7 @@ for (const token of ["kind: 'bimanual'", "side: 'bimanual'", 'connectionConfig']
 if (sourceSimulator.includes('left tool target would enter the modeled work surface')) throw new Error('stale standalone tool-point collision gate remains');
 
 const host = fs.readFileSync(new URL('../src/simulator-host.js', import.meta.url), 'utf8');
-for (const token of ['OpenArmPhysicalSimulator', "physical && profileId === 'openarm'", 'So101PhysicalSimulator']) if (!host.includes(token)) throw new Error(`simulator host missing physical routing token ${token}`);
+for (const token of ['OpenArmPhysicalSimulator', "physical && profileId === 'openarm'", 'So101PhysicalSimulator', 'LeKiwiPhysicalSimulator', "physical && profileId === 'lekiwi'"]) if (!host.includes(token)) throw new Error(`simulator host missing physical routing token ${token}`);
 
 const app = fs.readFileSync(new URL('../src/app-v2.js', import.meta.url), 'utf8');
 for (const token of ['taskSelect', 'loadPatchedScenario', 'buildPatchedWorkspace', 'physicalRuntime.start', 'getPhysicalSession', 'isPhysicalWorkspace']) if (!app.includes(token)) throw new Error(`task-aware app missing ${token}`);

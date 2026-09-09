@@ -145,6 +145,10 @@ export function getProfileControlDefinition(facade) {
   const profileId = context.profileId;
   if (context.workspaceStatus !== 'ready' || !context.simulationReady || !DIRECT_CONTROL_SET.has(profileId)) return null;
   if (profileId === 'so101' && context.simulationMode !== 'physical_mujoco') return null;
+  // The physical LeKiwi workspace publishes control_lekiwi_simulation from
+  // lekiwi-physical-control.js under a versioned physical schema; the legacy source-plant tool
+  // must never shadow it with the same name.
+  if (profileId === 'lekiwi' && context.simulationMode === 'physical_mujoco') return null;
   return { profileId, ...TOOL_META[profileId], inputSchema: createProfileControlSchema(profileId) };
 }
 

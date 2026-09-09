@@ -27,7 +27,17 @@ export const PHYSICS_PREVIEW_CAPABILITIES = Object.freeze({
       'No thermal, liquid, tactile/force-sensor, CAN timing or hardware-safety validation is claimed.',
     ],
   }),
-  lekiwi: capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'legacy mobile-manipulation preview', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: LEGACY_LIMITS }),
+  lekiwi: capabilityRecord({
+    backend: EXECUTION_BACKENDS.BROWSER_MUJOCO,
+    capability: 'single-authority LeKiwi V1 flat-floor holonomic mobile-manipulation workspace with explicit passive omni-wheel rollers, a free payload, live async Python and causal task evaluation',
+    evidence: MODEL_EVIDENCE.NUMERICALLY_VERIFIED,
+    limitations: [
+      'Wheel placement, wheel axes, wheel radius, roller layout, chassis inertials and the arm mount are source-derived from pinned SIGRobotics-UIUC/LeKiwi geometry; the URDF uses CAD default densities, so the resulting base mass is a CAD figure rather than a weighed robot.',
+      'Validated only on a declared flat indoor floor. Carpet, thresholds, curbs, rough terrain, suspension, high-speed carrying, wheel wear, battery droop, motor thermal behaviour, real odometry and SLAM are outside the evidence scope.',
+      'The transfer bench, receiving zone and beaker are configured educational geometry from the pinned legacy courier scenario; beaker mass, friction and gripping force are estimates, not measurements.',
+      'No hardware comparison exists. Nothing here establishes installed-LeKiwi calibration, payload rating, real grip force, or hardware safety.',
+    ],
+  }),
   unitree: capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'kinematic joint-pose inspection only', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: ['No dynamic balance or walking controller is active.', 'No physical contact plant is active.', 'No hardware-validation claim is made.'] }),
   microduck: capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'legacy policy demonstrator', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: ['Approximate browser dynamics remain active until the matched model/controller migration is complete.', 'No RL-environment, locomotion, contact, or hardware-parity claim is made.'] }),
 });

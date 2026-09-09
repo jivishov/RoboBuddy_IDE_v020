@@ -156,7 +156,7 @@ class App {
     $('robotSelect').value = id;
     const p = PROFILES[id];
     $('robotLabel').textContent = p.label;
-    const migratedPhysical = id === 'so101' || id === 'openarm';
+    const migratedPhysical = id === 'so101' || id === 'openarm' || id === 'lekiwi';
     const visibleDriver = migratedPhysical ? 'robobuddy.sim.v1 · browser MuJoCo' : p.driver;
     $('driverLabel').textContent = visibleDriver;
     $('driverStatus').textContent = visibleDriver;

@@ -63,6 +63,14 @@ jobs:
           node --check src/webmcp/microduck-control.js
           node --check src/webmcp/robot-controls.js
           node --check src/webmcp/register-ide-tools.js
+          node --check src/physics/lekiwi-source-audit.js
+          node --check src/physics/lekiwi-kinematics.js
+          node --check src/physics/lekiwi-model-package.js
+          node --check src/physics/lekiwi-scene.js
+          node --check src/physics/lekiwi-mujoco-worker.js
+          node --check src/physics/lekiwi-task-evaluator.js
+          node --check src/physics/lekiwi-physical-simulator.js
+          node --check src/webmcp/lekiwi-physical-control.js
           node --check tests/physics/model-registry-core.mjs
           node --check tests/physics/vertical-slice-core.mjs
           node --check tests/physics/live-python-bridge-core.mjs
@@ -80,6 +88,9 @@ jobs:
           node --check tests/helpers/microduck-timing.mjs
           node --check tests/microduck-control-timing-core.mjs
           node --check tests/microduck-control-deck-browser-smoke.spec.mjs
+          node --check tests/physics/lekiwi-phase5b-core.mjs
+          node --check tests/lekiwi-phase5b-browser.spec.mjs
+          node --check tests/lekiwi-conformance-browser.spec.mjs
           node --check playwright.config.mjs
       - name: Static fidelity checks
         run: node tests/validate.mjs
@@ -98,6 +109,8 @@ jobs:
         run: |
           node tests/physics/so101-manipulation-core.mjs
           node tests/physics/so101-task-evaluator-core.mjs
+      - name: LeKiwi Phase 5B source-audit, mapping and evaluator contract checks
+        run: node tests/physics/lekiwi-phase5b-core.mjs
       - name: MicroDuck asset and policy contracts
         run: |
           node tests/validate_microduck_assets.mjs
