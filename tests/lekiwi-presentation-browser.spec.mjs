@@ -1,12 +1,48 @@
-#!/usr/bin/env python3
-from pathlib import Path
-import re
+import { expect, test } from '@playwright/test';
 
-ROOT = Path(__file__).resolve().parents[1]
-path = ROOT / 'tests' / 'lekiwi-presentation-browser.spec.mjs'
-text = path.read_text()
-pattern = re.compile(r"  const arm = await page\.evaluate\(async \(\) => \{[\s\S]*?  expect\(Math\.hypot\(\.\.\.wristAfter\.map\(\(value, index\) => value - wristBefore\[index\]\)\)\)\.toBeGreaterThan\(40\);\n")
-replacement = r'''  const arm = await page.evaluate(async () => {
+test('LeKiwi canonical presentation follows the authoritative physical base, wheels, arm and beaker', async ({ page }) => {
+  test.setTimeout(240_000);
+  const pageErrors = [];
+  page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
+  await page.goto('/?ci=lekiwi-presentation', { waitUntil: 'domcontentloaded' });
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
+  await page.locator('#robotSelect').selectOption('lekiwi');
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 90_000 });
+
+  const options = await page.locator('#taskSelect option').evaluateAll((nodes) => nodes.map((node) => ({ value: node.value, text: node.textContent })));
+  expect(options).toEqual([{ value: 'lekiwi-physical-beaker-courier', text: 'Physical Beaker Courier' }]);
+  await expect(page.locator('#sideRobotSummary')).toContainText('free base, driven wheels, mounted arm and free beaker');
+
+  const initial = await page.evaluate(async () => {
+    const sim = window.__robobuddyCi.app.sim.backend;
+    await sim.advanceTime(0.2);
+    sim.renderFrame();
+    return { alignment: sim.getPresentationAlignment(), audit: sim.getPresentationAudit(), mainPy: window.__robobuddyCi.app.files['main.py'], configPy: window.__robobuddyCi.app.files['robot_config.py'] };
+  });
+  expect(initial.audit.wheelTransformSource).toContain('observed MuJoCo wheel joint positions');
+  expect(initial.audit.visualRootFrameSource).toContain('model_x = urdf_y');
+  expect(initial.alignment.maxArmPivotErrorMm).not.toBeNull();
+  expect(initial.alignment.maxArmPivotErrorMm).toBeLessThan(12);
+  expect(initial.alignment.beakerErrorMm).toBeLessThan(1e-6);
+  expect(initial.mainPy).toContain('advance_visible');
+  expect(initial.configPy).toContain('PRESENTATION_PERIOD_S = 0.05');
+
+  const driven = await page.evaluate(async () => {
+    const sim = window.__robobuddyCi.app.sim.backend;
+    const before = sim.getPresentationAlignment();
+    await sim.applyChassisVelocity({ 'x.vel': 0.15, 'y.vel': 0, 'theta.vel': 0 }, { maxSteps: 4000 });
+    await sim.advanceTime(0.25);
+    sim.renderFrame();
+    const after = sim.getPresentationAlignment();
+    await sim.applyChassisVelocity({ 'x.vel': 0, 'y.vel': 0, 'theta.vel': 0 }, { maxSteps: 2000 });
+    return { before, after };
+  });
+  for (const wheel of ['base_left_wheel', 'base_right_wheel']) {
+    expect(Math.abs(driven.after.wheelPositionsRad[wheel] - driven.before.wheelPositionsRad[wheel])).toBeGreaterThan(0.2);
+    expect(driven.after.wheelVisualQuaternions[wheel]).not.toEqual(driven.before.wheelVisualQuaternions[wheel]);
+  }
+
+  const arm = await page.evaluate(async () => {
     const sim = window.__robobuddyCi.app.sim.backend;
     const { LEKIWI_ARM_POSES, LEKIWI_COURIER_CONTROLLER, LEKIWI_WORKCELL } = await import('/src/physics/lekiwi-scene.js');
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -90,9 +126,6 @@ replacement = r'''  const arm = await page.evaluate(async () => {
   const wristBefore = arm.before.visualPivotsMm.wrist_roll;
   const wristAfter = arm.after.visualPivotsMm.wrist_roll;
   expect(Math.hypot(...wristAfter.map((value, index) => value - wristBefore[index]))).toBeGreaterThan(40);
-'''
-text, count = pattern.subn(replacement, text, count=1)
-if count != 1:
-    raise RuntimeError(f'presentation arm test replacement expected 1 match, got {count}')
-path.write_text(text)
-print('LeKiwi presentation test now reaches the workcell through physical base motion before arm/grasp checks.')
+
+  expect(pageErrors).toEqual([]);
+});

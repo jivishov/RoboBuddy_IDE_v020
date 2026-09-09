@@ -129,7 +129,6 @@ test('all pinned reference traces run through the source fixed-step plant collis
     'so101-v2-06-quantitative-transfer',
     'so101-v2-08-burette-initial-reading',
     'so101-v2-09-vacuum-filtration',
-    'lekiwi-01-beaker-courier',
   ]);
   expect(report.every((item) => item.actions > 1 && item.ticks >= item.actions)).toBeTruthy();
 });
@@ -177,55 +176,7 @@ test('Unitree G1 loads the source-pinned 29-joint mesh as a truthful kinematic p
   expect(pageErrors, pageErrors.join('\n\n')).toEqual([]);
 });
 
-test('legacy LeKiwi learner Python reaches the first action through the IDE Step Action path', async ({ page }) => {
-  const pageErrors = [];
-  page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
-  await page.goto('/?ci=1', { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
-  await page.locator('#robotSelect').selectOption('lekiwi');
-  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
-  await page.locator('#taskSelect').selectOption('lekiwi-01-beaker-courier');
-  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
-  await page.locator('#stepBtn').click();
-  await expect(page.locator('#statusMessage')).toContainText('Stepped A01', { timeout: 90_000 });
-  await expect(page.locator('#simActionLabel')).toContainText('A01');
-  await expect(page.locator('#problemsPanel')).not.toContainText('COLLISION');
-  expect(pageErrors, pageErrors.join('\n\n')).toEqual([]);
-});
-
-
-test('Pause holds an active LeKiwi source-plant run and resumes it in place', async ({ page }) => {
-  test.setTimeout(240_000);
-  await page.goto('/?ci=pause', { waitUntil: 'domcontentloaded' });
-  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
-  expect(await page.locator('#runBtn').evaluate((button) => button.nextElementSibling?.id)).toBe('pauseBtn');
-  await page.locator('#robotSelect').selectOption('lekiwi');
-  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
-  await page.locator('#taskSelect').selectOption('lekiwi-01-beaker-courier');
-  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
-
-  await page.locator('#runBtn').click();
-  await expect(page.locator('#pauseBtn')).toBeEnabled();
-  await expect(page.locator('#simActionLabel')).toContainText('A01', { timeout: 90_000 });
-  await page.locator('#pauseBtn').click();
-  await expect(page.locator('#statusMessage')).toHaveText('Simulation paused');
-  await expect(page.locator('#pauseBtn')).toHaveText('▶ Resume');
-  await expect(page.locator('#pauseBtn')).toHaveAttribute('aria-pressed', 'true');
-
-  const pausedAction = await page.locator('#simActionLabel').textContent();
-  const pausedClock = await page.locator('#simCanvas').getAttribute('data-simulation-clock-s');
-  await page.waitForTimeout(250);
-  await expect(page.locator('#simActionLabel')).toHaveText(pausedAction || '');
-  await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulation-clock-s', pausedClock || '0');
-
-  await page.locator('#pauseBtn').click();
-  await expect(page.locator('#pauseBtn')).toHaveText('⏸ Pause');
-  await expect(page.locator('#pauseBtn')).toHaveAttribute('aria-pressed', 'false');
-  await expect(page.locator('#statusMessage')).toHaveText('Run complete', { timeout: SOURCE_REPLAY_TIMEOUT });
-  await expect(page.locator('#pauseBtn')).toBeDisabled();
-});
-
-test('LeKiwi source-plant and Unitree keep their main-thread compile/replay Run and Run-to-Cursor paths', async ({ page }) => {
+test('Unitree keeps its main-thread compile/replay Run and Run-to-Cursor paths', async ({ page }) => {
   test.setTimeout(240_000);
   await page.goto('/?ci=cycle04-preservation', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
@@ -237,15 +188,6 @@ test('LeKiwi source-plant and Unitree keep their main-thread compile/replay Run 
     app.editor.cm.setCursor({ line: Math.max(0, index), ch: 0 });
     return index + 1;
   });
-
-  await page.selectOption('#robotSelect', 'lekiwi');
-  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
-  await page.selectOption('#taskSelect', 'lekiwi-01-beaker-courier');
-  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
-  const sourceLine = await setFirstActionCursor();
-  await page.click('#cursorBtn');
-  await expect(page.locator('#statusMessage')).toContainText(`main.py:${sourceLine}`, { timeout: SOURCE_REPLAY_TIMEOUT });
-  expect(await page.evaluate(() => ({ policyWorker: window.__robobuddyCi.app.microduckRuntime.isActive(), prepared: window.__robobuddyCi.app.prepared?.events?.length > 0 }))).toEqual({ policyWorker: false, prepared: true });
 
   await page.selectOption('#robotSelect', 'unitree');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });

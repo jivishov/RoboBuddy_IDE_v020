@@ -26,9 +26,6 @@ export const PATCH_TASKS = Object.freeze({
     task('so101', 'so101', 'so101-v2-08-burette-initial-reading.json', 'so101-v2-08-burette-initial-reading', 'Burette Receiver Clearance Calibration', 'so101_follower'),
     task('so101', 'so101', 'so101-v2-09-vacuum-filtration.json', 'so101-v2-09-vacuum-filtration', 'Vacuum Workcell Keep-Clear Preflight', 'so101_follower'),
   ]),
-  lekiwi: Object.freeze([
-    task('lekiwi', 'lekiwi', 'lekiwi-01-beaker-courier.json', 'lekiwi-01-beaker-courier', 'Beaker Courier', 'lekiwi_sim'),
-  ]),
 });
 
 export const SO101_LEGACY_TASK_CLASSIFICATION = Object.freeze({
@@ -169,11 +166,9 @@ const LEKIWI_PHYSICAL_SCENARIO = Object.freeze({
   limitations: Object.freeze([...LEKIWI_COURIER_PACKAGE.limitations]),
 });
 export const LEKIWI_PHYSICAL_TASKS = Object.freeze([Object.freeze({ profileId: 'lekiwi', id: LEKIWI_PHYSICAL_SCENARIO.id, title: LEKIWI_PHYSICAL_SCENARIO.title, robotId: LEKIWI_PHYSICAL_SCENARIO.robotId, simulationMode: LEKIWI_PHYSICAL_SCENARIO.simulationMode, physicalSceneId: LEKIWI_PHYSICAL_SCENARIO.physicalSceneId })]);
-// The pinned legacy LeKiwi workspace stays selectable and explicitly labeled beside the physical
-// one. It is the source-plant workspace, not a fallback: a physical backend that fails to load
-// surfaces its error rather than quietly loading this.
-export const LEKIWI_LEGACY_TASKS = Object.freeze(PATCH_TASKS.lekiwi.map((item) => Object.freeze({ ...item, title: `${item.title} (legacy source plant)` })));
-const LEKIWI_TASKS = Object.freeze([...LEKIWI_PHYSICAL_TASKS, ...LEKIWI_LEGACY_TASKS]);
+// The old source-plant LeKiwi scenario remains pinned only as provenance input in PATCH_TASKS/
+// LEGACY_TASK_SOURCE.  It is no longer a learner-selectable or resolvable LeKiwi workspace.
+const LEKIWI_TASKS = LEKIWI_PHYSICAL_TASKS;
 
 const UNITREE_G1_RIG_SCENARIO = Object.freeze({
   schema: 'robobuddy.ide-rig-inspection.v1', simulationMode: 'kinematic_pose', workspaceRevision: 'unitree-g1-rig-v1', id: 'unitree-g1-kinematic-pose-inspection', title: 'Unitree G1 29-DoF Kinematic Pose Inspection', brief: 'Inspect the canonical Unitree G1 mesh through bounded named joint poses. This workspace deliberately has no collision/contact plant, gait, balance, or hardware-control claim.', robotId: 'unitree_g1_29dof',
@@ -204,9 +199,9 @@ export function defaultTaskId(profileId) { return tasksForProfile(profileId)[0]?
 export function taskDescriptor(profileId, taskId) { return tasksForProfile(profileId).find((item) => item.id === taskId) || tasksForProfile(profileId)[0] || null; }
 
 export async function loadPatchedScenario(profileId, taskId) {
+  if (profileId === 'lekiwi' && taskId && taskId !== LEKIWI_PHYSICAL_TASKS[0].id) return null;
   const legacySo101 = profileId === 'so101' ? PATCH_TASKS.so101.find((item) => item.id === taskId) : null;
-  const legacyLekiwi = profileId === 'lekiwi' ? PATCH_TASKS.lekiwi.find((item) => item.id === taskId) : null;
-  const descriptor = legacySo101 || legacyLekiwi || taskDescriptor(profileId, taskId);
+  const descriptor = legacySo101 || taskDescriptor(profileId, taskId);
   if (!descriptor) return null;
   if (descriptor.simulationMode === 'physical_mujoco') {
     if (profileId === 'openarm') return structuredClone(OPENARM_PHYSICAL_SCENARIO);

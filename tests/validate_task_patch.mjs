@@ -15,14 +15,13 @@ if (TASK_PATCH_REVISION !== '75fe2669c0ab0b029986de424c69162071174df8') throw ne
 const expected = {
   openarm: ['openarm-04-filtration-workcell'],
   so101: ['so101-v2-06-quantitative-transfer','so101-v2-08-burette-initial-reading','so101-v2-09-vacuum-filtration'],
-  lekiwi: ['lekiwi-01-beaker-courier'],
 };
 for (const [profileId, ids] of Object.entries(expected)) {
   const configured = (PATCH_TASKS[profileId] || []).map((item) => item.id);
   if (JSON.stringify(configured) !== JSON.stringify(ids)) throw new Error(`${profileId} task catalog drift: ${configured}`);
-  // OpenArm and LeKiwi descriptors remain pinned provenance; their normal catalogs are now the
-  // migrated physical workspaces, asserted separately below.
-  if (profileId === 'openarm' || profileId === 'lekiwi') continue;
+  // OpenArm's legacy descriptor remains pinned for provenance; its normal catalog is the migrated
+  // physical workspace, asserted separately below.
+  if (profileId === 'openarm') continue;
   for (const id of ids) {
     const scenario = await loadPatchedScenario(profileId, id);
     const actions = scenario.portablePython.referenceActions;
@@ -52,12 +51,9 @@ if (!openarmWorkspace['trajectories.py'].includes('openarm_left_joint1') || !ope
 if (!openarmWorkspace['workcell.py'].includes('calibration')) throw new Error('OpenArm workcell must preserve calibration boundary');
 
 const visibleLekiwi = tasksForProfile('lekiwi');
-// The physical workspace is the LeKiwi default; the pinned legacy source-plant workspace stays
-// selectable beside it and clearly labeled, so a physical load failure can never be mistaken for it.
-if (visibleLekiwi.length !== 2) throw new Error(`LeKiwi catalog must expose the physical and legacy workspaces: ${JSON.stringify(visibleLekiwi)}`);
+if (visibleLekiwi.length !== 1) throw new Error(`LeKiwi catalog must expose only the finalized physical workspace: ${JSON.stringify(visibleLekiwi)}`);
 if (visibleLekiwi[0].id !== 'lekiwi-physical-beaker-courier' || visibleLekiwi[0].simulationMode !== 'physical_mujoco') throw new Error(`LeKiwi physical catalog drift: ${JSON.stringify(visibleLekiwi)}`);
-if (visibleLekiwi[1].id !== 'lekiwi-01-beaker-courier' || visibleLekiwi[1].simulationMode === 'physical_mujoco') throw new Error(`LeKiwi legacy workspace drift: ${JSON.stringify(visibleLekiwi)}`);
-if (!/legacy source plant/i.test(visibleLekiwi[1].title)) throw new Error(`LeKiwi legacy workspace must be labeled: ${visibleLekiwi[1].title}`);
+if (visibleLekiwi.some((item) => item.id === 'lekiwi-01-beaker-courier')) throw new Error('legacy LeKiwi task leaked into the selectable catalog');
 if (LEKIWI_PHYSICAL_TASKS[0].physicalSceneId !== 'p5b-lekiwi-beaker-courier') throw new Error('LeKiwi physical scene id drifted');
 const lekiwiScenario = await loadPatchedScenario('lekiwi', 'lekiwi-physical-beaker-courier');
 if (lekiwiScenario.modelPackage !== 'lekiwi-courier-efa608d-v1') throw new Error('LeKiwi physical model package drifted');
@@ -68,15 +64,14 @@ if (lekiwiScenario.canonicalModel.apiCompatibilityRevision !== '7e241bd630a3719a
 if (lekiwiScenario.canonicalModel.legacyTaskRevision !== TASK_PATCH_REVISION) throw new Error('LeKiwi legacy task provenance drifted');
 const lekiwiWorkspace = buildPatchedWorkspace('lekiwi', lekiwiScenario);
 for (const file of ['main.py', 'trajectories.py', 'robot_config.py', 'workcell.py']) if (!lekiwiWorkspace[file]) throw new Error(`LeKiwi physical starter missing ${file}`);
-for (const token of ['from robobuddy.sim import connect', 'await connect(', 'await robot.send_action(', 'await robot.advance(', 'await robot.get_observation()', 'x.vel', 'waypoint_reached', 'base_pose']) {
+for (const token of ['from robobuddy.sim import connect', 'await connect(', 'await robot.send_action(', 'await robot.advance(', 'await robot.get_observation()', 'x.vel', 'waypoint_reached', 'base_pose', 'advance_visible', 'PRESENTATION_PERIOD_S']) {
   if (!lekiwiWorkspace['main.py'].includes(token) && !lekiwiWorkspace['trajectories.py'].includes(token)) throw new Error(`LeKiwi live physical starter missing ${token}`);
 }
 for (const forbidden of ['time.sleep(', 'lerobot', '.grasp(', '.attach(', '.teleport(', '.move_to(', 'LeKiwiClient']) if (lekiwiWorkspace['main.py'].includes(forbidden)) throw new Error(`LeKiwi physical starter exposes forbidden/legacy behavior ${forbidden}`);
 if (!lekiwiWorkspace['trajectories.py'].includes('lekiwi_base')) throw new Error('LeKiwi starter must read the authoritative base body');
 if (!lekiwiWorkspace['workcell.py'].includes('calibration')) throw new Error('LeKiwi workcell must preserve the calibration boundary');
 const lekiwiLegacyScenario = await loadPatchedScenario('lekiwi', 'lekiwi-01-beaker-courier');
-if (!lekiwiLegacyScenario || lekiwiLegacyScenario.simulationMode === 'physical_mujoco') throw new Error('the pinned legacy LeKiwi workspace must still resolve to the source plant');
-if (!lekiwiLegacyScenario.portablePython?.referenceActions?.length) throw new Error('the legacy LeKiwi workspace must keep its pinned reference actions');
+if (lekiwiLegacyScenario !== null) throw new Error('the retired legacy LeKiwi task id must no longer resolve as a workspace');
 
 const visibleSo101 = tasksForProfile('so101');
 if (visibleSo101.length !== 1 || visibleSo101[0].id !== 'so101-physical-block-transfer' || visibleSo101[0].simulationMode !== 'physical_mujoco') throw new Error(`SO-101 physical catalog must expose only the validated block transfer: ${JSON.stringify(visibleSo101)}`);

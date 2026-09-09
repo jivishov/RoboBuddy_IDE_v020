@@ -48,6 +48,18 @@ export const LEKIWI_ACTUATED_NAMES = Object.freeze([
   'arm_wrist_flex', 'arm_wrist_roll', 'arm_gripper',
 ]);
 
+export const LEKIWI_CANONICAL_PRESENTATION_MAP = Object.freeze({
+  joints: Object.freeze({
+    arm_shoulder_pan: Object.freeze({ sign: 1, offsetRad: 0.01654725 }),
+    arm_shoulder_lift: Object.freeze({ sign: -1, offsetRad: -1.65460081 }),
+    arm_elbow_flex: Object.freeze({ sign: -1, offsetRad: 1.48772696 }),
+    arm_wrist_flex: Object.freeze({ sign: -1, offsetRad: 1.30528119 }),
+    arm_wrist_roll: Object.freeze({ sign: -1, offsetRad: 1.62034568 }),
+  }),
+  gripper: Object.freeze({ physicalOpenRad: 1.20, physicalClosedRad: -0.17, canonicalOpenValue: 20, canonicalCloseValue: 85 }),
+  evidence: 'source-reconciled from the pinned LeKiwi canonical URDF chain and pinned Menagerie SO-ARM101 physical chain; presentation only',
+});
+
 export const LEKIWI_WHEEL_NAMES = Object.freeze(['base_left_wheel', 'base_back_wheel', 'base_right_wheel']);
 export const LEKIWI_ARM_JOINT_NAMES = Object.freeze(LEKIWI_ACTUATED_NAMES.slice(3));
 
@@ -111,6 +123,7 @@ export const LEKIWI_RECONCILIATION = Object.freeze([
   row('transfer bench worktop', '290 x 290 mm top at 211 mm, 24 mm thick', PARAMETER_EVIDENCE.ESTIMATED, LEGACY_TASK_SOURCE.path, 'Configured educational task geometry from the pinned legacy scenario, not measured laboratory hardware.'),
   row('empty beaker envelope', '74 x 80 x 74 mm', PARAMETER_EVIDENCE.ESTIMATED, LEGACY_TASK_SOURCE.path, 'Configured legacy envelope, repaired into a hollow wall/rim vessel so a rim pinch is a real contact rather than a convex block grasp.'),
   row('beaker mass', 0.06, PARAMETER_EVIDENCE.ESTIMATED, 'repository-authored', 'The legacy scenario declares no mass. Not a weighed vessel.'),
+  row('canonical visual joint convention', 'five physical-to-visual sign/zero transforms plus normalized gripper mapping', PARAMETER_EVIDENCE.SOURCE_DERIVED, 'pinned LeKiwi canonical URDF chain compared with pinned Menagerie SO-ARM101 chain', 'Presentation-only reconciliation. Corresponding arm pivots agree within single-digit millimetres over randomized poses; wrist-roll sign/zero is additionally checked from the downstream gripper-hinge axis. It never feeds state back into MuJoCo.'),
   row('hardware alignment', 'none', PARAMETER_EVIDENCE.CALIBRATION_REQUIRED, '-', 'No measurement of an assembled LeKiwi was used or is claimed anywhere in Phase 5B.'),
 ]);
 

@@ -70,6 +70,21 @@ Forward is `+Y` in the URDF frame. That reading is supported three independent w
 source names `base_back_wheel` sits at `-Y`; the arm mounts at `+Y`; and with this convention the
 three source wheel axes reproduce the pinned LeRobot Kiwi mapping angles exactly.
 
+The canonical display mesh is baked in that pinned URDF root frame, whereas the MuJoCo free body
+uses the wheel-centroid LeRobot frame above. The physical renderer therefore applies the audited
+fixed URDF→model yaw and root-origin offset to every observed base pose before drawing the mesh.
+Displayed wheel spin comes from the observed MuJoCo wheel `qpos`; because the physical joints use
+the LeRobot-positive axes that are anti-parallel to the source URDF wheel axes, only the visual
+angle sign is reversed. These transforms are presentation-only and never feed state back to MuJoCo.
+
+The canonical arm mesh and the physical arm are also pinned from two different source chains: the
+LeKiwi URDF visual and Menagerie SO-ARM101 respectively. Their joint zero/sign conventions are not
+identical. P5B therefore records an explicit physical→canonical presentation map (source code:
+`LEKIWI_CANONICAL_PRESENTATION_MAP`). Corresponding shoulder/elbow/wrist pivots were reconciled
+from the two pinned kinematic chains; wrist roll was checked independently using the downstream
+gripper-hinge axis. This conversion changes only the displayed mesh angles. Physical joint state,
+contacts, task evaluation, live Python, and WebMCP remain the unmodified MuJoCo observations.
+
 ## 4. Source/model reconciliation
 
 The machine-checkable table lives in `src/physics/lekiwi-source-audit.js`
@@ -185,9 +200,11 @@ genuinely source-derived, but they are not a weighed robot:
 
 The package preserves the URDF values unscaled rather than substituting an invented mass, and
 states the consequence: **absolute mass, traction margin, motor loading, payload rating, and
-acceleration limits are calibration-required.** The P5B gates are relative and causal
-(motion arises from contact; a lifted base does not move; reduced traction degrades propulsion;
-a payload is carried by contact), and none of them depends on the absolute mass being right.
+acceleration limits are calibration-required.** The P5B gates establish causal behaviour of this
+declared simulation model (motion arises from contact; a lifted base does not move; reduced
+traction degrades propulsion; a payload is carried by contact). They do **not** establish
+hardware-accurate acceleration, traction margin, motor loading, stopping distance, or payload
+performance, because the absolute mass/inertia and several contact parameters remain uncalibrated.
 
 The arm is the exception: the URDF's CAD-density arm subtree is 6.60 kg, which the SO-ARM101's
 STS3215 servos could not hold. The arm therefore uses the pinned Menagerie `robotstudio_so101`
@@ -229,10 +246,14 @@ from OpenArm's 2 ms:
 | gripper close transition | ≈1.0 s |
 | controller period | 20 ms |
 
-A 10 ms cadence resolves the narrowest of these ≈25×. The full courier produces ≈3 270
-authoritative samples per browser run.
+A 10 ms cadence provides 25 samples across the 0.25 s evaluator settle dwell and two samples per
+20 ms controller period; the measured support/closed-grip overlap is much longer. The full courier
+produces ≈3 270 authoritative samples per browser run.
 
 ## 10. Task geometry provenance and repairs
+
+The former `lekiwi-01-beaker-courier` source-plant workspace is no longer learner-selectable after P5B finalization. Its pinned scenario remains a provenance/reference input only; the selectable LeKiwi catalog contains only `lekiwi-physical-beaker-courier`.
+
 
 | Item | Legacy value | Physical value | Provenance |
 |---|---|---|---|
