@@ -42,7 +42,18 @@ export const PHYSICS_PREVIEW_CAPABILITIES = Object.freeze({
   microduck: capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'legacy policy demonstrator', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: ['Approximate browser dynamics remain active until the matched model/controller migration is complete.', 'No RL-environment, locomotion, contact, or hardware-parity claim is made.'] }),
 });
 
-export function physicsCapabilityFor(profileId) {
+// LeKiwi is the one profile that still exposes a legacy source-plant workspace beside its physical
+// one, so its capability follows the selected workspace. A legacy run must never carry the
+// browser-mujoco/numerically-verified claim that belongs to the physical workspace.
+export const LEKIWI_LEGACY_CAPABILITY = capabilityRecord({
+  backend: EXECUTION_BACKENDS.LEGACY,
+  capability: 'legacy mobile-manipulation preview',
+  evidence: MODEL_EVIDENCE.MODEL_DERIVED,
+  limitations: LEGACY_LIMITS,
+});
+
+export function physicsCapabilityFor(profileId, { physical = true } = {}) {
+  if (profileId === 'lekiwi' && !physical) return LEKIWI_LEGACY_CAPABILITY;
   return PHYSICS_PREVIEW_CAPABILITIES[profileId] || capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'unsupported physical workspace', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: LEGACY_LIMITS });
 }
 export function capabilityLabel(record) { return `${record.backend} · ${record.evidence}`; }

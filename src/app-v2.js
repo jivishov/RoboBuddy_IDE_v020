@@ -190,7 +190,7 @@ class App {
       $('cameraModeLabel').hidden = !this.isPolicyWorkspace();
       this.setWorkspaceMutationEnabled(true);
       this.updateExecutionControls();
-      applyPhysicsPreviewStatus(id);
+      applyPhysicsPreviewStatus(id, { physical: this.isPhysicalWorkspace() });
       this.emitAgentContextChange();
       const source = this.isPhysicalWorkspace()
         ? `MuJoCo ${scenario.modelPackage} · ${scenario.physicalApi.version}`

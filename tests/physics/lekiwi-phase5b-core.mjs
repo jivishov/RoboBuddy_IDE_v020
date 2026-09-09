@@ -498,6 +498,29 @@ for (const [name, pattern] of [['applyChassisVelocity', /no physical chassis-vel
   assert.throws(() => method.call({ backend: {} }, {}), pattern);
 }
 
+
+// --- 13. capability labelling follows the selected workspace ------------------------------------
+// LeKiwi is the one profile with both a physical and a legacy workspace, so a legacy run must not
+// carry the physical workspace's browser-mujoco/numerically-verified claim.
+const { physicsCapabilityFor, capabilityLabel } = await import('../../src/physics/capabilities.js');
+const lekiwiPhysicalCapability = physicsCapabilityFor('lekiwi');
+assert.equal(lekiwiPhysicalCapability.backend, 'browser-mujoco');
+assert.equal(lekiwiPhysicalCapability.evidence, 'numerically-verified');
+assert.notEqual(lekiwiPhysicalCapability.evidence, 'hardware-compared');
+const lekiwiLegacyCapability = physicsCapabilityFor('lekiwi', { physical: false });
+assert.equal(lekiwiLegacyCapability.backend, 'legacy');
+assert.equal(lekiwiLegacyCapability.evidence, 'model-derived');
+assert.notEqual(capabilityLabel(lekiwiLegacyCapability), capabilityLabel(lekiwiPhysicalCapability));
+// Profiles without a legacy workspace are unaffected by the option.
+for (const profileId of ['so101', 'openarm']) {
+  assert.equal(physicsCapabilityFor(profileId, { physical: false }).backend, physicsCapabilityFor(profileId).backend);
+}
+// The physical chip text must name LeKiwi rather than falling through to another robot's label.
+const uiStatus = read('src/physics/ui-status.js');
+assert.match(uiStatus, /lekiwi: 'LEKIWI V1 PHYSICAL WORKSPACE/);
+assert.ok(!/profileId === 'openarm'\s*\n?\s*\? 'OPENARM V2 PHYSICAL WORKSPACE/.test(uiStatus), 'physical chip text must be keyed per profile');
+assert.match(read('src/app-v2.js'), /applyPhysicsPreviewStatus\(id, \{ physical: this\.isPhysicalWorkspace\(\) \}\)/);
+
 console.log('LeKiwi Phase 5B core contracts: OK');
 console.log('  reconciliation rows:', LEKIWI_RECONCILIATION.length);
 console.log('  registered model packages:', LEKIWI_MODEL_PACKAGES.map((pkg) => pkg.id).join(', '));
