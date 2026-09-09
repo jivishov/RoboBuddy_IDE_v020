@@ -10,7 +10,7 @@ permissions:
 jobs:
   finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,6 +29,7 @@ jobs:
       - name: Run focused static contracts
         run: |
           node --check src/physics/lekiwi-physical-simulator.js
+          node --check src/physics/lekiwi-source-audit.js
           node --check src/task-workspace.js
           node --check src/task-catalog.js
           node --check src/physics/ui-status.js
@@ -56,26 +57,31 @@ jobs:
           print({'wheel_anisotropy_2ms':a['anisotropyRatio'],'wheel_anisotropy_1ms':b['anisotropyRatio'],'traction_ratio_2ms':c['travelRatio_0.5s'],'traction_ratio_1ms':d['travelRatio_0.5s']})
           PY
 
-      - name: Diagnose physical presentation frames
+      - name: Verify physical presentation alignment and wheel animation
         run: |
           npm install --ignore-scripts --no-audit --no-fund
           npx playwright install --with-deps chromium
-          sed -i "/expect(initial.alignment.maxArmPivotErrorMm).not.toBeNull()/a\  console.log('INITIAL_ALIGNMENT', JSON.stringify(initial.alignment));" tests/lekiwi-presentation-browser.spec.mjs
-          sed -i "/expect(arm.maxError).toBeLessThan/a\  console.log('ARM_ALIGNMENT', JSON.stringify(arm));" tests/lekiwi-presentation-browser.spec.mjs
-          sed -i 's/toBeLessThan(12)/toBeLessThan(1000)/g' tests/lekiwi-presentation-browser.spec.mjs
-          sed -i 's/toBeLessThan(180)/toBeLessThan(1000)/g' tests/lekiwi-presentation-browser.spec.mjs
           cat > playwright.finalize.config.mjs <<'EOF'
           import { defineConfig } from '@playwright/test';
           export default defineConfig({
-            testDir: './tests', testMatch: /lekiwi-presentation-browser\.spec\.mjs/, workers: 1,
-            timeout: 240000, expect: { timeout: 30000 },
+            testDir: './tests',
+            testMatch: /lekiwi-presentation-browser\.spec\.mjs/,
+            workers: 1,
+            timeout: 240000,
+            expect: { timeout: 30000 },
             use: { baseURL: 'http://127.0.0.1:4173', headless: true, viewport: { width: 1366, height: 768 } },
             webServer: { command: 'python3 -m http.server 4173 --bind 127.0.0.1', url: 'http://127.0.0.1:4173/index.html', reuseExistingServer: false, timeout: 20000 },
           });
           EOF
           npx playwright test --config=playwright.finalize.config.mjs --reporter=line
-          exit 1
+          rm playwright.finalize.config.mjs
 
       - name: Commit final LeKiwi corrections
-        if: ${{ false }}
-        run: echo diagnostic-only
+        run: |
+          rm scripts/finalize_lekiwi_phase.py scripts/finalize_lekiwi_phase_original.py
+          git config user.name "RoboBuddy CI"
+          git config user.email "noreply@github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(lekiwi): align physical presentation and retire legacy task"
+          git push origin HEAD:fix/lekiwi-phase5b-physics
