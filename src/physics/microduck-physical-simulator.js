@@ -1,9 +1,5 @@
-import * as THREE from 'three';
-import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
 import { BrowserMuJoCoBackend } from './browser-mujoco-backend.js';
 import { PhysicsSession } from './session.js';
-import { MicroDuckPolicyRuntime } from '../microduck/policy-runtime.js';
-import { MicroDuckRigAdapter } from '../microduck/rig-adapter.js';
 import {
   MICRODUCK_ACTION_WIDTH,
   MICRODUCK_CONTROL_DECIMATION,
@@ -80,7 +76,11 @@ export class MicroDuckPhysicalSimulator {
     this.controls = null;
     this.ballMesh = null;
     this.markers = [];
-    if (canvas) this.#buildPresentation(canvas);
+    this.THREE = null;
+    // Presentation - three.js, the rig adapter and the ONNX runtime - is loaded lazily, only
+    // when a canvas is present. That keeps the physics core importable and testable without a
+    // renderer, and it is why setScenario is the thing that builds the viewport rather than
+    // the constructor.
     this.session = null;
     this.policyRuntime = null;
     this.controller = null;
@@ -102,30 +102,46 @@ export class MicroDuckPhysicalSimulator {
   // ---------------------------------------------------------------- lifecycle
   // Headless construction, for tests and for the reference/conformance paths. A canvas-backed
   // workspace is built by SimulatorHost through the constructor and setScenario instead.
-  static async create({ packageKey = 'walk', canvas = null, rig = null, policyRuntime = null } = {}) {
+  static async create({ packageKey = 'walk', canvas = null, rig = null, policyRuntime = null, backendFactory = null } = {}) {
     const simulator = new MicroDuckPhysicalSimulator(canvas, { rig });
-    await simulator.load(packageKey, { policyRuntime });
+    simulator.injectedPolicyRuntime = policyRuntime;
+    await simulator.load(packageKey, { policyRuntime, backendFactory });
     return simulator;
   }
 
-  async load(packageKey = 'walk', { policyRuntime = null } = {}) {
+  /**
+   * `backendFactory` and `policyRuntime` are injection seams for headless verification. The
+   * browser path uses neither: it builds the real worker-backed backend and the real ONNX
+   * runtime below.
+   */
+  async load(packageKey = 'walk', { policyRuntime = null, backendFactory = null } = {}) {
     this.#assertLive();
+    backendFactory = backendFactory || this.backendFactory || null;
     const modelPackage = MICRODUCK_PHYSICAL_PACKAGES[packageKey];
     const scene = MICRODUCK_SCENES[packageKey];
     if (!modelPackage || !scene) throw new Error(`Unknown MicroDuck physical package: ${packageKey}`);
 
     this.#teardownSession();
-    this.session = new PhysicsSession(
-      new BrowserMuJoCoBackend({
+    const backend = backendFactory
+      ? backendFactory({ setupOperations: SETUP_OPERATIONS })
+      : new BrowserMuJoCoBackend({
         workerUrl: new URL('./microduck-mujoco-worker.js', import.meta.url),
         setupOperations: SETUP_OPERATIONS,
-      }),
+      });
+    this.backendFactory = backendFactory;
+    this.session = new PhysicsSession(
+      backend,
       { sessionId: `microduck-physical-${Date.now()}`, observationBatchSteps: MICRODUCK_OBSERVATION_BATCH_STEPS },
     );
     this.unsubscribe = this.session.subscribe((event) => this.#onObservation(event));
 
-    this.policyRuntime = policyRuntime || new MicroDuckPolicyRuntime();
-    if (!policyRuntime) await this.policyRuntime.initialize();
+    const runtime = policyRuntime || this.injectedPolicyRuntime;
+    if (runtime) this.policyRuntime = runtime;
+    else {
+      const { MicroDuckPolicyRuntime } = await import('../microduck/policy-runtime.js');
+      this.policyRuntime = new MicroDuckPolicyRuntime();
+      await this.policyRuntime.initialize();
+    }
 
     this.modelPackage = modelPackage;
     this.scene = scene;
@@ -393,7 +409,7 @@ export class MicroDuckPhysicalSimulator {
     if (scenario?.simulationMode !== 'physical_mujoco') throw new Error('MicroDuck physical simulator requires a physical_mujoco scenario');
     const packageKey = Object.entries(MICRODUCK_SCENES).find(([, item]) => item.id === scenario.physicalSceneId)?.[0];
     if (!packageKey) throw new Error(`Unknown MicroDuck physical scene: ${scenario?.physicalSceneId}`);
-    await this.#ensurePresentationRig();
+    await this.#ensurePresentation();
     await this.load(packageKey);
     this.ready = true;
     if (this.canvas) {
@@ -481,14 +497,21 @@ export class MicroDuckPhysicalSimulator {
   }
 
   // ----------------------------------------------------------------- internals
-  #buildPresentation(canvas) {
+  async #ensurePresentation() {
+    if (!this.canvas || this.renderer) return;
+    const [THREE, controlsModule, rigModule] = await Promise.all([
+      import('three'),
+      import('https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js'),
+      import('../microduck/rig-adapter.js'),
+    ]);
+    this.THREE = THREE;
     this.threeScene = new THREE.Scene();
     this.threeScene.background = new THREE.Color(0xb4bcc0);
     this.camera = new THREE.PerspectiveCamera(45, 1, 1, 8000);
     this.camera.position.set(420, 300, 420);
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(globalThis.devicePixelRatio || 1, 2));
-    this.controls = new OrbitControls(this.camera, canvas);
+    this.controls = new controlsModule.OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
     this.controls.target.set(0, 60, 0);
     this.threeScene.add(new THREE.HemisphereLight(0xffffff, 0x30404a, 1.3));
@@ -502,17 +525,16 @@ export class MicroDuckPhysicalSimulator {
     this.robotRoot = new THREE.Group();
     this.robotRoot.name = 'microduck-physical-presentation';
     this.threeScene.add(this.robotRoot);
+    if (!this.rig) {
+      this.rig = await rigModule.MicroDuckRigAdapter.load();
+      this.robotRoot.add(this.rig.root);
+    }
     this.resize();
   }
 
-  async #ensurePresentationRig() {
-    if (!this.canvas || this.rig) return;
-    this.rig = await MicroDuckRigAdapter.load();
-    this.robotRoot.add(this.rig.root);
-  }
-
   #ensureBallMesh() {
-    if (!this.threeScene || this.ballMesh || this.packageKey !== 'kick') return;
+    if (!this.threeScene || !this.THREE || this.ballMesh || this.packageKey !== 'kick') return;
+    const THREE = this.THREE;
     const radiusMm = 35;
     this.ballMesh = new THREE.Mesh(
       new THREE.SphereGeometry(radiusMm, 24, 16),

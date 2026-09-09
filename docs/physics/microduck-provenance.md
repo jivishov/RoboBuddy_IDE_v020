@@ -289,7 +289,11 @@ per controller tick, ordinary control writing actuator targets and nothing else,
 condition removing the actuator command while the policy keeps producing targets, pause
 freezing simulated time, cancellation, stale-epoch and foreign-session rejection, reset
 clearing the controller feedback state, every published sample reaching the evaluator, and
-dispose releasing the worker.
+dispose releasing the worker. It also drives `MicroDuckPhysicalSimulator` itself - the class
+the workspace actually runs - through two injection seams, covering its control-loop cadence,
+its bounded advance, cancellation mid-run leaving no further actuator writes, unsupported
+capabilities reaching nothing, a declared perturbation clearing the controller feedback, and
+the three state views staying separate.
 
 ### Browser lane: not run here
 
@@ -338,7 +342,7 @@ reverted.
 ```bash
 python scripts/generate_microduck_models.py --check     # models are byte-reproducible
 node   tests/physics/microduck-phase5c-core.mjs         # 30 contract/conformance gates
-node   tests/physics/microduck-lifecycle-core.mjs       # 13 session/lifecycle gates
+node   tests/physics/microduck-lifecycle-core.mjs       # 19 session/lifecycle gates
 python native/microduck_reference.py --trial all        # every physical trial and negative control
 python native/microduck_reference.py --trial walk --timestep 0.001   # numerical sensitivity
 python native/microduck_reference.py --fixture assets/microduck/fixtures/controller-conformance.json

@@ -21,6 +21,7 @@ import {
 } from '../../src/physics/microduck-controller.js';
 import { MICRODUCK_PHYSICAL_POLICIES } from '../../src/physics/microduck-capabilities.js';
 import { MicroDuckPhysicalEvaluator } from '../../src/physics/microduck-task-evaluator.js';
+import { MicroDuckPhysicalSimulator } from '../../src/physics/microduck-physical-simulator.js';
 
 let passed = 0;
 const failures = [];
@@ -352,6 +353,128 @@ await check('a disposed session releases the worker and refuses further work', a
   try { await session.getObservation(); }
   catch (error) { refused = /disposed/.test(error.message); }
   assert(refused, 'a disposed session still accepted work');
+});
+
+// -------------------------------------------------- the simulator's own control loop
+// The class the workspace actually runs, driven headlessly: the same session and controller
+// as above, but through MicroDuckPhysicalSimulator's orchestration rather than a hand-rolled
+// loop. It needs two injection seams - a backend and a policy runtime - and nothing else.
+function headlessSimulator({ infer = () => new Float32Array(14).fill(0.05) } = {}) {
+  const workers = [];
+  const backendFactory = ({ setupOperations }) => {
+    const worker = new ScriptedWorker();
+    workers.push(worker);
+    const backend = new BrowserMuJoCoBackend({ workerUrl: 'about:blank', setupOperations });
+    backend.worker = worker;
+    worker.onmessage = ({ data }) => {
+      const request = backend.pending.get(data?.id);
+      if (!request) return;
+      backend.pending.delete(data.id);
+      if (data.ok) request.resolve(data.payload); else request.reject(new Error(data.error || 'worker failed'));
+    };
+    return backend;
+  };
+  const policyRuntime = { infer: async (policyId, observation) => infer(policyId, observation), dispose: () => {} };
+  return { backendFactory, policyRuntime, workers };
+}
+
+await check('the simulator control loop advances the authority at the declared cadence', async () => {
+  const seams = headlessSimulator();
+  const sim = await MicroDuckPhysicalSimulator.create({ packageKey: 'walk', ...seams });
+  const worker = seams.workers[0];
+  sim.setCommand({ vx: 0.35 });
+  const before = worker.time;
+  const run = await sim.advanceSeconds(0.4);
+  assert(run.executedTicks === 20, `expected 20 controller ticks, ran ${run.executedTicks}`);
+  assert(run.completed === true, 'the bounded advance did not complete');
+  const advanced = worker.time - before;
+  const expected = 20 * MICRODUCK_CONTROL_DECIMATION * TIMESTEP;
+  assert(Math.abs(advanced - expected) < 1e-9, `advanced ${advanced}s, expected ${expected}s`);
+  // The command reached the controller, and the controller reached the authority.
+  assert(sim.getState().controller.policyId === 'walking', 'the walking policy was not selected');
+  assert(worker.counts('command') === 20, `expected 20 authority commands, saw ${worker.counts('command')}`);
+  assert(worker.lastPayload('command').type === 'set_joint_targets', 'ordinary control wrote something other than joint targets');
+  sim.dispose();
+});
+
+await check('the simulator bounds one advance and refuses an over-long one', async () => {
+  const seams = headlessSimulator();
+  const sim = await MicroDuckPhysicalSimulator.create({ packageKey: 'walk', ...seams });
+  let refused = false;
+  try { await sim.advanceSeconds(30); } catch (error) { refused = /bounded to/.test(error.message); }
+  assert(refused, 'an unbounded advance was accepted');
+  sim.dispose();
+});
+
+await check('cancelling mid-run stops the simulator loop without writing further targets', async () => {
+  let ticks = 0;
+  const seams = headlessSimulator({
+    infer: () => { ticks += 1; return new Float32Array(14).fill(0.05); },
+  });
+  const sim = await MicroDuckPhysicalSimulator.create({ packageKey: 'walk', ...seams });
+  const worker = seams.workers[0];
+  sim.setCommand({ vx: 0.35 });
+  // Cancel from inside the loop, the way a human Stop or a workspace switch would.
+  const run = await sim.advanceSeconds(1.0, { onTick: ({ tick }) => { if (tick === 4) sim.cancel('user-stop'); } });
+  assert(run.cancelled === true, 'the run did not report being cancelled');
+  assert(run.completed === false, 'a cancelled run reported completion');
+  assert(run.executedTicks <= 6, `a cancelled run executed ${run.executedTicks} ticks`);
+  const commandsAtCancel = worker.counts('command');
+  // Nothing further reaches the authority afterwards.
+  const after = await sim.advanceSeconds(0.2);
+  assert(after.executedTicks === 0, 'a cancelled simulator still executed controller ticks');
+  assert(worker.counts('command') === commandsAtCancel, 'a cancelled simulator still wrote actuator targets');
+  sim.dispose();
+});
+
+await check('the simulator refuses unsupported capabilities and routes them nowhere', async () => {
+  const seams = headlessSimulator();
+  const sim = await MicroDuckPhysicalSimulator.create({ packageKey: 'walk', ...seams });
+  const worker = seams.workers[0];
+  const before = worker.counts('command');
+  for (const skill of ['roller', 'roller_crouch']) {
+    const result = sim.requestSkill(skill);
+    assert(result.accepted === false, `${skill} was accepted`);
+    assert(result.status === 'unsupported', `${skill} did not report unsupported`);
+  }
+  assert(worker.counts('command') === before, 'a refused capability still reached the authority');
+  assert(sim.requestSkill('kick_right').accepted === true, 'a supported capability was refused');
+  sim.dispose();
+});
+
+await check('a declared perturbation resets the controller feedback and is logged', async () => {
+  const seams = headlessSimulator({ infer: () => new Float32Array(14).fill(0.3) });
+  const sim = await MicroDuckPhysicalSimulator.create({ packageKey: 'walk', ...seams });
+  sim.setCommand({ vx: 0.35 });
+  await sim.advanceSeconds(0.2);
+  assert(sim.controller.previousRawAction.some((value) => value !== 0), 'no controller feedback state to clear');
+  await sim.applyPerturbation('face_down');
+  // A perturbation begins a new trial: the previous trial's action must not carry into it.
+  assert(sim.controller.previousRawAction.every((value) => value === 0), 'a perturbation left a stale previous action');
+  assert(sim.controller.previousTargets === null, 'a perturbation left a stale filter anchor');
+  const state = sim.getState();
+  assert(state.actual.setupLog.some((item) => item.event === 'setup_trunk_orientation'), 'the perturbation was not logged as setup');
+  // And the declared torque-off condition works after a run, which is the sequence the
+  // recovery negative control needs.
+  await sim.setActuationEnabled(false);
+  assert(sim.getState().actual.actuationEnabled === false, 'the torque-off condition did not take effect after a run');
+  sim.dispose();
+});
+
+await check('the simulator reports requested, controller and actual state separately', async () => {
+  const seams = headlessSimulator();
+  const sim = await MicroDuckPhysicalSimulator.create({ packageKey: 'walk', ...seams });
+  const accepted = sim.setCommand({ vx: 9 });
+  assert(accepted.limitedBy.includes('vx'), 'an out-of-range command was not reported as limited');
+  await sim.advanceSeconds(0.1);
+  const state = sim.getState();
+  assert(state.requested.command.twist[0] === 0.4, 'the requested command was not clamped to the declared bound');
+  assert(state.controller.policyId === 'walking' && state.controller.actionScale === 0.9, 'the controller view is missing');
+  assert(Array.isArray(state.actual.trunkPositionM), 'the actual view is missing');
+  assert(state.capability.backend === 'browser-mujoco' && state.hardwareValidated === false, 'the capability label is wrong');
+  // The three views are distinct objects, so a caller cannot mistake one for another.
+  assert(state.requested.command.twist[0] !== state.actual.trunkPositionM[0], 'request and measurement are indistinguishable in this fixture');
+  sim.dispose();
 });
 
 console.log(`\nMicroDuck Phase 5C lifecycle: ${passed} passed, ${failures.length} failed`);
