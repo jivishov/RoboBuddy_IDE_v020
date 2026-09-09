@@ -12,12 +12,19 @@ const PHYSICAL_SIM_BADGE = Object.freeze({
   so101: 'MUJOCO RIGID-BODY BENCHMARK · ACTUAL CONTACT/GRAVITY · NOT HARDWARE CALIBRATION',
 });
 
+const PHYSICAL_SIDE_SUMMARY = Object.freeze({
+  openarm: 'OpenArm V2. Browser MuJoCo is the single physical authority for both arms and the free task objects; the canonical mesh is presentation-only and hardware validation remains pending.',
+  lekiwi: 'LeKiwi V1. Browser MuJoCo is the single physical authority for the free base, driven wheels, mounted arm and free beaker; the canonical mesh follows observed state only and hardware validation remains pending.',
+  so101: 'SO-101. Browser MuJoCo is the single physical authority for the arm and free benchmark object; the canonical mesh is presentation-only and hardware validation remains pending.',
+});
+
 export function applyPhysicsPreviewStatus(profileId, { physical = true } = {}) {
   const capability = physicsCapabilityFor(profileId, { physical });
   const backendBadge = document.getElementById('physicsBackendBadge');
   const modeChip = document.getElementById('modeChip');
   const simBadge = document.getElementById('simBadge');
   const fidelityText = document.getElementById('fidelityText');
+  const sideRobotSummary = document.getElementById('sideRobotSummary');
   if (backendBadge) {
     backendBadge.textContent = capabilityLabel(capability);
     backendBadge.title = `${capability.capability} ${capability.limitations.join(' ')}`;
@@ -27,6 +34,9 @@ export function applyPhysicsPreviewStatus(profileId, { physical = true } = {}) {
   }
   if (simBadge && capability.backend === 'browser-mujoco' && PHYSICAL_SIM_BADGE[profileId]) {
     simBadge.textContent = PHYSICAL_SIM_BADGE[profileId];
+  }
+  if (sideRobotSummary && capability.backend === 'browser-mujoco' && PHYSICAL_SIDE_SUMMARY[profileId]) {
+    sideRobotSummary.textContent = PHYSICAL_SIDE_SUMMARY[profileId];
   }
   if (fidelityText && capability.backend === 'browser-mujoco' && profileId === 'openarm') {
     fidelityText.textContent = 'OpenArm V2 uses one authoritative browser MuJoCo PhysicsSession. Both arms, the free flask and beaker, fixtures, live Python, WebMCP and task evaluation consume that state. Only the source mechanical finger couplings remain constrained; task objects are never attached, welded, snapped, teleported or moved by renderer state. Collision proxies and dry workcell parameters are simulator estimates; hardware validation remains pending.';

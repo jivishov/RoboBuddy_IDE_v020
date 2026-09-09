@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 
 import { PARAMETER_EVIDENCE, requireModelPackage } from '../../src/physics/model-registry.js';
 import {
-  LEKIWI_ACTUATED_NAMES, LEKIWI_RECONCILIATION, LEKIWI_SIM_SECONDARY_SOURCE, LEKIWI_SOURCE,
+  LEKIWI_ACTUATED_NAMES, LEKIWI_CANONICAL_PRESENTATION_MAP, LEKIWI_RECONCILIATION, LEKIWI_SIM_SECONDARY_SOURCE, LEKIWI_SOURCE,
   LEROBOT_SOURCE, LEGACY_TASK_SOURCE, MODEL_FRAME, SO_ARM101_SOURCE, assertReconciliationCoverage,
   reconciliationByEvidence,
 } from '../../src/physics/lekiwi-source-audit.js';
@@ -58,6 +58,17 @@ assert.deepEqual([...LEKIWI_ACTUATED_NAMES], [
   'arm_shoulder_pan', 'arm_shoulder_lift', 'arm_elbow_flex', 'arm_wrist_flex', 'arm_wrist_roll', 'arm_gripper',
 ]);
 assert.match(MODEL_FRAME.urdfToModel, /model_x = urdf_y/);
+
+
+// The canonical visual is a different pinned source chain from the Menagerie physical arm.
+// Its sign/zero conversion is explicit provenance, never a physical-state correction.
+assert.deepEqual(Object.fromEntries(Object.entries(LEKIWI_CANONICAL_PRESENTATION_MAP.joints).map(([id, m]) => [id, m.sign])), {
+  arm_shoulder_pan: 1, arm_shoulder_lift: -1, arm_elbow_flex: -1, arm_wrist_flex: -1, arm_wrist_roll: -1,
+});
+close(LEKIWI_CANONICAL_PRESENTATION_MAP.gripper.physicalOpenRad, LEKIWI_COURIER_CONTROLLER.gripperOpenRad, 1e-12, 'presentation gripper open');
+close(LEKIWI_CANONICAL_PRESENTATION_MAP.gripper.physicalClosedRad, LEKIWI_COURIER_CONTROLLER.gripperCloseRad, 1e-12, 'presentation gripper close');
+assert.match(LEKIWI_CANONICAL_PRESENTATION_MAP.evidence, /presentation only/);
+assert.ok(LEKIWI_RECONCILIATION.some((row) => row.parameter === 'canonical visual joint convention' && row.evidence === PARAMETER_EVIDENCE.SOURCE_DERIVED));
 
 // --- 2. model packages, assets, bounded actuators ---------------------------------------------
 assert.equal(LEKIWI_MODEL_PACKAGES.length, 5);

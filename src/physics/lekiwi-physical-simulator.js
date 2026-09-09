@@ -10,6 +10,7 @@ import {
 } from './lekiwi-scene.js';
 import { LeKiwiCourierEvaluator, basePoseFromObservation } from './lekiwi-task-evaluator.js';
 import { MAX_WHEEL_RAD_S, publicActionToBodyCommand, WHEEL_ORDER } from './lekiwi-kinematics.js';
+import { LEKIWI_CANONICAL_PRESENTATION_MAP, MODEL_FRAME } from './lekiwi-source-audit.js';
 
 const MAX_WEBMCP_ADVANCE_SECONDS = 2;
 const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
@@ -20,8 +21,18 @@ const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
 // timestep) resolve both by a wide margin at a fraction of OpenArm's cost. This is a software
 // observation parameter, not a hardware sensor rate.
 const LEKIWI_OBSERVATION_BATCH_STEPS = 5;
-const PRESENTATION_GROUND_COLOR = 0x6b7377;
+const PRESENTATION_GROUND_COLOR = 0x687378;
 const RAD_TO_DEG = 180 / Math.PI;
+// The canonical mesh is baked in the pinned URDF root frame, while the physical MuJoCo base
+// body uses the audited LeRobot body frame at the wheel-centroid/axle origin.  The fixed
+// relationship is source-derived from MODEL_FRAME and is presentation-only.
+const MODEL_ORIGIN_IN_URDF_M = Object.freeze(MODEL_FRAME.originInUrdfM.map(Number));
+const URDF_ROOT_FROM_MODEL_ORIGIN_THREE_MM = Object.freeze([
+  -MODEL_ORIGIN_IN_URDF_M[1] * 1000,
+  -MODEL_ORIGIN_IN_URDF_M[2] * 1000,
+  -MODEL_ORIGIN_IN_URDF_M[0] * 1000,
+]);
+const URDF_TO_MODEL_THREE_YAW_RAD = -Math.PI / 2;
 
 function toThreePosition(positionM = [0, 0, 0]) {
   return new THREE.Vector3(Number(positionM[0]) * 1000, Number(positionM[2]) * 1000, -Number(positionM[1]) * 1000);
@@ -42,14 +53,54 @@ function cylinder(radiusM, heightM, material, segments = 28) {
 }
 function canonicalArmState(observation) {
   const state = {};
-  for (const jointId of ['arm_shoulder_pan', 'arm_shoulder_lift', 'arm_elbow_flex', 'arm_wrist_flex', 'arm_wrist_roll', 'arm_gripper']) {
+  for (const [jointId, mapping] of Object.entries(LEKIWI_CANONICAL_PRESENTATION_MAP.joints)) {
     const value = Number(observation?.joints?.[jointId]?.positionRad);
-    // Presentation adapter only: the canonical LeKiwi rig consumes the legacy degree scale.
-    // This conversion never feeds back into physics.
-    if (Number.isFinite(value)) state[`${jointId}.pos`] = value * RAD_TO_DEG;
+    if (!Number.isFinite(value)) continue;
+    // Presentation-only source reconciliation: the canonical mesh is baked from the official
+    // LeKiwi URDF, while the physical arm uses the pinned Menagerie SO-ARM101 convention.
+    state[`${jointId}.pos`] = (mapping.sign * value + mapping.offsetRad) * RAD_TO_DEG;
+  }
+  const grip = Number(observation?.joints?.arm_gripper?.positionRad);
+  if (Number.isFinite(grip)) {
+    const g = LEKIWI_CANONICAL_PRESENTATION_MAP.gripper;
+    const denominator = g.physicalOpenRad - g.physicalClosedRad;
+    const closedRatio = THREE.MathUtils.clamp((g.physicalOpenRad - grip) / denominator, 0, 1);
+    state['arm_gripper.pos'] = THREE.MathUtils.lerp(g.canonicalOpenValue, g.canonicalCloseValue, closedRatio);
   }
   return state;
 }
+function applyCanonicalBaseTransform(rig, observation) {
+  const base = observation?.bodies?.lekiwi_base;
+  if (!rig || !base?.positionM || !base?.quaternionWxyz) return false;
+  const baseThreeQuaternion = toThreeQuaternion(base.quaternionWxyz);
+  const offset = new THREE.Vector3(...URDF_ROOT_FROM_MODEL_ORIGIN_THREE_MM).applyQuaternion(baseThreeQuaternion);
+  const frameCorrection = new THREE.Quaternion().setFromAxisAngle(
+    new THREE.Vector3(0, 1, 0), URDF_TO_MODEL_THREE_YAW_RAD,
+  );
+  rig.root.position.copy(toThreePosition(base.positionM)).add(offset);
+  rig.root.quaternion.copy(baseThreeQuaternion).multiply(frameCorrection).normalize();
+  rig.root.updateMatrixWorld(true);
+  return true;
+}
+
+function applyCanonicalWheelState(rig, observation) {
+  if (!rig) return;
+  for (const wheelId of WHEEL_ORDER) {
+    const positionRad = Number(observation?.joints?.[wheelId]?.positionRad);
+    const group = rig.groups?.[wheelId];
+    const joint = group?.userData?.joint;
+    if (!Number.isFinite(positionRad) || !group || !joint) continue;
+    const axis = new THREE.Vector3().fromArray(joint.axis || [0, 1, 0]);
+    if (axis.lengthSq() < 1e-9) continue;
+    axis.normalize();
+    // The physical wheel joints use the audited LeRobot-positive axes, which are anti-parallel
+    // to the pinned URDF axes used by the canonical visual.  Reverse only the presentation angle.
+    const motion = new THREE.Quaternion().setFromAxisAngle(axis, -positionRad);
+    group.quaternion.copy(group.userData.baseQuaternion).multiply(motion).normalize();
+  }
+  rig.root.updateMatrixWorld(true);
+}
+
 function finiteArmTargets(targetsRad) {
   if (!targetsRad || typeof targetsRad !== 'object' || Array.isArray(targetsRad)) throw new TypeError('targetsRad must be an object');
   const allowed = new Set(LEKIWI_COURIER_PACKAGE.actuators.filter((item) => item.command === 'position-rad').map((item) => item.jointId));
@@ -197,9 +248,56 @@ export class LeKiwiPhysicalSimulator {
       baseTransformSource: 'observed MuJoCo lekiwi_base free-body pose',
       jointPresentationSource: 'observed MuJoCo joint positions',
       payloadTransformSource: 'observed MuJoCo empty_beaker free-body pose',
+      wheelTransformSource: 'observed MuJoCo wheel joint positions mapped onto the anti-parallel pinned URDF visual axes',
+      visualRootFrameSource: MODEL_FRAME.urdfToModel,
+      visualRootOffsetThreeMm: [...URDF_ROOT_FROM_MODEL_ORIGIN_THREE_MM],
+      visualRootYawCorrectionRad: URDF_TO_MODEL_THREE_YAW_RAD,
       rendererIntegratesBase: false,
       observationBatchSteps: LEKIWI_OBSERVATION_BATCH_STEPS,
       observationPeriodSeconds: LEKIWI_OBSERVATION_BATCH_STEPS * Number(this.lastObservation?.engine?.timestepSeconds || 0.002),
+    });
+  }
+  getPresentationAlignment() {
+    if (!this.canonicalRig || !this.lastObservation) return null;
+    if (this.presentationDirty) {
+      this.#applyObservation(this.lastObservation);
+      this.presentationDirty = false;
+    }
+    const pairs = [
+      ['shoulder_pan', 'arm_shoulder'],
+      ['shoulder_lift', 'arm_upper'],
+      ['elbow_flex', 'arm_lower'],
+      ['wrist_flex', 'arm_wrist'],
+      ['wrist_roll', 'arm_gripper_body'],
+    ];
+    const armPivotErrorsMm = {};
+    const visualPivotsMm = {};
+    const physicalPivotsMm = {};
+    for (const [visualId, bodyId] of pairs) {
+      const visual = this.canonicalRig.getWorldPosition(visualId);
+      const body = this.lastObservation.bodies?.[bodyId];
+      if (!visual || !body?.positionM) continue;
+      const physical = toThreePosition(body.positionM);
+      visualPivotsMm[visualId] = visual.toArray();
+      physicalPivotsMm[bodyId] = physical.toArray();
+      armPivotErrorsMm[visualId] = visual.distanceTo(physical);
+    }
+    const errors = Object.values(armPivotErrorsMm);
+    const beakerMesh = this.objectMeshes.get('empty_beaker');
+    const beakerBody = this.lastObservation.bodies?.empty_beaker;
+    const beakerPhysical = beakerBody?.positionM ? toThreePosition(beakerBody.positionM) : null;
+    const visualWrist = this.canonicalRig.getWorldPosition('wrist_roll');
+    return Object.freeze({
+      armPivotErrorsMm,
+      maxArmPivotErrorMm: errors.length ? Math.max(...errors) : null,
+      visualPivotsMm,
+      physicalPivotsMm,
+      beakerErrorMm: beakerMesh && beakerPhysical ? beakerMesh.position.distanceTo(beakerPhysical) : null,
+      visualWristToBeakerMm: visualWrist && beakerMesh ? visualWrist.distanceTo(beakerMesh.position) : null,
+      wheelPositionsRad: Object.fromEntries(WHEEL_ORDER.map((id) => [id, Number(this.lastObservation.joints?.[id]?.positionRad ?? 0)])),
+      wheelVisualQuaternions: Object.fromEntries(WHEEL_ORDER.map((id) => [id, this.canonicalRig.groups?.[id]?.quaternion?.toArray?.() || null])),
+      rootPositionMm: this.canonicalRig.root.position.toArray(),
+      rootQuaternion: this.canonicalRig.root.quaternion.toArray(),
     });
   }
   getTelemetry() {
@@ -410,13 +508,11 @@ export class LeKiwiPhysicalSimulator {
   }
   #applyObservation(observation) {
     if (this.canonicalRig) {
-      const base = observation.bodies?.lekiwi_base;
-      const pose = basePoseFromObservation(observation);
-      const basePose = pose
-        ? { x: pose.xM * 1000, z: -pose.yM * 1000, yaw: -pose.yawRad }
-        : null;
-      this.canonicalRig.applyPhysicalState(canonicalArmState(observation), basePose);
-      void base;
+      // Arm joints, base frame and wheel spin are all presentation consumers of the same
+      // authoritative MuJoCo observation.  No presentation transform is fed back into physics.
+      this.canonicalRig.applyPhysicalState(canonicalArmState(observation));
+      applyCanonicalBaseTransform(this.canonicalRig, observation);
+      applyCanonicalWheelState(this.canonicalRig, observation);
     }
     for (const [objectId, mesh] of this.objectMeshes) {
       const body = observation.bodies?.[objectId];
