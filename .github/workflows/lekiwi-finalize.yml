@@ -10,7 +10,7 @@ permissions:
 jobs:
   finalize:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,9 +38,46 @@ jobs:
           python -m py_compile native/lekiwi_reference.py
           python scripts/generate_lekiwi_models.py --check
 
+      - name: Verify tighter wheel and traction numerics
+        run: |
+          python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0"
+          python native/lekiwi_reference.py --trial wheel-reference > /tmp/wheel-2ms.json
+          python native/lekiwi_reference.py --trial wheel-reference --timestep 0.001 > /tmp/wheel-1ms.json
+          python native/lekiwi_reference.py --trial traction-reduced > /tmp/traction-2ms.json
+          python native/lekiwi_reference.py --trial traction-reduced --timestep 0.001 > /tmp/traction-1ms.json
+          python - <<'PY'
+          import json
+          a=json.load(open('/tmp/wheel-2ms.json'))['metrics']; b=json.load(open('/tmp/wheel-1ms.json'))['metrics']
+          c=json.load(open('/tmp/traction-2ms.json'))['metrics']; d=json.load(open('/tmp/traction-1ms.json'))['metrics']
+          assert abs(a['grounded']['driveDirectionM']-b['grounded']['driveDirectionM']) < 0.02, (a['grounded'], b['grounded'])
+          assert abs(a['anisotropyRatio']-b['anisotropyRatio']) < 0.35, (a['anisotropyRatio'], b['anisotropyRatio'])
+          assert abs(c['travelRatio_0.5s']-d['travelRatio_0.5s']) < 0.08, (c['travelRatio_0.5s'], d['travelRatio_0.5s'])
+          assert d['reduced_0.5s']['slipRatio'] > 0.5, d['reduced_0.5s']
+          print({'wheel_anisotropy_2ms':a['anisotropyRatio'],'wheel_anisotropy_1ms':b['anisotropyRatio'],'traction_ratio_2ms':c['travelRatio_0.5s'],'traction_ratio_1ms':d['travelRatio_0.5s']})
+          PY
+
+      - name: Verify physical presentation alignment and animation
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          cat > playwright.finalize.config.mjs <<'EOF'
+          import { defineConfig } from '@playwright/test';
+          export default defineConfig({
+            testDir: './tests',
+            testMatch: /lekiwi-presentation-browser\.spec\.mjs/,
+            workers: 1,
+            timeout: 240000,
+            expect: { timeout: 30000 },
+            use: { baseURL: 'http://127.0.0.1:4173', headless: true, viewport: { width: 1366, height: 768 } },
+            webServer: { command: 'python3 -m http.server 4173 --bind 127.0.0.1', url: 'http://127.0.0.1:4173/index.html', reuseExistingServer: false, timeout: 20000 },
+          });
+          EOF
+          npx playwright test --config=playwright.finalize.config.mjs --reporter=line
+          rm playwright.finalize.config.mjs
+
       - name: Commit final LeKiwi corrections
         run: |
-          rm scripts/finalize_lekiwi_phase.py .github/workflows/lekiwi-finalize.yml
+          rm scripts/finalize_lekiwi_phase.py scripts/finalize_lekiwi_phase_original.py
           git config user.name "RoboBuddy CI"
           git config user.email "noreply@github.com"
           git add -A
