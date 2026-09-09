@@ -208,7 +208,7 @@ class Plant:
         self.data.qpos[3:7] = quat_wxyz
         self.data.qvel[:] = 0
         mujoco.mj_forward(self.model, self.data)
-        self.setup_log.append({"event": "setup_orientation", "label": label,
+        self.setup_log.append({"event": "setup_trunk_orientation", "label": label,
                                "quaternionWxyz": [float(v) for v in quat_wxyz],
                                "simulationTime": float(self.data.time)})
 
