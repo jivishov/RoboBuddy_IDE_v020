@@ -184,6 +184,8 @@ test('legacy LeKiwi learner Python reaches the first action through the IDE Step
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   await page.locator('#robotSelect').selectOption('lekiwi');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
+  await page.locator('#taskSelect').selectOption('lekiwi-01-beaker-courier');
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   await page.locator('#stepBtn').click();
   await expect(page.locator('#statusMessage')).toContainText('Stepped A01', { timeout: 90_000 });
   await expect(page.locator('#simActionLabel')).toContainText('A01');
@@ -198,6 +200,8 @@ test('Pause holds an active LeKiwi source-plant run and resumes it in place', as
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   expect(await page.locator('#runBtn').evaluate((button) => button.nextElementSibling?.id)).toBe('pauseBtn');
   await page.locator('#robotSelect').selectOption('lekiwi');
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
+  await page.locator('#taskSelect').selectOption('lekiwi-01-beaker-courier');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
 
   await page.locator('#runBtn').click();
@@ -235,6 +239,8 @@ test('LeKiwi source-plant and Unitree keep their main-thread compile/replay Run 
   });
 
   await page.selectOption('#robotSelect', 'lekiwi');
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
+  await page.selectOption('#taskSelect', 'lekiwi-01-beaker-courier');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   const sourceLine = await setFirstActionCursor();
   await page.click('#cursorBtn');

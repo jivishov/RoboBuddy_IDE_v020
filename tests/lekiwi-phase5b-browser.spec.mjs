@@ -62,7 +62,7 @@ test('LeKiwi Phase 5B drives, grasps, carries, delivers and returns through one 
   await attach(testInfo, 'lekiwi-startup-audit.json', { ...startup, pageErrors: [...pageErrors] });
 
   expect(startup.profileId).toBe('lekiwi');
-  expect(startup.taskId).toBe('lekiwi-01-beaker-courier');
+  expect(startup.taskId).toBe('lekiwi-physical-beaker-courier');
   expect(startup.simulationMode).toBe('physical_mujoco');
   expect(startup.physicalSceneId).toBe('p5b-lekiwi-beaker-courier');
   expect(startup.backendName).toBe('LeKiwiPhysicalSimulator');

@@ -118,8 +118,8 @@ const LEKIWI_PHYSICAL_SCENARIO = Object.freeze({
   schemaVersion: 1,
   simulationMode: 'physical_mujoco',
   workspaceRevision: LEKIWI_COURIER_SCENE.revision,
-  id: 'lekiwi-01-beaker-courier',
-  title: 'Beaker Courier',
+  id: 'lekiwi-physical-beaker-courier',
+  title: 'Physical Beaker Courier',
   brief: 'Drive the LeKiwi V1 holonomic base to the transfer bench through real omni-wheel/ground contact, physically pinch the empty beaker by its rim, carry it to the marked receiving zone, set it down until the worktop supports it, release, and drive home. Every base movement comes from bounded wheel actuation; task success is read from the observed base and beaker, never from the commands you send.',
   robotId: LEKIWI_COURIER_PACKAGE.robotId,
   physicalSceneId: LEKIWI_COURIER_SCENE.id,
@@ -169,6 +169,11 @@ const LEKIWI_PHYSICAL_SCENARIO = Object.freeze({
   limitations: Object.freeze([...LEKIWI_COURIER_PACKAGE.limitations]),
 });
 export const LEKIWI_PHYSICAL_TASKS = Object.freeze([Object.freeze({ profileId: 'lekiwi', id: LEKIWI_PHYSICAL_SCENARIO.id, title: LEKIWI_PHYSICAL_SCENARIO.title, robotId: LEKIWI_PHYSICAL_SCENARIO.robotId, simulationMode: LEKIWI_PHYSICAL_SCENARIO.simulationMode, physicalSceneId: LEKIWI_PHYSICAL_SCENARIO.physicalSceneId })]);
+// The pinned legacy LeKiwi workspace stays selectable and explicitly labeled beside the physical
+// one. It is the source-plant workspace, not a fallback: a physical backend that fails to load
+// surfaces its error rather than quietly loading this.
+export const LEKIWI_LEGACY_TASKS = Object.freeze(PATCH_TASKS.lekiwi.map((item) => Object.freeze({ ...item, title: `${item.title} (legacy source plant)` })));
+const LEKIWI_TASKS = Object.freeze([...LEKIWI_PHYSICAL_TASKS, ...LEKIWI_LEGACY_TASKS]);
 
 const UNITREE_G1_RIG_SCENARIO = Object.freeze({
   schema: 'robobuddy.ide-rig-inspection.v1', simulationMode: 'kinematic_pose', workspaceRevision: 'unitree-g1-rig-v1', id: 'unitree-g1-kinematic-pose-inspection', title: 'Unitree G1 29-DoF Kinematic Pose Inspection', brief: 'Inspect the canonical Unitree G1 mesh through bounded named joint poses. This workspace deliberately has no collision/contact plant, gait, balance, or hardware-control claim.', robotId: 'unitree_g1_29dof',
@@ -190,7 +195,7 @@ const cache = new Map();
 export function tasksForProfile(profileId) {
   if (profileId === 'openarm') return OPENARM_PHYSICAL_TASKS;
   if (profileId === 'so101') return SO101_PHYSICAL_TASKS;
-  if (profileId === 'lekiwi') return LEKIWI_PHYSICAL_TASKS;
+  if (profileId === 'lekiwi') return LEKIWI_TASKS;
   if (profileId === 'unitree') return UNITREE_G1_RIG_TASKS;
   if (profileId === 'microduck') return MICRODUCK_TASKS;
   return PATCH_TASKS[profileId] || [];
@@ -200,7 +205,8 @@ export function taskDescriptor(profileId, taskId) { return tasksForProfile(profi
 
 export async function loadPatchedScenario(profileId, taskId) {
   const legacySo101 = profileId === 'so101' ? PATCH_TASKS.so101.find((item) => item.id === taskId) : null;
-  const descriptor = legacySo101 || taskDescriptor(profileId, taskId);
+  const legacyLekiwi = profileId === 'lekiwi' ? PATCH_TASKS.lekiwi.find((item) => item.id === taskId) : null;
+  const descriptor = legacySo101 || legacyLekiwi || taskDescriptor(profileId, taskId);
   if (!descriptor) return null;
   if (descriptor.simulationMode === 'physical_mujoco') {
     if (profileId === 'openarm') return structuredClone(OPENARM_PHYSICAL_SCENARIO);

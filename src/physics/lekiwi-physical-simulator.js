@@ -125,7 +125,7 @@ export class LeKiwiPhysicalSimulator {
     this.canvas.dataset.simulationAuthority = 'physics-session';
     this.canvas.dataset.physicalSceneId = LEKIWI_COURIER_SCENE.id;
     this.canvas.dataset.modelPackageId = LEKIWI_COURIER_SCENE.modelPackage;
-    this.canvas.dataset.presentationGroundColor = '#6b7377';
+    this.canvas.dataset.presentationGroundColor = '#687378';
     this.canvas.dataset.lekiwiBaseIntegration = 'mujoco-free-body';
     this.canvas.dataset.lekiwiWheelContact = 'explicit-passive-rollers';
     this.fit();
@@ -178,7 +178,7 @@ export class LeKiwiPhysicalSimulator {
     for (const marker of this.markers) marker.visible = this.highContrast;
     this.canvas.dataset.highContrastScene = String(this.highContrast);
     this.canvas.dataset.highContrastPerimeterCount = this.highContrast ? String(this.markers.length) : '0';
-    this.canvas.dataset.presentationGroundColor = '#6b7377';
+    this.canvas.dataset.presentationGroundColor = '#687378';
     return this.highContrast;
   }
   isHighContrastSceneEnabled() { return this.highContrast; }
