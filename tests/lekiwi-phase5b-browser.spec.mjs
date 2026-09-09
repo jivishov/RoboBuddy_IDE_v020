@@ -40,6 +40,7 @@ test('LeKiwi Phase 5B drives, grasps, carries, delivers and returns through one 
       wheelJoints: Object.fromEntries(['base_left_wheel', 'base_back_wheel', 'base_right_wheel']
         .map((id) => [id, state?.observation?.joints?.[id] || null])),
       contactCount: state?.observation?.contactCount ?? null,
+      contactsReadable: state?.observation?.contactsReadable ?? null,
       mainPy: app?.files?.['main.py'] || '',
     };
   });
@@ -58,8 +59,32 @@ test('LeKiwi Phase 5B drives, grasps, carries, delivers and returns through one 
   expect(startup.presentation.rendererIntegratesBase).toBe(false);
   expect(startup.presentation.baseTransformSource).toContain('observed MuJoCo');
   expect(startup.presentation.observationPeriodSeconds).toBeCloseTo(0.01, 9);
-  // The base already rests on real roller/floor contacts before anything is commanded.
-  expect(startup.contactCount).toBeGreaterThan(0);
+  // The declared initial state places the wheels exactly tangent to the floor, so MuJoCo correctly
+  // reports no contact until the plant runs. Settling briefly proves the base is then held up by
+  // real roller/floor contacts rather than by a scripted pose: contacts appear and it does not sink.
+  expect(startup.contactCount).toBe(0);
+  expect(startup.contactsReadable).toBe(true);
+  const settle = await page.evaluate(async () => {
+    const sim = window.__robobuddyCi.app.sim.backend;
+    const beforeZ = sim.getBasePose().zM;
+    await sim.advanceTime(0.2);
+    const pose = sim.getBasePose();
+    return {
+      beforeZM: beforeZ,
+      afterZM: pose.zM,
+      speedMS: pose.speedMS,
+      contactCount: sim.getState().observation.contactCount,
+      contacts: (sim.getState().observation.contacts || []).map((c) => `${c.geom1Name}|${c.geom2Name}`),
+    };
+  });
+  await attach(testInfo, 'lekiwi-startup-settle.json', settle);
+  expect(settle.contactCount).toBeGreaterThan(0);
+  // One floor contact per wheel, on a roller barrel rather than on the hub or the chassis.
+  const floorRollerContacts = settle.contacts.filter((pair) => pair.includes('lekiwi_floor') && pair.includes('_roller_'));
+  expect(floorRollerContacts.length).toBe(3);
+  expect(settle.contacts.some((pair) => pair.includes('lekiwi_chassis'))).toBe(false);
+  expect(settle.beforeZM - settle.afterZM).toBeLessThan(0.002);
+  expect(settle.speedMS).toBeLessThan(0.01);
   expect(Math.abs(startup.basePose.xM)).toBeLessThan(0.01);
   expect(startup.beaker.positionM[2]).toBeGreaterThan(0.2);
   for (const joint of Object.values(startup.wheelJoints)) {
