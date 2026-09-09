@@ -2,7 +2,7 @@ name: Validate RoboBuddy IDE
 
 on:
   push:
-    branches: [main, "fix/**"]
+    branches: [main, "fix/**", "claude/**"]
   pull_request:
 
 permissions:
