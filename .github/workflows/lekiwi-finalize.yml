@@ -24,7 +24,9 @@ jobs:
           python-version: '3.12'
 
       - name: Apply final LeKiwi patch
-        run: python scripts/finalize_lekiwi_phase.py
+        run: |
+          python scripts/finalize_lekiwi_phase.py
+          python scripts/finalize_lekiwi_testfix.py
 
       - name: Run focused static contracts
         run: |
@@ -78,7 +80,7 @@ jobs:
 
       - name: Commit final LeKiwi corrections
         run: |
-          rm scripts/finalize_lekiwi_phase.py scripts/finalize_lekiwi_phase_original.py
+          rm scripts/finalize_lekiwi_phase.py scripts/finalize_lekiwi_phase_original.py scripts/finalize_lekiwi_testfix.py
           git config user.name "RoboBuddy CI"
           git config user.email "noreply@github.com"
           git add -A
