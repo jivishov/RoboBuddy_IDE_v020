@@ -1,0 +1,49 @@
+name: Finalize LeKiwi Phase 5B
+
+on:
+  push:
+    branches: ["fix/lekiwi-phase5b-physics"]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/lekiwi-phase5b-physics
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Apply final LeKiwi patch
+        run: python scripts/finalize_lekiwi_phase.py
+
+      - name: Run focused static contracts
+        run: |
+          node --check src/physics/lekiwi-physical-simulator.js
+          node --check src/task-workspace.js
+          node --check src/task-catalog.js
+          node --check src/physics/ui-status.js
+          node --check tests/lekiwi-presentation-browser.spec.mjs
+          node tests/physics/lekiwi-phase5b-core.mjs
+          node tests/validate_task_patch.mjs
+          python -m py_compile native/lekiwi_reference.py
+          python scripts/generate_lekiwi_models.py --check
+
+      - name: Commit final LeKiwi corrections
+        run: |
+          rm scripts/finalize_lekiwi_phase.py .github/workflows/lekiwi-finalize.yml
+          git config user.name "RoboBuddy CI"
+          git config user.email "noreply@github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(lekiwi): align physical presentation and retire legacy task"
+          git push origin HEAD:fix/lekiwi-phase5b-physics
