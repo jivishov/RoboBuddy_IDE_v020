@@ -3,6 +3,7 @@ import { MicroDuckPolicySimulator } from './microduck/policy-simulator.js';
 import { So101PhysicalSimulator } from './physics/so101-physical-simulator.js';
 import { OpenArmPhysicalSimulator } from './physics/openarm-physical-simulator.js';
 import { LeKiwiPhysicalSimulator } from './physics/lekiwi-physical-simulator.js';
+import { MicroDuckPhysicalSimulator } from './physics/microduck-physical-simulator.js';
 
 export class SimulatorHost {
   constructor(canvas, {
@@ -11,6 +12,7 @@ export class SimulatorHost {
     so101PhysicalFactory = (target) => new So101PhysicalSimulator(target),
     openarmPhysicalFactory = (target) => new OpenArmPhysicalSimulator(target),
     lekiwiPhysicalFactory = (target) => new LeKiwiPhysicalSimulator(target),
+    microduckPhysicalFactory = (target) => new MicroDuckPhysicalSimulator(target),
   } = {}) {
     this.canvas = canvas;
     this.epoch = 0;
@@ -23,6 +25,7 @@ export class SimulatorHost {
     this.so101PhysicalFactory = so101PhysicalFactory;
     this.openarmPhysicalFactory = openarmPhysicalFactory;
     this.lekiwiPhysicalFactory = lekiwiPhysicalFactory;
+    this.microduckPhysicalFactory = microduckPhysicalFactory;
     this.controllerPreemptHandler = () => {};
     this.disposed = false;
     this.animationFrame = requestAnimationFrame((time) => this.renderFrame(time));
@@ -43,7 +46,9 @@ export class SimulatorHost {
     for (const pendingBackend of this.pending) pendingBackend.dispose?.();
     this.pending.clear();
     const physical = scenario?.simulationMode === 'physical_mujoco';
-    const backend = profileId === 'microduck'
+    const backend = physical && profileId === 'microduck'
+      ? this.microduckPhysicalFactory(this.canvas)
+      : profileId === 'microduck'
       ? this.microduckFactory(this.canvas)
       : physical && profileId === 'so101'
       ? this.so101PhysicalFactory(this.canvas)

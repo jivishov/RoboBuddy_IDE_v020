@@ -273,6 +273,16 @@ export class MicroDuckRigAdapter {
     }
   }
 
+  // The physical workspace's root pose. Unlike applyRootPose above, it does NOT re-seat the
+  // visual on the floor: trunk height is a physical result in the Phase 5C workspace, so a
+  // crouch, a fall, or the airborne phase of a roulade has to be visible. Snapping the mesh
+  // to the ground here would hide exactly the outcomes the physical evidence turns on.
+  applyPhysicalRootPose(position = [0, 0, 0], quaternionWxyz = [1, 0, 0, 0]) {
+    this.root.position.set((Number(position[0]) || 0) * 1000, (Number(position[2]) || 0) * 1000, -(Number(position[1]) || 0) * 1000);
+    this.root.quaternion.set(Number(quaternionWxyz[1]) || 0, Number(quaternionWxyz[3]) || 0, -(Number(quaternionWxyz[2]) || 0), Number(quaternionWxyz[0]) || 1).normalize();
+    this.root.updateWorldMatrix(true, true);
+  }
+
   getBounds(target = new THREE.Box3()) { return this.visibleBounds(target); }
 
   getSiteWorldPose(name) {

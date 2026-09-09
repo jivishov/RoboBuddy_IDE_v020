@@ -94,6 +94,17 @@
   ],
   "entries": [
     {
+      "path": "fixtures/controller-conformance.json",
+      "bytes": 27938,
+      "sha256": "016d7e415a4d1e041dc4541d1e86053fda9ad6752160d125e843863fd2017ca6",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "repository": "local",
+      "revision": "phase5c",
+      "sourcePath": "native/microduck_reference.py --fixture",
+      "status": "recorded_generated_evidence",
+      "purpose": "independently derived MicroDuck controller conformance reference: 61-value observation assembly, raw policy output, action scaling and target filtering at sampled states"
+    },
+    {
       "path": "fixtures/inference-parity.json",
       "bytes": 1859,
       "sha256": "d717598ffc4809797612bb10df36c3c296437a8a1794a201b9dcbb779e34bafc",

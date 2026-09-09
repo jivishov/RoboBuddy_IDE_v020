@@ -4,7 +4,7 @@ const pythonLauncher = process.platform === 'win32' ? 'py -3' : 'python3';
 
 export default defineConfig({
   testDir: './tests',
-  testMatch: /(?:browser-smoke|microduck-policy-trace|webmcp|physics-slice-browser|physics-load-failure-browser|so101-physics-browser|so101-live-python-browser|so101-manipulation-browser|so101-ide-physical-browser|openarm-phase5a-browser|lekiwi-phase5b-browser|lekiwi-conformance-browser|lekiwi-presentation-browser)\.spec\.mjs/,
+  testMatch: /(?:browser-smoke|microduck-policy-trace|webmcp|physics-slice-browser|physics-load-failure-browser|so101-physics-browser|so101-live-python-browser|so101-manipulation-browser|so101-ide-physical-browser|openarm-phase5a-browser|lekiwi-phase5b-browser|lekiwi-conformance-browser|lekiwi-presentation-browser|microduck-phase5c-browser)\.spec\.mjs/,
   workers: process.env.CI ? 1 : undefined,
   timeout: 120_000,
   expect: { timeout: 20_000 },
@@ -12,6 +12,12 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:4173',
     headless: true,
     viewport: { width: 1366, height: 768 },
+    // Opt-in escape hatch for sandboxes that ship a pre-installed Chromium whose build
+    // number differs from the one this pinned @playwright/test expects. Unset in CI, where
+    // `npx playwright install` provides the matching build, so CI behaviour is unchanged.
+    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE
+      ? { launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } }
+      : {}),
   },
   webServer: {
     command: `${pythonLauncher} -m http.server 4173 --bind 127.0.0.1`,
