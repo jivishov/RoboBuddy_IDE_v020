@@ -53,7 +53,37 @@ jobs:
           print('committed MicroDuck source XML/STL bytes match pinned upstream')
           PY
       - name: Apply task-specific collision routing migration
-        run: python scripts/finalize_microduck_collision_routing.py
+        run: |
+          python scripts/finalize_microduck_collision_routing.py
+          python - <<'PY'
+          from pathlib import Path
+
+          phase = Path('tests/physics/microduck-phase5c-core.mjs')
+          text = phase.read_text()
+          replacements = {
+              "assert(MICRODUCK_MODEL_PACKAGES.length === 3, `expected three packages, found ${MICRODUCK_MODEL_PACKAGES.length}`);":
+                  "assert(MICRODUCK_MODEL_PACKAGES.length === 4, `expected four task-specific packages, found ${MICRODUCK_MODEL_PACKAGES.length}`);",
+              "/not hardware accuracy|assembled MicroDuck/": "/hardware-validation|assembled-hardware|assembled MicroDuck/",
+              "assert(tasks.length === 2, `MicroDuck should expose both workspaces, saw ${tasks.length}`);":
+                  "assert(tasks.length === 4, `MicroDuck should expose one legacy plus three task-specific physical workspaces, saw ${tasks.length}`);",
+              "  const physical = tasks.find((item) => item.id === 'microduck-physical-locomotion');\n  assert(demonstrator && demonstrator.simulationMode === 'policy_sim', 'the policy demonstrator is no longer a selectable MicroDuck workspace');\n  assert(physical && physical.simulationMode === 'physical_mujoco', 'the physical locomotion workspace is no longer a selectable MicroDuck workspace');":
+                  "  const physical = tasks.find((item) => item.id === 'microduck-physical-locomotion');\n  const groundContact = tasks.find((item) => item.id === 'microduck-physical-groundcontact');\n  const kick = tasks.find((item) => item.id === 'microduck-physical-kick');\n  assert(demonstrator && demonstrator.simulationMode === 'policy_sim', 'the policy demonstrator is no longer a selectable MicroDuck workspace');\n  assert(physical && physical.simulationMode === 'physical_mujoco', 'the physical locomotion workspace is no longer a selectable MicroDuck workspace');\n  assert(groundContact && groundContact.simulationMode === 'physical_mujoco', 'the physical ground-contact workspace is missing');\n  assert(kick && kick.simulationMode === 'physical_mujoco', 'the physical kick workspace is missing');",
+          }
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'phase5c test migration target count {count}: {old[:80]}')
+              text = text.replace(old, new, 1)
+          phase.write_text(text)
+
+          bam = Path('tests/physics/microduck-bam-plant-core.mjs')
+          text = bam.read_text()
+          old = "assert(MICRODUCK_WALK_PACKAGE.limitations.some((text) => /license-constrained/i.test(text)));"
+          new = "assert(MICRODUCK_WALK_PACKAGE.limitations.some((text) => /Creative Commons BY-SA-NC/i.test(text)), 'source 3D collision asset license is not disclosed');\nassert(MICRODUCK_WALK_PACKAGE.limitations.some((text) => /outside .*MIT scope|outside RoboBuddy original-code MIT scope/i.test(text)), 'source 3D collision assets are not scoped outside RoboBuddy MIT code');"
+          if text.count(old) != 1:
+              raise SystemExit('BAM license assertion migration target drifted')
+          bam.write_text(text.replace(old, new, 1))
+          PY
       - name: Refresh integrity metadata and validate static routing
         run: |
           python - <<'PY'
@@ -67,6 +97,7 @@ jobs:
           node scripts/prepare_microduck_assets.mjs
           python scripts/generate_microduck_models.py --check
           node tests/validate_microduck_assets.mjs
+          node tests/physics/microduck-bam-plant-core.mjs
           node tests/physics/microduck-phase5c-core.mjs
           node tests/physics/microduck-lifecycle-core.mjs
       - name: Commit collision routing implementation
