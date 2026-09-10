@@ -46,7 +46,7 @@ jobs:
           node --check tests/physics/microduck-lifecycle-core.mjs
           node --check tests/microduck-phase5c-browser.spec.mjs
           python -m py_compile scripts/generate_microduck_models.py
-          python -m py_compile native/microduck_reference.py native/microduck_bam_reference.py native/microduck_bam_physical_reference.py tests/validate_microduck_bam_evidence.py
+          python -m py_compile native/microduck_controller_reference.py native/microduck_reference.py native/microduck_bam_reference.py native/microduck_bam_physical_reference.py tests/validate_microduck_bam_evidence.py
 
       - name: Committed MJCF assets match the deterministic generator
         run: python scripts/generate_microduck_models.py --check
@@ -74,23 +74,8 @@ jobs:
           python native/microduck_bam_physical_reference.py --trial walk --timestep 0.001 --json /tmp/microduck-walk-tight.json
           python native/microduck_bam_physical_reference.py --trial stand --timestep 0.001 --json /tmp/microduck-stand-tight.json
 
-      - name: The committed conformance fixture is reproducible from the native reference
-        run: |
-          cp assets/microduck/fixtures/controller-conformance.json /tmp/committed-fixture.json
-          python native/microduck_reference.py --fixture assets/microduck/fixtures/controller-conformance.json
-          python - <<'PY'
-          import json, sys
-          from pathlib import Path
-          committed = json.loads(Path('/tmp/committed-fixture.json').read_text())
-          regenerated = json.loads(Path('assets/microduck/fixtures/controller-conformance.json').read_text())
-          for doc in (committed, regenerated):
-              doc['pins'].pop('mujoco', None)
-          if committed != regenerated:
-              print('The committed controller-conformance fixture is not reproducible from the native reference.', file=sys.stderr)
-              sys.exit(1)
-          print(f"conformance fixture reproducible: {len(regenerated['samples'])} sampled controller states")
-          PY
-          git diff --quiet -- assets/microduck/fixtures/controller-conformance.json || git checkout -- assets/microduck/fixtures/controller-conformance.json
+      - name: Validate committed controller fixture independently of plant dynamics
+        run: python native/microduck_controller_reference.py --json /tmp/microduck-controller-conformance.json
 
       - name: Retain native MicroDuck evidence
         if: always()
