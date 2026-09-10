@@ -1,0 +1,42 @@
+name: Apply MicroDuck browser closure fixes
+
+on:
+  push:
+    branches:
+      - fix/microduck-full-plant-fidelity
+    paths:
+      - .github/workflows/fix-microduck-browser-closure.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/microduck-full-plant-fidelity
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply browser closure patch
+        run: python scripts/apply_microduck_browser_closure_fix.py
+      - name: Validate static and lifecycle contracts
+        run: |
+          node --check src/physics/microduck-mujoco-worker.js
+          node --check src/physics/microduck-physical-simulator.js
+          node --check tests/microduck-phase5c-browser.spec.mjs
+          node --check tests/physics/microduck-lifecycle-core.mjs
+          node tests/physics/microduck-browser-mesh-vfs-core.mjs
+          node tests/physics/microduck-phase5c-core.mjs
+          node tests/physics/microduck-lifecycle-core.mjs
+      - name: Push tested source and test fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/physics/microduck-mujoco-worker.js src/physics/microduck-physical-simulator.js tests/microduck-phase5c-browser.spec.mjs tests/physics/microduck-lifecycle-core.mjs
+          git commit -m "fix(microduck): close physical browser fidelity regressions"
+          git push origin HEAD:fix/microduck-full-plant-fidelity
