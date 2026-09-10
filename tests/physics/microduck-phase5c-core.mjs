@@ -630,42 +630,21 @@ check('the reference runner and the browser share the same declared constants', 
   assert(runner.includes('MOUTH_WIRE_INDEX = 9'), 'the native runner uses a different mouth index');
 });
 
-check('both MicroDuck workspaces are entered by name, and neither inherits the other\'s labelling', async () => {
+check('MicroDuck exposes only physical task-specific workspaces and rejects the retired demonstrator', async () => {
   const { tasksForProfile, defaultTaskId, loadPatchedScenario } = await import('../../src/task-catalog.js');
   const { physicsCapabilityFor } = await import('../../src/physics/capabilities.js');
-
   const tasks = tasksForProfile('microduck');
-  assert(tasks.length === 4, `MicroDuck should expose one legacy plus three task-specific physical workspaces, saw ${tasks.length}`);
-  const demonstrator = tasks.find((item) => item.id === 'microduck-policy-demonstrator');
-  const physical = tasks.find((item) => item.id === 'microduck-physical-locomotion');
-  const groundContact = tasks.find((item) => item.id === 'microduck-physical-groundcontact');
-  const kick = tasks.find((item) => item.id === 'microduck-physical-kick');
-  assert(demonstrator && demonstrator.simulationMode === 'policy_sim', 'the policy demonstrator is no longer a selectable MicroDuck workspace');
-  assert(physical && physical.simulationMode === 'physical_mujoco', 'the physical locomotion workspace is no longer a selectable MicroDuck workspace');
-  assert(groundContact && groundContact.simulationMode === 'physical_mujoco', 'the physical ground-contact workspace is missing');
-  assert(kick && kick.simulationMode === 'physical_mujoco', 'the physical kick workspace is missing');
-
-  // The demonstrator stays the default because it is the profile's complete learner surface:
-  // roller variants, the control deck, camera modes, visual cues, audio and peripherals, none of
-  // which the physical workspace claims. Flipping this silently removes those features from the
-  // default MicroDuck and breaks the established browser suite that exercises them, so it is
-  // pinned here rather than left to import order.
-  assert(defaultTaskId('microduck') === 'microduck-policy-demonstrator',
-    `the default MicroDuck workspace changed to ${defaultTaskId('microduck')}`);
-
-  const physicalScenario = await loadPatchedScenario('microduck', 'microduck-physical-locomotion');
-  const demoScenario = await loadPatchedScenario('microduck', 'microduck-policy-demonstrator');
-  assert(physicalScenario.simulationMode === 'physical_mujoco', 'the physical workspace no longer loads a physical scenario');
-  assert(demoScenario.simulationMode === 'policy_sim', 'the demonstrator no longer loads its own scenario');
-  assert(physicalScenario.id !== demoScenario.id, 'the two MicroDuck workspaces collapsed onto one scenario');
-
-  // Each workspace carries only its own claim. The demonstrator must never acquire the physical
-  // badge, and the physical workspace must never be presented as approximate dynamics.
-  const physicalCapability = physicsCapabilityFor('microduck', { physical: true });
-  const legacyCapability = physicsCapabilityFor('microduck', { physical: false });
-  assert(physicalCapability.backend === 'browser-mujoco', 'the physical MicroDuck workspace lost its browser-mujoco backend claim');
-  assert(legacyCapability.backend === 'legacy', 'the MicroDuck demonstrator acquired a non-legacy backend claim');
-  assert(physicalCapability.evidence !== legacyCapability.evidence, 'the two MicroDuck workspaces now make the same evidence claim');
+  assert(tasks.length === 3, `MicroDuck must expose exactly three physical tasks, saw ${tasks.length}`);
+  assert(tasks.map((item) => item.id).join(',') === 'microduck-physical-locomotion,microduck-physical-groundcontact,microduck-physical-kick', 'MicroDuck physical task order changed');
+  assert(defaultTaskId('microduck') === 'microduck-physical-locomotion', 'Physical locomotion is not the default');
+  for (const task of tasks) {
+    assert(task.simulationMode === 'physical_mujoco', `${task.id} is not physical`);
+    const scene = await loadPatchedScenario('microduck', task.id);
+    assert(scene.simulationMode === 'physical_mujoco' && scene.id === task.id, 'Task must resolve to its own physical plant');
+  }
+  assert(await loadPatchedScenario('microduck', 'microduck-policy-demonstrator') === null, 'Retired demonstrator was silently remapped');
+  assert(await loadPatchedScenario('microduck', 'not-a-microduck-task') === null, 'Unknown task was silently remapped');
+  assert(physicsCapabilityFor('microduck', { physical: true }).backend === 'browser-mujoco', 'Physical backend evidence changed');
 });
 
 check('the physical MicroDuck workspace has its own chip, badge and summary', () => {

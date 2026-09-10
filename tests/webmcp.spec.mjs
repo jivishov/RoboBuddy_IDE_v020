@@ -173,84 +173,27 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   expect(pageErrors, pageErrors.join('\n\n')).toEqual([]);
 });
 
-test('ready MicroDuck adds one strict bounded control tool and removes it across profile changes', async ({ page }) => {
+test('ready physical MicroDuck registers only its bounded physical tool and removes it on profile changes', async ({ page }) => {
+  test.setTimeout(180_000);
   await openReadyApp(page);
   await page.locator('[data-agent-access="assist"]').click();
   await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
-
   await page.locator('#robotSelect').selectOption('microduck');
-  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
-  await expect.poll(() => activeTools(page)).toEqual([
-    ...BASE_TOOLS,
-    'control_microduck_simulation',
-    'manage_microduck_visual_cues',
-  ]);
-
-  const controlSurface = await page.evaluate(() => {
-    const entry = window.__webMcpRegistrations.findLast(({ tool, signal }) => tool.name === 'control_microduck_simulation' && !signal?.aborted);
-    return { schema: entry.tool.inputSchema, description: entry.tool.description };
-  });
-  const commands = [...new Set(controlSurface.schema.oneOf.map((branch) => branch.properties.command.const))].sort();
-  expect(commands).toEqual([
-    'chorale', 'do', 'enable', 'get_mode', 'get_state', 'head', 'init', 'look', 'mouth', 'move', 'pose',
-    'relax', 'reset', 'set_camera', 'set_color', 'set_mode', 'set_tof_stimulus', 'sound', 'spawn_ball', 'stop', 'theremin',
-  ]);
-  expect(controlSurface.schema.oneOf).toHaveLength(25);
-  expect(controlSurface.schema.oneOf.every((branch) => branch.additionalProperties === false && branch.required.includes('command'))).toBe(true);
-  expect(commands).not.toEqual(expect.arrayContaining(['write', 'apply', 'export', 'publish', 'hardware', 'network', 'shutdown', 'ble', 'multiplayer', 'hidden']));
-  expect(controlSurface.description).toContain('approximate browser dynamics only');
-
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 120_000 });
+  await expect.poll(() => activeTools(page)).toEqual([...BASE_TOOLS, 'control_microduck_physical_simulation']);
   const task = await callTool(page, 'describe_robobuddy_task');
-  expect(task).toMatchObject({ simulationMode: 'policy_sim', stateKind: 'browser_policy_sim', sourcePlantAvailable: false, policySimulationAvailable: true, hardwareValidated: false });
-  const state = await callTool(page, 'control_microduck_simulation', { command: 'get_state' });
-  expect(state).toMatchObject({ ok: true, command: 'get_state', completed: true, state: { simulationMode: 'policy_sim', stateKind: 'browser_policy_sim', hardwareValidated: false } });
-  expect(JSON.stringify(state).length).toBeLessThan(32_000);
-  expect(JSON.stringify(state)).not.toMatch(/file_id|sha256|referenceActions|localPath/i);
-
-  const visualCueSurface = await page.evaluate(() => {
-    const entry = window.__webMcpRegistrations.findLast(({ tool, signal }) => tool.name === 'manage_microduck_visual_cues' && !signal?.aborted);
-    return { schema: entry.tool.inputSchema, description: entry.tool.description };
-  });
-  expect(visualCueSurface.schema.oneOf).toHaveLength(4);
-  expect(visualCueSurface.schema.oneOf.every((branch) => branch.additionalProperties === false)).toBe(true);
-  expect(visualCueSurface.description).toContain('never executes caller code');
-  const initialCues = await callTool(page, 'manage_microduck_visual_cues', { operation: 'list' });
-  expect(initialCues).toEqual({ ok: true, operation: 'list', cues: [], cueCount: 0 });
-  const addedLabel = await callTool(page, 'manage_microduck_visual_cues', { operation: 'upsert', cue: { id: 'pose-note', kind: 'label', text: 'modeled pose', anchor: 'duck', offset_m: [0, 0, 0.18], color: '#5ed6bc' } });
-  expect(addedLabel).toMatchObject({ ok: true, operation: 'upsert', created: true, cue: { id: 'pose-note', kind: 'label', anchor: 'duck' }, cueCount: 1 });
-  const addedRuler = await callTool(page, 'manage_microduck_visual_cues', { operation: 'upsert', cue: { id: 'reference-span', kind: 'ruler', start: [0, 0, 0.02], end: [1.2, 0, 0.02], title: 'reference', color: '#ff9f7a' } });
-  expect(addedRuler).toMatchObject({ ok: true, operation: 'upsert', created: true, cue: { id: 'reference-span', kind: 'ruler' }, cueCount: 2 });
-  await expect(page.locator('#simCanvas')).toHaveAttribute('data-microduck-visual-cue-count', '2');
-  const invalidCue = await callTool(page, 'manage_microduck_visual_cues', { operation: 'upsert', cue: { id: 'invalid', kind: 'line', start: [0, 0, 0], end: [0, 0, 0] } });
-  expect(invalidCue).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT' } });
-  const removedCue = await callTool(page, 'manage_microduck_visual_cues', { operation: 'remove', id: 'pose-note' });
-  expect(removedCue).toEqual({ ok: true, operation: 'remove', removed: true, id: 'pose-note', cueCount: 1 });
-  const clearedCues = await callTool(page, 'manage_microduck_visual_cues', { operation: 'clear' });
-  expect(clearedCues).toEqual({ ok: true, operation: 'clear', removed: 1, cueCount: 0 });
-
-  const invalidDuration = await callTool(page, 'control_microduck_simulation', { command: 'move', vx: 0.1 });
-  expect(invalidDuration).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT' } });
-  const moved = await callTool(page, 'control_microduck_simulation', { command: 'move', vx: 0.1, duration_ms: 20 });
-  expect(moved).toMatchObject({ ok: true, command: 'move', completed: true, state: { movement: { applied: [0, 0, 0] } } });
-  const cancelledMove = await callTool(page, 'control_microduck_simulation', { command: 'move', vx: 0.1, duration_ms: 5000 }, { abortAfterMs: 40 });
-  expect(cancelledMove).toMatchObject({ ok: false, error: { code: 'OPERATION_CANCELLED' } });
-  const afterCancellation = await callTool(page, 'control_microduck_simulation', { command: 'get_state' });
-  expect(afterCancellation).toMatchObject({ ok: true, state: { movement: { applied: [0, 0, 0] } } });
-  const manuallyStoppedInit = await page.evaluate(async () => {
-    const entry = window.__webMcpRegistrations.findLast(({ tool, signal }) => tool.name === 'control_microduck_simulation' && !signal?.aborted);
-    setTimeout(() => window.__robobuddyCi.app.stop(), 40);
-    return entry.tool.execute({ command: 'init' }, { signal: new AbortController().signal });
-  });
-  expect(manuallyStoppedInit).toMatchObject({ ok: false, error: { code: 'OPERATION_CANCELLED' } });
-  const afterManualStop = await callTool(page, 'control_microduck_simulation', { command: 'get_state' });
-  expect(afterManualStop).toMatchObject({ ok: true, command: 'get_state', completed: true });
-  const audioLocked = await callTool(page, 'control_microduck_simulation', { command: 'sound', tag: 'chirp' });
-  expect(audioLocked).toMatchObject({ ok: false, error: { code: 'AUDIO_LOCKED' } });
-
+  expect(task).toMatchObject({ simulationMode: 'physical_mujoco', hardwareValidated: false });
+  const schema = 'robobuddy.microduck.physical.v1';
+  const advance = await callTool(page, 'control_microduck_physical_simulation', { schema_version: schema, command: 'advance', advance_seconds: 0.02 });
+  expect(advance).toMatchObject({ ok: true, command: 'advance', executedTicks: 1 });
+  const invalid = await callTool(page, 'control_microduck_physical_simulation', { schema_version: schema, command: 'set_command', request: { vx: null } });
+  expect(invalid).toMatchObject({ ok: false, error: { code: 'INVALID_ARGUMENT' } });
+  const cancelled = await callTool(page, 'control_microduck_physical_simulation', { schema_version: schema, command: 'advance', advance_seconds: 2 }, { aborted: true });
+  expect(cancelled).toMatchObject({ ok: false, error: { code: 'OPERATION_CANCELLED' } });
   await page.locator('#robotSelect').selectOption('openarm');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
   await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
-  expect(await page.evaluate(() => window.__webMcpRegistrations.filter(({ tool, signal }) => tool.name === 'control_microduck_simulation' && !signal?.aborted).length)).toBe(0);
+  expect(await page.evaluate(() => window.__webMcpRegistrations.filter(({ tool, signal }) => tool.name === 'control_microduck_physical_simulation' && !signal?.aborted).length)).toBe(0);
 });
 
 test('loading and failed MicroDuck workspaces keep only the six base tools', async ({ page }) => {
@@ -262,11 +205,11 @@ test('loading and failed MicroDuck workspaces keep only the six base tools', asy
     await route.abort('failed');
   });
   await page.locator('#robotSelect').selectOption('microduck');
-  await expect(page.locator('#statusMessage')).toContainText('Loading local MicroDuck');
+  await expect(page.locator('#statusMessage')).toContainText('Loading MicroDuck MuJoCo physical');
   await expect.poll(() => activeTools(page)).toEqual(BASE_TOOLS);
   await expect(page.locator('#statusMessage')).toContainText('unavailable', { timeout: 60_000 });
   await expect.poll(() => activeTools(page)).toEqual(BASE_TOOLS);
-  expect(await page.evaluate(() => window.__webMcpRegistrations.filter(({ tool, signal }) => tool.name === 'control_microduck_simulation' && !signal?.aborted).length)).toBe(0);
+  expect(await page.evaluate(() => window.__webMcpRegistrations.filter(({ tool, signal }) => tool.name === 'control_microduck_physical_simulation' && !signal?.aborted).length)).toBe(0);
 });
 
 test('partial WebMCP registration failure aborts the entire attempted group', async ({ page }) => {

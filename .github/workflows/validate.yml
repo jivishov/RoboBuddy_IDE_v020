@@ -87,7 +87,6 @@ jobs:
           node --check tests/microduck-starter-timing.mjs
           node --check tests/helpers/microduck-timing.mjs
           node --check tests/microduck-control-timing-core.mjs
-          node --check tests/microduck-control-deck-browser-smoke.spec.mjs
           node --check tests/physics/lekiwi-phase5b-core.mjs
           node --check tests/lekiwi-phase5b-browser.spec.mjs
           node --check tests/lekiwi-conformance-browser.spec.mjs
@@ -210,12 +209,8 @@ jobs:
         run: |
           npm install --ignore-scripts --no-audit --no-fund
           npx playwright install --with-deps chromium
-      - name: MicroDuck starter Chromium regression
-        run: npm run test:browser -- --grep "MicroDuck Run visibly advances the default starter program across the field"
-      - name: MicroDuck control-deck Chromium regressions
-        run: npm run test:browser -- --grep "control-deck-audit (audio gating|presentation peripherals)" --reporter=line
-      - name: Chromium runtime and full source-plant replay
-        run: npm run test:browser -- --grep-invert "MicroDuck Run visibly advances the default starter program across the field|control-deck-audit (audio gating|presentation peripherals)" --reporter=line
+      - name: Chromium runtime, physical MicroDuck presentation and full source-plant replay
+        run: npm run test:browser -- --reporter=line
       - name: Preserve browser failure evidence
         if: failure()
         uses: actions/upload-artifact@v4

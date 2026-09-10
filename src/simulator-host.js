@@ -1,5 +1,4 @@
 import { SourceRobotSimulator } from './source-simulator.js';
-import { MicroDuckPolicySimulator } from './microduck/policy-simulator.js';
 import { So101PhysicalSimulator } from './physics/so101-physical-simulator.js';
 import { OpenArmPhysicalSimulator } from './physics/openarm-physical-simulator.js';
 import { LeKiwiPhysicalSimulator } from './physics/lekiwi-physical-simulator.js';
@@ -8,7 +7,6 @@ import { MicroDuckPhysicalSimulator } from './physics/microduck-physical-simulat
 export class SimulatorHost {
   constructor(canvas, {
     sourceFactory = (target) => new SourceRobotSimulator(target, { externalClock: true }),
-    microduckFactory = (target) => new MicroDuckPolicySimulator(target, { externalClock: true }),
     so101PhysicalFactory = (target) => new So101PhysicalSimulator(target),
     openarmPhysicalFactory = (target) => new OpenArmPhysicalSimulator(target),
     lekiwiPhysicalFactory = (target) => new LeKiwiPhysicalSimulator(target),
@@ -21,7 +19,6 @@ export class SimulatorHost {
     this.pending = new Set();
     this.highContrast = true;
     this.sourceFactory = sourceFactory;
-    this.microduckFactory = microduckFactory;
     this.so101PhysicalFactory = so101PhysicalFactory;
     this.openarmPhysicalFactory = openarmPhysicalFactory;
     this.lekiwiPhysicalFactory = lekiwiPhysicalFactory;
@@ -38,6 +35,9 @@ export class SimulatorHost {
   }
   syncLifecycleDiagnostics() { this.canvas.dataset.simulatorHostPendingCount = String(this.pending.size); }
   async setScenario(profileId, scenario, fallbackRest = {}) {
+    if (profileId === 'microduck' && scenario?.simulationMode !== 'physical_mujoco') {
+      throw new Error('MicroDuck supports physical tasks only; the legacy policy demonstrator has been retired.');
+    }
     const epoch = ++this.epoch;
     const previous = this.backend;
     this.backend = null;
@@ -48,8 +48,6 @@ export class SimulatorHost {
     const physical = scenario?.simulationMode === 'physical_mujoco';
     const backend = physical && profileId === 'microduck'
       ? this.microduckPhysicalFactory(this.canvas)
-      : profileId === 'microduck'
-      ? this.microduckFactory(this.canvas)
       : physical && profileId === 'so101'
       ? this.so101PhysicalFactory(this.canvas)
       : physical && profileId === 'openarm'

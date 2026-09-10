@@ -100,11 +100,13 @@ const initialJointPositionsRad = () => Object.fromEntries(
   MICRODUCK_POLICY_JOINT_ORDER.map((id, slot) => [id, MICRODUCK_HOME_POSITION_RAD[slot]]),
 );
 
+// Publish every source body, not just task-evaluation landmarks. The renderer consumes
+// one coherent MuJoCo xpos/xquat snapshot instead of recomputing FK from separately integrated joint state.
 const ROBOT_BODIES = Object.freeze([
   { id: MICRODUCK_TRUNK_BODY, freeJointId: 'trunk_base_freejoint' },
-  { id: 'ankle_left' }, { id: 'ankle_right' },
-  { id: 'bottom_head_shell' },
-  { id: 'left_upper_leg' }, { id: 'right_upper_leg' },
+  ...['yaw2roll', 'hip_l', 'left_upper_leg', 'leg', 'ankle_left',
+    'neck', 'neck_pitch', 'yaw_roll_motion', 'bottom_head_shell',
+    'bearing_roll', 'hip_l_2', 'right_upper_leg', 'leg_2', 'ankle_right'].map((id) => ({ id })),
 ]);
 
 const BASE_EVIDENCE = Object.freeze({
