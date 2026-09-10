@@ -1,0 +1,54 @@
+name: MicroDuck ground repair
+on:
+  push:
+    branches: [repair/microduck-ground-contact]
+    paths: [.github/workflows/microduck-ground-repair.yml, scripts/repair_microduck_ground.py, tests/microduck-presentation-browser.spec.mjs]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply scoped visual and physical-only routing correction
+        run: |
+          python3 scripts/repair_microduck_ground.py
+          git diff --exit-code -- models assets native
+          node --check src/microduck/rig-adapter.js
+          node --check src/physics/microduck-physical-simulator.js
+          node --check src/simulator-host.js
+          node --check src/task-catalog.js
+          node tests/physics/microduck-cancellation-core.mjs
+          node tests/physics/microduck-interfaces-core.mjs
+          node tests/physics/microduck-lifecycle-core.mjs
+          node tests/validate_microduck_assets.mjs
+      - name: Install exact Chromium test harness
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium > /tmp/browser-install.log 2>&1
+      - name: Compare actual rendered world frames with MuJoCo and record screenshots
+        run: |
+          set +e
+          npx playwright test tests/microduck-presentation-browser.spec.mjs --reporter=line > /tmp/ground-browser.log 2>&1
+          code=$?
+          grep -E 'SETTLED|MOVING|Error:|Expected:|Received:|passed|failed|positionErrorM' /tmp/ground-browser.log || true
+          tail -60 /tmp/ground-browser.log
+          exit $code
+      - name: Preserve exact candidate source and visual evidence
+        if: always()
+        run: |
+          mkdir -p /tmp/ground-evidence
+          cp /tmp/ground-browser.log /tmp/ground-evidence/ || true
+          cp -r test-results /tmp/ground-evidence/ || true
+          tar --exclude=.git --exclude=node_modules --exclude=test-results --exclude=playwright-report -czf /tmp/ground-evidence/candidate-source.tar.gz .
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: microduck-ground-evidence
+          path: /tmp/ground-evidence
+          retention-days: 7
