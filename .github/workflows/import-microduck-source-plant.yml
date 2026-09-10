@@ -29,6 +29,7 @@ jobs:
       - name: Materialize exact task-specific source geometry and licensing
         run: |
           python scripts/finalize_microduck_full_plant.py --source-checkout /tmp/microduck_rl
+          python scripts/finalize_microduck_collision_routing.py
           python - <<'PY'
           import json, hashlib
           from pathlib import Path
@@ -54,7 +55,7 @@ jobs:
           print('all imported STL bytes match pinned upstream source')
           PY
           python scripts/generate_microduck_models.py --check
-      - name: Commit materialized plant without workflow mutation
+      - name: Commit materialized plant and collision routing
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -63,5 +64,5 @@ jobs:
             echo "No generated changes"
             exit 0
           fi
-          git commit -m "feat(microduck): materialize pinned collision plants"
+          git commit -m "fix(microduck): finalize task-specific collision routing"
           git push origin HEAD:fix/microduck-full-plant-fidelity
