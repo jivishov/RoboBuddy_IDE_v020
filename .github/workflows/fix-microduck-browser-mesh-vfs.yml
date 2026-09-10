@@ -31,12 +31,11 @@ jobs:
           node tests/physics/microduck-browser-mesh-vfs-core.mjs
           node tests/physics/microduck-phase5c-core.mjs
           node tests/physics/microduck-lifecycle-core.mjs
-      - name: Commit patch and remove migration artifacts
+      - name: Push tested source fix
         run: |
-          rm scripts/apply_microduck_browser_mesh_vfs_fix.py
-          rm .github/workflows/fix-microduck-browser-mesh-vfs.yml
+          git checkout -- .github/workflows/microduck-phase5c-validate.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add src/physics/microduck-mujoco-worker.js tests/physics/microduck-browser-mesh-vfs-core.mjs
           git commit -m "fix(microduck): load exact collision meshes through MuJoCo VFS"
           git push origin HEAD:fix/microduck-full-plant-fidelity
