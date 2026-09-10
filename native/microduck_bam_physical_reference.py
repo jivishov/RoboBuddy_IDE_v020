@@ -19,9 +19,10 @@ from pathlib import Path
 import mujoco
 import numpy as np
 
-# Make sibling import robust when launched from repository root.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import microduck_reference as ref  # noqa: E402
+
+LegacyPlant = ref.Plant
 
 KT = 0.36601349688984386
 R = 2.8113923539223227
@@ -78,7 +79,8 @@ def bam_frictionloss(motor_torque, external_torque, velocity):
     gearbox_s = abs(external_torque * LOAD_EXTERNAL_STRIBECK - motor_torque * LOAD_MOTOR_STRIBECK)
     stribeck = math.exp(-(abs(velocity / DTHETA_STRIBECK) ** STRIBECK_ALPHA))
     loss = FRICTION_BASE + gearbox + stribeck * FRICTION_STRIBECK + gearbox_s * stribeck
-    if math.copysign(1.0, external_torque) != math.copysign(1.0, motor_torque) or external_torque == 0 or motor_torque == 0:
+    sign_mismatch = np.sign(external_torque) != np.sign(motor_torque)
+    if sign_mismatch:
         if abs(external_torque) < abs(motor_torque):
             quad = LOAD_EXTERNAL_QUAD * abs(external_torque) ** 2
         elif abs(external_torque) > abs(motor_torque):
@@ -89,7 +91,7 @@ def bam_frictionloss(motor_torque, external_torque, velocity):
     return max(0.0, loss)
 
 
-class BamPlant(ref.Plant):
+class BamPlant(LegacyPlant):
     BAM_VERSION = "1.0.1"
     BAM_REVISION = "ab81512c44f1f709b99ef332addb5e51568cd51c"
 
@@ -97,9 +99,6 @@ class BamPlant(ref.Plant):
         self._bam_ready = False
         super().__init__(model_key, timestep=timestep)
         m = self.model
-        # Runtime equivalent of bam.mjlab.BamActuator.edit_spec: use the compiled XML only
-        # for articulated geometry/transmissions, then turn each source position actuator into
-        # a unit-gain torque motor and move friction/armature to BAM.
         m.actuator_gainprm[:, :] = 0.0
         m.actuator_gainprm[:, 0] = 1.0
         m.actuator_biasprm[:, :] = 0.0
@@ -119,7 +118,6 @@ class BamPlant(ref.Plant):
         self.imu_filter = DeploymentImuFilter()
         self.imu_sample_steps = max(1, int(round(0.02 / self.model.opt.timestep)))
         self.steps_since_imu = 0
-        # HOME keyframe left data.ctrl containing position targets; in torque-motor mode zero it.
         self.data.ctrl[:] = 0.0
         mujoco.mj_forward(self.model, self.data)
         self._sample_imu()
@@ -131,11 +129,11 @@ class BamPlant(ref.Plant):
         })
 
     def set_actuator_kp(self, kp):
-        # During ref.Plant.__init__, the source position plant still needs its normal setup.
+        # LegacyPlant.__init__ calls this through reset before BAM conversion is ready.
         if not getattr(self, "_bam_ready", False):
-            return ref.Plant.set_actuator_kp(self, kp)
+            return LegacyPlant.set_actuator_kp(self, kp)
         kp = float(kp)
-        self.applied_kp = kp  # backwards-compatible diagnostic in the existing report schema
+        self.applied_kp = kp
         self.firmware_gain = max(0.0, kp / ref.IDENTIFIED_KP * ref.NOMINAL_FIRMWARE_GAIN)
         self.actuation_enabled = kp > 0.0
         if not self.actuation_enabled:
@@ -218,8 +216,6 @@ class BamPlant(ref.Plant):
                                "simulationTime": float(self.data.time), "plant": "BAM M6"})
 
     def advance(self, steps, contact_sink=None):
-        # Existing harness writes its next position target frame into data.ctrl immediately
-        # before advance(). Capture it once; BAM owns data.ctrl as motor torque during steps.
         targets = np.asarray(self.data.ctrl[:ref.ACTION_LEN], dtype=np.float64).copy()
         for _ in range(steps):
             self._bam_step(targets)
@@ -227,9 +223,6 @@ class BamPlant(ref.Plant):
                 self._collect_contacts(contact_sink)
 
 
-# Run the unchanged controller/task harness with the BAM plant substituted. This keeps the
-# reference independent from the browser implementation while preserving all existing report
-# and conformance-fixture consumers.
 ref.Plant = BamPlant
 
 if __name__ == "__main__":
