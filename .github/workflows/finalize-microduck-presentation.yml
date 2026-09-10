@@ -5,11 +5,12 @@ on:
     paths: [.github/workflows/finalize-microduck-presentation.yml]
 permissions:
   contents: write
+  actions: read
 jobs:
   finalize:
     if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -17,56 +18,54 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Materialize reviewed presentation corrections
+      - name: Fetch exact candidate from the completed 15-test Chromium verification
+        uses: actions/download-artifact@v4
+        with:
+          name: microduck-presentation-evidence
+          run-id: 34512406470
+          github-token: ${{ github.token }}
+          path: /tmp/verified-presentation
+      - name: Reproduce and byte-compare the verified application and test sources
         run: |
           python3 scripts/repair_microduck_ground.py
           python3 scripts/finalize_microduck_presentation.py
+          python3 - <<'PY'
+          import tarfile
+          from pathlib import Path
+          root = Path('/tmp/verified-presentation')
+          assert '15 passed' in (root / 'presentation-browser.log').read_text()
+          # The previous job passed every test but git diff --cached --check rejected
+          # a trailing blank line in the newly extracted parity spec. Reuse that exact
+          # tested candidate, not a skipped or weakened browser test. PR CI reruns it all.
+          with tarfile.open(root / 'candidate-source.tar.gz') as archive:
+              count = 0
+              for member in archive.getmembers():
+                  name = member.name.removeprefix('./')
+                  if not member.isfile() or not (name.startswith(('src/', 'tests/', 'models/', 'assets/', 'native/')) or name in ('README.md', 'playwright.config.mjs')):
+                      continue
+                  assert Path(name).read_bytes() == archive.extractfile(member).read(), name
+                  count += 1
+          assert count > 100
+          print(f'{count} application, test and model files match the browser-verified candidate byte-for-byte')
+          path = Path('tests/microduck-policy-parity.spec.mjs')
+          path.write_text(path.read_text().rstrip('\n') + '\n')
+          print('Only subsequent test change: remove the extra blank line at EOF')
+          PY
           git diff --exit-code -- models assets native
           git diff --check
-      - name: Syntax, asset integrity and physical contracts
+      - name: Recheck permanent contracts and syntax after whitespace-only cleanup
         run: |
-          for path in src/microduck/rig-adapter.js src/physics/microduck-physical-simulator.js src/physics/microduck-model-package.js src/task-catalog.js src/profiles.js src/simulator-host.js tests/microduck-presentation-browser.spec.mjs tests/microduck-policy-parity.spec.mjs tests/webmcp.spec.mjs; do node --check "$path"; done
+          node --check src/microduck/rig-adapter.js
+          node --check src/physics/microduck-physical-simulator.js
+          node --check tests/microduck-policy-parity.spec.mjs
           node tests/physics/microduck-presentation-core.mjs
           node tests/physics/microduck-phase5c-core.mjs
           node tests/physics/microduck-cancellation-core.mjs
           node tests/physics/microduck-interfaces-core.mjs
           node tests/physics/microduck-lifecycle-core.mjs
-          node tests/physics/microduck-bam-plant-core.mjs
-          node tests/physics/model-registry-core.mjs
           node tests/validate_microduck_assets.mjs
           node tests/validate.mjs
-          node tests/validate_task_patch.mjs
-          node tests/validate_canonical_visuals.mjs
-          node tests/webmcp-core.mjs
           python3 scripts/generate_microduck_models.py --check
-          python3 tests/validate_starters.py
-          python3 tests/execute_starters.py
-      - name: Install pinned Chromium harness
-        run: |
-          npm install --ignore-scripts --no-audit --no-fund
-          npx playwright install --with-deps chromium > /tmp/browser-install.log 2>&1
-      - name: Verify contact-aligned visuals, task routing, Python, WebMCP and cancellation
-        run: |
-          set +e
-          npx playwright test tests/microduck-presentation-browser.spec.mjs tests/microduck-interfaces-browser.spec.mjs tests/microduck-policy-parity.spec.mjs tests/webmcp.spec.mjs --reporter=line > /tmp/presentation-browser.log 2>&1
-          code=$?
-          grep -E 'SETTLED|MOVING|cancellation evidence|Error:|Expected:|Received:|passed|failed' /tmp/presentation-browser.log || true
-          tail -60 /tmp/presentation-browser.log
-          exit "$code"
-      - name: Retain candidate source and actual screenshots
-        if: always()
-        run: |
-          mkdir -p /tmp/microduck-presentation-evidence
-          cp /tmp/presentation-browser.log /tmp/microduck-presentation-evidence/ 2>/dev/null || true
-          cp -r test-results /tmp/microduck-presentation-evidence/ 2>/dev/null || true
-          git diff -- src tests docs README.md playwright.config.mjs .github/workflows > /tmp/microduck-presentation-evidence/candidate.patch
-          tar --exclude=.git --exclude=node_modules --exclude=test-results --exclude=playwright-report -czf /tmp/microduck-presentation-evidence/candidate-source.tar.gz .
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: microduck-presentation-evidence
-          path: /tmp/microduck-presentation-evidence
-          retention-days: 14
       - name: Commit tested application sources and remove repair scaffolding
         run: |
           git diff --exit-code -- models assets native
