@@ -34,9 +34,6 @@ jobs:
           from pathlib import Path
           root = Path('/tmp/verified-presentation')
           assert '15 passed' in (root / 'presentation-browser.log').read_text()
-          # The previous job passed every test but git diff --cached --check rejected
-          # a trailing blank line in the newly extracted parity spec. Reuse that exact
-          # tested candidate, not a skipped or weakened browser test. PR CI reruns it all.
           with tarfile.open(root / 'candidate-source.tar.gz') as archive:
               count = 0
               for member in archive.getmembers():
@@ -69,6 +66,9 @@ jobs:
       - name: Commit tested application sources and remove repair scaffolding
         run: |
           git diff --exit-code -- models assets native
+          # GITHUB_TOKEN may not create/update workflow files. Their already-tested
+          # permanent changes are applied separately through the authorized connector.
+          git restore .github/workflows/microduck-phase5c-validate.yml .github/workflows/validate.yml
           rm scripts/repair_microduck_ground.py scripts/finalize_microduck_presentation.py .github/workflows/microduck-ground-repair.yml .github/workflows/finalize-microduck-presentation.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
