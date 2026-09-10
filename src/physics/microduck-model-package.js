@@ -6,6 +6,14 @@ import {
   MICRODUCK_PHYSICS_TIMESTEP_SECONDS,
   MICRODUCK_POLICY_JOINT_ORDER,
 } from './microduck-controller.js';
+import {
+  MICRODUCK_BAM_M6,
+  MICRODUCK_BAM_REVISION,
+  MICRODUCK_BAM_VERSION,
+  MICRODUCK_DEPLOYMENT_PLANT_PROFILE,
+  MICRODUCK_TRAINING_PLANT_PROFILE,
+  microDuckBamForceCeilingNm,
+} from './microduck-bam-plant.js';
 
 export const MICRODUCK_ROBOT_ID = 'microduck_alpha_biped';
 export const MICRODUCK_JOINT_CONTROLLER = 'microduck_joint_position';
@@ -15,56 +23,39 @@ export const MICRODUCK_BALL_BODY = 'microduck_ball';
 export const MICRODUCK_FOOT_GEOMS = Object.freeze(['left_foot_collision', 'right_foot_collision']);
 export const MICRODUCK_BALL_GEOM = 'microduck_ball_geom';
 
-// microduck_rl joints_properties.xml, class "chosen_actuator" - an identified XL330 model at
-// the firmware position gain the deployed daemon ships, not a generic PD guess.
+// Source-XML fallback actuator. microduck_rl's actual training builder replaces this position
+// actuator with BAM M6 before simulation. These constants remain for source-model validation
+// and backwards-compatible diagnostics; they are no longer the browser plant implementation.
 export const MICRODUCK_SERVO_KP_NM_RAD = 0.55;
 export const MICRODUCK_SERVO_KV = 0;
 export const MICRODUCK_SERVO_FORCE_NM = 0.96;
 export const MICRODUCK_SERVO_CTRL_RAD = 10;
-
-// The firmware gain the identified stiffness corresponds to, and the mapping between them.
-//
-// This is not inferred. microduck_rl's `chosen_actuator` class - the one the robot's joints
-// actually use - carries `<!-- 200 kp -->` directly above `kp="0.55"`, and its commented-out
-// alternative carries `<!-- 125 kp -->` above `kp="0.35"`. Those two points are proportional
-// to within 2% (0.00275 vs 0.00280 per firmware unit), so a firmware gain maps onto the
-// identified stiffness by ratio, and the mapping is exact at the robot's own gain of 200.
-//
-// The same pair settles a question that guessing would get wrong: the torque limit does NOT
-// move with the gain. The 125 kp variant keeps `forcerange="-0.96 0.96"`.
-//
-// This matters because the deployed daemon does not hold one gain. duck-control/src/bus.rs
-// writes a position-P-gain register on every servo every tick, and robotd/src/control.rs
-// schedules it: standing, kicks and the sit/rise cycle run at 0.8 of the running gain.
 export const MICRODUCK_NOMINAL_FIRMWARE_GAIN = 200;
 
-/**
- * The identified MuJoCo stiffness for a deployed firmware gain.
- * Gain 0 is a true torque-off: the actuator produces no force at all.
- */
+// Equivalent interpolation through the source XML's two annotated fallback points
+// (200 -> 0.55, 125 -> 0.35). Do not use this as the BAM actuator law.
 export function microDuckKpForFirmwareGain(gain) {
   const value = Number(gain);
   if (!Number.isFinite(value) || value < 0) throw new TypeError('Firmware gain must be a finite, non-negative number');
   return MICRODUCK_SERVO_KP_NM_RAD * value / MICRODUCK_NOMINAL_FIRMWARE_GAIN;
 }
+
+// Kept as source-XML evidence. BAM replaces damping/frictionloss dynamically and sets its own
+// identified armature when the physical worker configures the torque-motor plant.
 export const MICRODUCK_JOINT_DAMPING = 0.053;
 export const MICRODUCK_JOINT_FRICTIONLOSS = 0.0048;
 export const MICRODUCK_JOINT_ARMATURE = 0.0018;
 
-// microduck_rl ball.xml.
 export const MICRODUCK_BALL_RADIUS_M = 0.035;
 export const MICRODUCK_BALL_MASS_KG = 0.015;
-// microduck_ball_kick_env_cfg.py BALL_OFFSET, in the robot yaw frame.
 export const MICRODUCK_BALL_OFFSET_M = Object.freeze([0.09, -0.042]);
-
 export const MICRODUCK_NOMINAL_FLOOR_FRICTION = 1.0;
 export const MICRODUCK_LOW_TRACTION_FRICTION = 0.02;
 
 const RUNTIME_URL = `https://github.com/${MICRODUCK_RUNTIME_SOURCE.repository}/blob/${MICRODUCK_RUNTIME_SOURCE.revision}/kinematics/assets/alpha/robot_walk.xml`;
 const RL_URL = `https://github.com/${MICRODUCK_RL_SOURCE.repository}/blob/${MICRODUCK_RL_SOURCE.revision}/src/mjlab_microduck/robot/microduck`;
+const BAM_URL = `https://github.com/Rhoban/bam/tree/${MICRODUCK_BAM_REVISION}`;
 
-// Exact joint ranges, read from the pinned Apache-2.0 source model and asserted against the
-// compiled model by the worker.
 const JOINT_RANGES = Object.freeze({
   left_hip_yaw: [-0.4363323129985824, 0.5235987755982988],
   left_hip_roll: [-0.3839724354387516, 0.38397243543875337],
@@ -89,13 +80,19 @@ const joints = () => MICRODUCK_POLICY_JOINT_ORDER.map((id) => ({
   evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED,
 }));
 
+const bamForceCeiling = microDuckBamForceCeilingNm();
 const actuators = () => MICRODUCK_POLICY_JOINT_ORDER.map((id) => ({
   id: `act_${id}`,
   jointId: id,
   controllerId: MICRODUCK_JOINT_CONTROLLER,
   command: 'position-rad',
   controlRangeRad: [-MICRODUCK_SERVO_CTRL_RAD, MICRODUCK_SERVO_CTRL_RAD],
-  forceRangeNm: [-MICRODUCK_SERVO_FORCE_NM, MICRODUCK_SERVO_FORCE_NM],
+  // The committed XML compiles with this fallback range and is checked before conversion.
+  sourceForceRangeNm: [-MICRODUCK_SERVO_FORCE_NM, MICRODUCK_SERVO_FORCE_NM],
+  // BAM's training builder converts the actuator to a motor and uses max(vin_range)*Kt/R as
+  // the safe MuJoCo ceiling. The actual torque remains voltage/back-EMF limited below it.
+  forceRangeNm: [-bamForceCeiling, bamForceCeiling],
+  actuatorModel: 'BAM XL330 M6 voltage-domain torque motor',
   evidence: PARAMETER_EVIDENCE.SOURCE_DERIVED,
 }));
 
@@ -117,31 +114,25 @@ const BASE_EVIDENCE = Object.freeze({
   namedSitesAndFrames: PARAMETER_EVIDENCE.SOURCE_DERIVED,
   homePose: PARAMETER_EVIDENCE.SOURCE_DERIVED,
   actuatorModel: PARAMETER_EVIDENCE.SOURCE_DERIVED,
-  jointDampingFrictionArmature: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+  bamM6Parameters: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+  trainingVoltageDelayAndFrictionDistributions: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+  deployedGainSchedule: PARAMETER_EVIDENCE.SOURCE_DERIVED,
+  deployedImuPreprocessing: PARAMETER_EVIDENCE.SOURCE_DERIVED,
   physicsTimestepAndCadence: PARAMETER_EVIDENCE.SOURCE_DERIVED,
   collisionSetIdentityAndPlacement: PARAMETER_EVIDENCE.SOURCE_DERIVED,
   contactParameters: PARAMETER_EVIDENCE.SOURCE_DERIVED,
   colliderPrimitiveShape: PARAMETER_EVIDENCE.ESTIMATED,
-  actuatorVoltageAndDelayModel: PARAMETER_EVIDENCE.CALIBRATION_REQUIRED,
+  deploymentElectricalCondition: PARAMETER_EVIDENCE.CALIBRATION_REQUIRED,
   hardwareAlignment: PARAMETER_EVIDENCE.CALIBRATION_REQUIRED,
 });
 
 const BASE_LIMITATIONS = Object.freeze([
-  'The articulated hierarchy, body transforms, joint axes, joint ranges, link inertials and named sites are read verbatim from the Apache-2.0 '
-  + `${MICRODUCK_RUNTIME_SOURCE.repository}@${MICRODUCK_RUNTIME_SOURCE.revision.slice(0, 7)} kinematics/assets/alpha/robot_walk.xml that this repository already serves. `
-  + `The collision set, the servo model and the physics cadence come from ${MICRODUCK_RL_SOURCE.repository}@${MICRODUCK_RL_SOURCE.revision.slice(0, 7)}, whose robot model is structurally identical to the deployed one.`,
-  'The upstream colliders are CC BY-SA-NC mesh assets that this repository does not redistribute. Every collider here is a repository-authored box '
-  + 'fitted to the corresponding source mesh envelope. The two soles are fitted to the measured sole contact face (45.6 x 34.0 mm), not to the mesh '
-  + 'bounding box (54.0 x 41.2 mm), so the support polygon is not silently enlarged.',
-  'The servo is the identified microduck_rl "chosen_actuator" position model - kp 0.55 N m/rad at firmware gain 200, force range +/-0.96 N m, with '
-  + 'joint damping 0.053, friction loss 0.0048 and armature 0.0018. The BAM M6 voltage-domain actuator the policies were trained against, including '
-  + 'its 3-6 tick action delay and its voltage/friction randomisation, is NOT reproduced. That is the largest declared actuator-fidelity gap here.',
-  'Contact stiffness, friction and the floor are the declared parameters of the upstream reference scene on a flat indoor plane. Carpet, slopes, '
-  + 'thresholds, rough terrain, foot wear, battery droop and servo thermal behaviour are outside the modelled scope.',
-  'The trunk is a free MuJoCo body. Nothing in this package writes root pose, root velocity, joint state or object state outside explicit, logged '
-  + 'setup and reset. There is no weld, equality constraint, attachment, snap, teleport, boundary clamp or task-success overwrite anywhere in it.',
-  'No hardware comparison exists. Walking speed, traction, stability margin, kick distance, recovery probability and actuator dynamics are all '
-  + 'unvalidated against an assembled MicroDuck.',
+  'The articulated hierarchy, body transforms, joint axes, joint ranges, link inertials and named sites are read from the pinned Apache-2.0 MicroDuck runtime model. The contact set and training-plant parameters are reconciled against the pinned microduck_rl environment.',
+  `Actuation now uses BAM ${MICRODUCK_BAM_VERSION} XL330/M6 (${BAM_URL}) rather than the XML position-servo approximation. The worker applies the BAM voltage law, back-EMF, load-dependent directional/Stribeck friction, identified armature and load-dependent voltage sag. The pinned training profile is ${JSON.stringify(MICRODUCK_TRAINING_PLANT_PROFILE)}.`,
+  `The interactive physical workspace uses ${MICRODUCK_DEPLOYMENT_PLANT_PROFILE.id}: the deployed 200/160 firmware-gain schedule and deployed median-of-three IMU preprocessing, with BAM at the source CPU regression's nominal 7.4 V / 0.1 V-per-Nm sag condition. Those electrical values are a repeatable source-backed rehearsal condition, not a measurement of a particular assembled robot.`,
+  'The upstream collision meshes are CC BY-SA-NC assets and are not redistributed in this MIT repository. Repository-authored fitted collision boxes are therefore retained. The soles use the measured 45.6 x 34.0 mm contact face rather than an enlarged mesh bounding box. Exact source collision-mesh parity remains license-constrained.',
+  'The trunk is a free MuJoCo body. Nothing writes root pose, root velocity, joint state or object state outside explicit logged setup/reset. There is no weld, snap, teleport, hidden grasp attachment, kick impulse, boundary clamp or success overwrite.',
+  'No assembled-MicroDuck hardware comparison is available in this repository. Absolute walking speed, recovery probability, battery/internal-resistance values, real bus latency, thermal behavior and individual actuator calibration remain hardware-validation items and are not claimed as measured truth.',
 ]);
 
 function basePackage({ id, modelId, asset, sha256, variant, floorFriction, limitations = [] }) {
@@ -157,8 +148,10 @@ function basePackage({ id, modelId, asset, sha256, variant, floorFriction, limit
       variant,
       physicalEnvironmentUrl: RL_URL,
       physicalEnvironmentRevision: MICRODUCK_RL_SOURCE.revision,
+      bamUrl: BAM_URL,
+      bamRevision: MICRODUCK_BAM_REVISION,
     },
-    license: 'Apache-2.0 for the MicroDuck-derived hierarchy and reconciled physical parameters; the repository-authored colliders and floor are MIT. No CC BY-SA-NC mesh asset is redistributed.',
+    license: 'Apache-2.0 source-derived MicroDuck/BAM parameters; repository-authored collision proxies and floor are MIT. No CC BY-SA-NC collision mesh is redistributed.',
     physics: { timestepSeconds: MICRODUCK_PHYSICS_TIMESTEP_SECONDS, integrator: 'Euler', iterations: 100, lsIterations: 50 },
     controllers: [MICRODUCK_JOINT_CONTROLLER],
     joints: joints(),
@@ -168,6 +161,11 @@ function basePackage({ id, modelId, asset, sha256, variant, floorFriction, limit
     sceneConstraints: { fixtures: [MICRODUCK_FLOOR_ID], objects: [] },
     controlDecimation: MICRODUCK_CONTROL_DECIMATION,
     floorFriction,
+    plant: {
+      actuator: { family: 'BAM', version: MICRODUCK_BAM_VERSION, revision: MICRODUCK_BAM_REVISION, motor: MICRODUCK_BAM_M6.motor, model: MICRODUCK_BAM_M6.model },
+      interactiveProfile: MICRODUCK_DEPLOYMENT_PLANT_PROFILE.id,
+      trainingReferenceProfile: MICRODUCK_TRAINING_PLANT_PROFILE.id,
+    },
     evidence: BASE_EVIDENCE,
     limitations: [...BASE_LIMITATIONS, ...limitations],
   };
@@ -178,7 +176,7 @@ export const MICRODUCK_WALK_PACKAGE = registerModelPackage(basePackage({
   modelId: 'robobuddy-microduck-walk-v1',
   asset: 'models/microduck/walk.xml',
   sha256: '13149fa946290b9f4a0ac7029e511fed8cb2e59a6e507098a758cc7e190b207c',
-  variant: 'MicroDuck alpha free-base biped with the reconciled ground-contact collision set on a flat indoor floor',
+  variant: 'MicroDuck alpha free-base biped with reconciled ground-contact collision set on a flat indoor floor',
   floorFriction: MICRODUCK_NOMINAL_FLOOR_FRICTION,
 }));
 
@@ -208,9 +206,8 @@ export const MICRODUCK_KICK_PACKAGE = registerModelPackage((() => {
     evidence: { ...base.evidence, ballMassRadiusInertia: PARAMETER_EVIDENCE.SOURCE_DERIVED, ballFriction: PARAMETER_EVIDENCE.SOURCE_DERIVED, ballPlacement: PARAMETER_EVIDENCE.SOURCE_DERIVED },
     limitations: [
       ...base.limitations,
-      'The ball is the source prop from microduck_rl ball.xml: 70 mm diameter, 15 g, thin-hollow-sphere inertia 1.225e-5 kg m^2, friction (0.5, 0.005, 0.0001). '
-      + 'It is placed at the source kick-task offset (0.09, -0.042) m in the robot yaw frame. Training additionally randomised that placement by +/-15 mm; this package does not.',
-      'Ball motion comes only from MuJoCo contact. There is no kick impulse, no ball velocity overwrite, no rolling-resistance rule and no synthetic contact inference anywhere in this package.',
+      'The ball is the source prop from microduck_rl ball.xml: 70 mm diameter, 15 g, thin-hollow-sphere inertia 1.225e-5 kg m^2, friction (0.5, 0.005, 0.0001). It is placed at the source kick-task offset (0.09, -0.042) m. Training additionally randomised placement by +/-15 mm; the interactive deployment-reference scene keeps placement deterministic.',
+      'Ball motion comes only from MuJoCo contact. There is no kick impulse, ball-velocity overwrite, rolling-resistance rule or synthetic contact inference.',
     ],
   };
 })());
