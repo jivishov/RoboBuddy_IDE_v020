@@ -1,0 +1,68 @@
+name: Repair MicroDuck public interfaces
+on:
+  push:
+    branches: [fix/microduck-full-plant-fidelity]
+    paths:
+      - scripts/apply_microduck_public_interfaces.py
+      - .github/workflows/repair-microduck-public-interfaces.yml
+permissions:
+  contents: write
+concurrency:
+  group: microduck-public-interface-repair
+  cancel-in-progress: false
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact-context public-interface fixes
+        run: python scripts/apply_microduck_public_interfaces.py
+      - name: Validate interfaces, schema, starters and existing core contracts
+        run: |
+          git diff --check
+          node --check src/app-v2.js
+          node --check src/task-workspace.js
+          node --check src/runtime/microduck-physical-bridge.js
+          node --check src/webmcp/microduck-physical-control.js
+          node tests/physics/microduck-interfaces-core.mjs /tmp/microduck-interfaces.json
+          python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
+          python tests/validate_microduck_interfaces.py /tmp/microduck-interfaces.json
+          node tests/physics/microduck-phase5c-core.mjs
+          node tests/physics/microduck-lifecycle-core.mjs
+          node tests/webmcp-core.mjs
+          node tests/validate.mjs
+          python tests/validate_starters.py
+      - name: Run actual public WebMCP and Python browser journeys
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test tests/microduck-interfaces-browser.spec.mjs --reporter=line
+      - name: Commit tested source; retire one-time repair files
+        run: |
+          test "$(git ls-remote origin refs/heads/fix/microduck-full-plant-fidelity | cut -f1)" = "${{ github.sha }}"
+          git add src/app-v2.js src/task-workspace.js src/task-catalog.js src/physics/microduck-capabilities.js src/physics/microduck-physical-simulator.js src/runtime/microduck-physical-bridge.js src/webmcp/microduck-physical-control.js playwright.config.mjs .github/workflows/microduck-phase5c-validate.yml
+          git rm scripts/apply_microduck_public_interfaces.py .github/workflows/repair-microduck-public-interfaces.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(microduck): wire physical IDE commands and runnable starters'
+          git push origin HEAD:refs/heads/fix/microduck-full-plant-fidelity
+      - name: Retain interface regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: microduck-public-interfaces-${{ github.sha }}
+          path: |
+            /tmp/microduck-interfaces.json
+            test-results
+          if-no-files-found: ignore
+          retention-days: 14
