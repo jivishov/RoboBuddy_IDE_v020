@@ -52,6 +52,7 @@ function expectRegisteredFrames(value) {
     expect(row.positionErrorM, `${row.id}: ${JSON.stringify(value)}`).toBeLessThan(1e-6);
     expect(row.angleErrorRad, row.id).toBeLessThan(1e-5);
   }
+  expect(value.bodyErrors).toHaveLength(15);
   expect(value.officialParts).toBe(58);
   expect(value.configuredRollerMeshes).toBe(0);
   expect(value.audit.rendererFloorSnapping).toBe(false);
@@ -126,7 +127,7 @@ test('physical MicroDuck transforms preserve tilted and half-turn poses without 
         angleErrorRad: trunk.getWorldQuaternion(new THREE.Quaternion()).angleTo(expectedQ) });
     }
     const after = JSON.stringify(sim.lastObservation);
-    rig.applyPhysicalRootPose(sim.lastObservation.bodies.trunk_base.positionM, sim.lastObservation.bodies.trunk_base.quaternionWxyz);
+    rig.applyPhysicalBodyPoses(sim.lastObservation.bodies);
     return { records, physicalStateUnchanged: original === after };
   });
   expect(checks.physicalStateUnchanged).toBe(true);
@@ -139,4 +140,29 @@ test('physical MicroDuck transforms preserve tilted and half-turn poses without 
   console.log('MOVING', JSON.stringify(moving));
   expectRegisteredFrames(moving);
   await testInfo.attach('half-turn-registration', { body: JSON.stringify(checks, null, 2), contentType: 'application/json' });
+});
+
+test('physical MicroDuck rejects incomplete pose snapshots without partially moving its visual', async ({ page }) => {
+  await openMicroDuck(page);
+  const result = await page.evaluate(() => {
+    const sim = window.__robobuddyCi.app.sim.backend;
+    const { rig } = sim;
+    const transforms = () => rig.bodyList.map((body) => [body.position.toArray(), body.quaternion.toArray()]);
+    const original = JSON.stringify(transforms());
+    const physicalState = JSON.stringify(sim.lastObservation);
+    const records = [];
+    for (const kind of ['missing-body', 'non-finite', 'zero-quaternion']) {
+      const snapshot = structuredClone(sim.lastObservation.bodies);
+      snapshot.trunk_base.positionM[2] += 1;
+      if (kind === 'missing-body') delete snapshot.ankle_right;
+      if (kind === 'non-finite') snapshot.ankle_right.positionM[0] = NaN;
+      if (kind === 'zero-quaternion') snapshot.ankle_right.quaternionWxyz = [0, 0, 0, 0];
+      let rejected = false;
+      try { rig.applyPhysicalBodyPoses(snapshot); } catch { rejected = true; }
+      records.push({ kind, rejected, unchanged: original === JSON.stringify(transforms()) });
+    }
+    return { records, physicalUnchanged: physicalState === JSON.stringify(sim.lastObservation) };
+  });
+  expect(result.physicalUnchanged).toBe(true);
+  for (const row of result.records) expect(row).toMatchObject({ rejected: true, unchanged: true });
 });

@@ -544,7 +544,10 @@ export class MicroDuckPhysicalSimulator {
     return Object.freeze({
       physicalAuthority: 'MuJoCo PhysicsSession only',
       rootTransformSource: 'observed MuJoCo trunk_base free-body pose',
-      jointPresentationSource: 'observed MuJoCo joint positions',
+      bakedWorldRootApplied: false,
+      configuredRollers: false,
+      jointPresentationSource: 'same authoritative MuJoCo body-pose snapshot as trunk and contacts; no joint FK reconstruction',
+      bodyPoseSnapshotSource: 'MuJoCo xpos/xquat solved kinematics',
       ballTransformSource: 'observed MuJoCo microduck_ball free-body pose',
       // The legacy demonstrator re-seats its visual on the floor every frame. The physical
       // workspace must not: trunk height is a physical result, so a crouch, a fall and the
@@ -587,9 +590,10 @@ export class MicroDuckPhysicalSimulator {
     this.robotRoot.name = 'microduck-physical-presentation';
     this.threeScene.add(this.robotRoot);
     if (!this.rig) {
-      this.rig = await rigModule.MicroDuckRigAdapter.load();
-      this.robotRoot.add(this.rig.root);
+      this.rig = await rigModule.MicroDuckRigAdapter.load({ includeConfiguredRollers: false });
     }
+    this.robotRoot.add(this.rig.root);
+    this.rig.setVariant?.('walking');
     this.resize();
   }
 
@@ -625,13 +629,7 @@ export class MicroDuckPhysicalSimulator {
     if (!observation) return;
     const trunk = observation.bodies?.[MICRODUCK_TRUNK_BODY];
     if (this.rig && trunk?.positionM && trunk?.quaternionWxyz) {
-      const state = {};
-      for (const id of MICRODUCK_POLICY_JOINT_ORDER) {
-        const value = Number(observation.joints?.[id]?.positionRad);
-        if (Number.isFinite(value)) state[id] = value;
-      }
-      this.rig.applyState(state);
-      this.rig.applyPhysicalRootPose(trunk.positionM, trunk.quaternionWxyz);
+      this.rig.applyPhysicalBodyPoses(observation.bodies);
     }
     const ball = observation.bodies?.[MICRODUCK_BALL_BODY];
     if (ball?.positionM) {
