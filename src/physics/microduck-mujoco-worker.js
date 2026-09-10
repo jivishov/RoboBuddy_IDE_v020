@@ -340,7 +340,7 @@ function observation() {
       model: 'xl330/m6', bamVersion: MICRODUCK_BAM_VERSION, bamRevision: MICRODUCK_BAM_REVISION,
       profile: MICRODUCK_DEPLOYMENT_PLANT_PROFILE.id,
       effectiveVinV, vinDropGainVPerNm: MICRODUCK_DEPLOYMENT_PLANT_PROFILE.vinDropGainVPerNm,
-      smallSignalKpNmRad: microDuckBamSmallSignalKpNmRad(appliedFirmwareGain, effectiveVinV),
+      smallSignalKpNmRad: microDuckBamSmallSignalKpNmRad(actuationEnabled ? appliedFirmwareGain : 0, effectiveVinV),
       forceCeilingNm: microDuckBamForceCeilingNm(), targetDelayPhysicsSteps: [0, 0],
     },
   };
@@ -351,7 +351,7 @@ function observation() {
     joints, bodies, imu,
     contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts,
     footContacts: { floor: contactState.footFloor, ball: contactState.footBall },
-    actuationEnabled, firmwareGain: appliedFirmwareGain,
+    actuationEnabled, firmwareGain: actuationEnabled ? appliedFirmwareGain : 0,
     // Compatibility field retained for older consumers. Physics no longer uses this PD kp;
     // it is the source XML's equivalent identified stiffness at the current firmware gain.
     appliedServoKp: actuationEnabled ? microDuckKpForFirmwareGain(appliedFirmwareGain) : 0,

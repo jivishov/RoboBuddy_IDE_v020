@@ -225,7 +225,8 @@ export class MicroDuckPhysicalSimulator {
    */
   requestSkill(skill) {
     this.#assertLoaded();
-    const capability = microduckCapability(skill) || MICRODUCK_CAPABILITY_AUDIT.find((item) => item.physicalPolicy === skill);
+    const capabilityId = skill === 'sit' || skill === 'stand_up' ? 'sit_stand' : skill;
+    const capability = microduckCapability(capabilityId) || MICRODUCK_CAPABILITY_AUDIT.find((item) => item.physicalPolicy === skill);
     if (capability && !capability.physicalPolicy) {
       return { accepted: false, status: 'unsupported', capability: capability.id, reason: capability.evidence };
     }
@@ -400,9 +401,10 @@ export class MicroDuckPhysicalSimulator {
           footContacts: observation.footContacts ? structuredClone(observation.footContacts) : null,
           ballPositionM: observation.bodies?.[MICRODUCK_BALL_BODY]?.positionM ?? null,
           actuationEnabled: observation.actuationEnabled,
-          // The servo gain the authority actually applied and the force it produced. The
-          // controller view above reports the gain it ASKED for; this is what physics used.
-          // Both are published because a torque-off is only believable if the force reads zero.
+          // The effective BAM firmware gain and actual actuator force come from the physical
+          // authority. The controller view above reports the scheduled gain it ASKED for.
+          // `appliedServoKp` is retained only as the source-XML equivalent compatibility
+          // diagnostic; BAM torque physics does not use that fallback PD stiffness.
           firmwareGain: observation.firmwareGain ?? null,
           appliedServoKp: observation.appliedServoKp ?? null,
           actuatorForceTotalNm: observation.actuatorForceTotalNm ?? null,

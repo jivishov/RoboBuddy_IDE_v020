@@ -117,11 +117,10 @@ test('MicroDuck physical workspace walks through contact and loses propulsion wi
   expect(noActuation.report.finalTrunkHeightM).toBeLessThan(0.07);
   expect(Math.abs(noActuation.report.commandedAxisDistanceM)).toBeLessThan(nominal * 0.4);
 
-  // A torque-off must produce NO actuator force. These are position actuators, so zeroing
-  // ctrl instead would command every joint to 0 rad at full strength - actuation toward a
-  // straight-legged pose, not its absence. Zero here is what makes this a negative control
-  // rather than a differently-posed positive one, and it is the only assertion that proves
-  // the zeroed servo gain really took effect inside the WASM model.
+  // A torque-off must produce NO actuator force. The controller still emits position
+  // targets, but the BAM motor law is disabled and the MuJoCo motor torque is zero. Reporting
+  // zero effective firmware gain and zero force makes this a true negative control rather
+  // than a differently-commanded positive run.
   expect(noActuation.state.actual.firmwareGain).toBe(0);
   expect(noActuation.state.actual.appliedServoKp).toBe(0);
   expect(noActuation.state.actual.actuatorForceTotalNm).toBe(0);
@@ -168,7 +167,9 @@ test('MicroDuck physical traction control, unsupported roller rejection, kick co
   expect(capabilities.roller.accepted).toBe(false);
   expect(capabilities.roller.status).toBe('unsupported');
   expect(capabilities.rollerCrouch.accepted).toBe(false);
-  expect(capabilities.kickRight.accepted).toBe(true);
+  expect(capabilities.kickRight.accepted).toBe(false);
+  expect(capabilities.kickRight.status).toBe('wrong-plant');
+  expect(capabilities.kickRight.requiredPackageKeys).toContain('kick');
   expect(capabilities.table.find((item) => item.id === 'roller').physical).toBe(false);
   expect(capabilities.table.find((item) => item.id === 'walk').physical).toBe(true);
 
@@ -200,13 +201,16 @@ test('MicroDuck physical traction control, unsupported roller rejection, kick co
   // --- recovery is physical, and can fail honestly ------------------------------
   const recovery = await page.evaluate(async () => {
     const sim = window.__robobuddyCi.app.sim.backend;
+    await sim.load('groundContact');
     await sim.reset();
     await sim.applyPerturbation('face_down');
     await sim.settle(1.5);
     const settled = sim.getState().actual;
-    sim.requestSkill('stand_up');
+    // Zero velocity on the broad ground-contact plant selects the deployed stand policy,
+    // which is the pinned fall-recovery reference. Do not substitute the sit/stand rise alias.
     for (let i = 0; i < 4; i += 1) await sim.advanceSeconds(2);
     const recovered = sim.report();
+    const recoveryPolicy = sim.getState().controller?.policyId ?? null;
 
     await sim.reset();
     await sim.applyPerturbation('face_down');
@@ -214,13 +218,14 @@ test('MicroDuck physical traction control, unsupported roller rejection, kick co
     await sim.setActuationEnabled(false);
     for (let i = 0; i < 4; i += 1) await sim.advanceSeconds(2);
     const failed = sim.report();
-    return { settled, recovered, failed };
+    return { settled, recovered, recoveryPolicy, failed };
   });
   // The perturbation is declared setup, visible in the observation, and put the robot down.
   expect(recovery.settled.setupLog.some((item) => item.event === 'setup_trunk_orientation')).toBe(true);
   expect(recovery.settled.trunkPositionM[2]).toBeLessThan(0.07);
   expect(recovery.settled.trunkTiltDeg).toBeGreaterThan(60);
-  // Physical recovery, through contact.
+  // Physical recovery, through contact, using the pinned stand-policy route.
+  expect(recovery.recoveryPolicy).toBe('stand');
   expect(recovery.recovered.upright).toBe(true);
   expect(recovery.recovered.finalTrunkHeightM).toBeGreaterThan(0.10);
   expect(recovery.recovered.everFallen).toBe(true);
