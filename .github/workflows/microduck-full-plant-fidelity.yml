@@ -15,7 +15,11 @@ on:
       - 'native/microduck_bam_physical_reference.py'
       - 'tests/validate_microduck_assets.mjs'
       - 'tests/validate_microduck_bam_evidence.py'
+      - 'tests/validate.mjs'
       - 'tests/physics/microduck-bam-plant-core.mjs'
+      - 'LICENSE'
+      - 'LICENSES/MIT.txt'
+      - 'THIRD_PARTY_NOTICES.md'
       - '.github/workflows/microduck-full-plant-fidelity.yml'
   pull_request:
     paths:
@@ -29,7 +33,11 @@ on:
       - 'native/microduck_bam_physical_reference.py'
       - 'tests/validate_microduck_assets.mjs'
       - 'tests/validate_microduck_bam_evidence.py'
+      - 'tests/validate.mjs'
       - 'tests/physics/microduck-bam-plant-core.mjs'
+      - 'LICENSE'
+      - 'LICENSES/MIT.txt'
+      - 'THIRD_PARTY_NOTICES.md'
       - '.github/workflows/microduck-full-plant-fidelity.yml'
 
 permissions:
@@ -48,7 +56,7 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Syntax, deterministic-model and asset-integrity contracts
+      - name: Syntax, deterministic-model, asset-integrity and license-scope contracts
         run: |
           node --check src/physics/microduck-bam-plant.js
           node --check src/physics/microduck-model-package.js
@@ -57,6 +65,7 @@ jobs:
           node tests/physics/microduck-bam-plant-core.mjs
           python scripts/generate_microduck_models.py --check
           node tests/validate_microduck_assets.mjs
+          node tests/validate.mjs
 
       - name: Verify pinned source XML and STL byte identity
         run: |
