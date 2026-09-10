@@ -11,6 +11,7 @@ import { MicroDuckControlDeck } from './microduck/control-deck.js';
 import { MicroDuckPythonBridge } from './microduck/python-bridge.js';
 import { PhysicalPythonRuntime } from './runtime/physical-python-runtime.js';
 import { LivePythonBridge } from './runtime/live-python-bridge.js';
+import { MicroDuckPhysicalBridge } from './runtime/microduck-physical-bridge.js';
 import { applyPhysicsPreviewStatus } from './physics/ui-status.js';
 import { installPhysicalAgentFacade } from './webmcp/physical-agent-facade.js';
 
@@ -52,7 +53,9 @@ class App {
       bridgeFactory: () => {
         const session = this.sim.getPhysicalSession();
         if (!session) throw new Error('The active workspace has no authoritative physical session.');
-        return new LivePythonBridge(session);
+        return this.sim.profileId === 'microduck'
+          ? new MicroDuckPhysicalBridge(this.sim.backend)
+          : new LivePythonBridge(session);
       },
       onBoundary: (source, method) => this.showPhysicalBoundary(source, method),
       onOutput: (output) => { this.console = output; this.renderPanels(); },

@@ -198,7 +198,51 @@ function lekiwiPhysicalWorkspace(scenario) {
   return { 'main.py': mainPy, 'trajectories.py': trajectoriesPy, 'robot_config.py': configPy, 'workcell.py': workcellPy };
 }
 
+function microduckPhysicalWorkspace(scenario) {
+  const commands = scenario.id === 'microduck-physical-kick'
+    ? [{ label: 'Request a right-foot kick; observe contact and ball motion', action: { skill: 'kick_right' }, duration_seconds: 3 }]
+    : scenario.id === 'microduck-physical-groundcontact'
+    ? [{ label: 'Stand through the deployed policy', action: { vx: 0 }, duration_seconds: 1 },
+       { label: 'Request sitting', action: { skill: 'sit' }, duration_seconds: 1 },
+       { label: 'Request rising (not a fall-recovery reset)', action: { skill: 'stand_up' }, duration_seconds: 1 }]
+    : [{ label: 'Request forward walking through foot-floor contact', action: { vx: 0.35 }, duration_seconds: 2 }];
+  const stages = commands.map((stage, index) => ({ index: index + 1, ...stage }));
+  const main = [
+    '# MicroDuck physical MuJoCo workspace. No hardware transport is opened.',
+    '# Commands are requests to the deployed policy; only actual is measured simulation state.',
+    '# A kick can miss. A posture request can fail. Neither is manufactured into success.',
+    'from robobuddy.sim import connect',
+    'from robot_config import ROBOT_ID, CONTROL_INTERVAL_S',
+    'from trajectories import STAGES',
+    '',
+    'robot = await connect(ROBOT_ID)',
+    'try:',
+    '    for stage in STAGES:',
+    '        accepted = await robot.send_action(stage["action"])',
+    '        remaining_ticks = int(round(stage["duration_seconds"] / CONTROL_INTERVAL_S))',
+    '        while remaining_ticks > 0:',
+    '            ticks = min(10, remaining_ticks)',
+    '            observation = await robot.advance(ticks * CONTROL_INTERVAL_S)',
+    '            remaining_ticks -= ticks',
+    '        actual = (await robot.get_observation())["actual"]',
+    '        print(stage["label"], "actual trunk (m)", actual["trunkPositionM"], "tilt (deg)", actual["trunkTiltDeg"])',
+    '    final = await robot.get_observation()',
+    '    print("MicroDuck physical observation", final["actual"])',
+    '    print("Measured task report", final["taskEvaluation"])',
+    'finally:',
+    '    await robot.disconnect()',
+    '',
+  ].join('\n');
+  return {
+    'main.py': main,
+    'trajectories.py': `# Explicit policy commands, not direct joint or free-body state writes.\n# Durations use simulation time. Edit these commands for the selected collision plant.\nSTAGES = ${py(stages)}\n`,
+    'robot_config.py': `# Browser simulation only. No serial, CAN or network robot connection.\nROBOT_ID = ${JSON.stringify(scenario.robotId)}\nPHYSICAL_API_VERSION = "robobuddy.sim.v1"\nCONTROL_INTERVAL_S = ${scenario.controller.controlIntervalSeconds}\n`,
+    'workcell.py': `# Read-only physical workspace metadata, not installed-hardware calibration.\nWORKCELL = ${py({ scenario_id: scenario.id, physical_scene_id: scenario.physicalSceneId, model_package: scenario.modelPackage, capabilities: scenario.capabilities, limitations: scenario.limitations })}\n`,
+  };
+}
+
 function physicalWorkspace(profileId, scenario) {
+  if (profileId === 'microduck') return microduckPhysicalWorkspace(scenario);
   if (profileId === 'lekiwi') return lekiwiPhysicalWorkspace(scenario);
   const timestep = profileId === 'openarm' ? 0.001 : 0.005;
   const stages = scenario.portablePython.referenceActions.map((record, index) => ({

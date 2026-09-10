@@ -190,7 +190,7 @@ export const UNITREE_G1_RIG_TASKS = Object.freeze([Object.freeze({ profileId: 'u
 function microduckPhysicalScenario({ id, title, brief, modelPackage, physicalScene, capabilityIds, taskEvaluation }) {
   return Object.freeze({
     schema: 'robobuddy.physical-workspace.v1', schemaVersion: 1, simulationMode: 'physical_mujoco',
-    workspaceRevision: physicalScene.revision, id, title, brief, robotId: modelPackage.robotId,
+    workspaceRevision: `${physicalScene.revision}-public-interfaces-v2`, id, title, brief, robotId: modelPackage.robotId,
     physicalSceneId: physicalScene.id, physicalSceneRevision: physicalScene.revision,
     modelPackage: modelPackage.id, modelId: modelPackage.modelId,
     physicalApi: Object.freeze({ version: 'robobuddy.sim.v1', angleUnit: 'rad', timeUnit: 's', lengthUnit: 'm', velocityUnit: 'm/s', yawRateUnit: 'rad/s' }),

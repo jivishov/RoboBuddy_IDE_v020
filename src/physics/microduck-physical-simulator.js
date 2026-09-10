@@ -17,7 +17,7 @@ import {
   MICRODUCK_CAPABILITY_AUDIT, MICRODUCK_PHYSICAL_CAPABILITY, MICRODUCK_PHYSICAL_PACKAGES,
   MICRODUCK_PHYSICAL_POLICIES, assertMicroDuckCompatibility, isPhysicallySupported,
   microduckCapability, microduckCompatibilityIdentity, microduckPackageSupportsCapability,
-  microduckRequiredPackageKeys,
+  microduckRequiredPackageKeys, MICRODUCK_PHYSICAL_SKILL_IDS,
 } from './microduck-capabilities.js';
 import { MICRODUCK_GAIT_ONSET_MS, MICRODUCK_SCENES, boundedMicroDuckCommand } from './microduck-scene.js';
 import { MicroDuckPhysicalEvaluator, tiltDegrees } from './microduck-task-evaluator.js';
@@ -206,13 +206,19 @@ export class MicroDuckPhysicalSimulator {
   }
 
   // ------------------------------------------------------------ command surface
-  /** Latch a bounded command. Accepting it is not achieving it. */
-  setCommand(requested = {}) {
+  /** Validate without mutating command, controller or evaluator state. */
+  validateCommand(requested = {}) {
     this.#assertLoaded();
     const { command, limitedBy } = boundedMicroDuckCommand(requested);
     if (!['walk', 'lowTraction'].includes(this.packageKey) && command.twist.some((value) => Math.abs(value) > 1e-12)) {
       throw new Error(`MicroDuck collision-plant mismatch: non-zero velocity commands require the walk plant; active package is ${this.packageKey}`);
     }
+    return { command, limitedBy };
+  }
+
+  /** Latch a bounded command. Accepting it is not achieving it. */
+  setCommand(requested = {}) {
+    const { command, limitedBy } = this.validateCommand(requested);
     this.requested = command;
     this.requestedLimitedBy = limitedBy;
     this.evaluator = new MicroDuckPhysicalEvaluator({ commandedTwist: command.twist });
@@ -223,10 +229,9 @@ export class MicroDuckPhysicalSimulator {
    * Ask for a skill. An unsupported capability is refused here and routed nowhere: the
    * physical workspace has no legacy dynamics to fall back to.
    */
-  requestSkill(skill) {
+  validateSkillRequest(skill) {
     this.#assertLoaded();
-    const capabilityId = skill === 'sit' || skill === 'stand_up' ? 'sit_stand' : skill;
-    const capability = microduckCapability(capabilityId) || MICRODUCK_CAPABILITY_AUDIT.find((item) => item.physicalPolicy === skill);
+    const capability = microduckCapability(skill);
     if (capability && !capability.physicalPolicy) {
       return { accepted: false, status: 'unsupported', capability: capability.id, reason: capability.evidence };
     }
@@ -237,9 +242,17 @@ export class MicroDuckPhysicalSimulator {
         reason: `${capability.id} requires MicroDuck collision plant ${requiredPackageKeys.join(' or ')}; active package is ${this.packageKey}`,
       };
     }
-    const started = this.controller.requestSkill(skill);
-    if (!started) return { accepted: false, status: 'unsupported', capability: skill, reason: `${skill} is not a physical skill of this workspace` };
-    return { accepted: true, status: 'running', capability: capability?.id ?? skill };
+    if (!MICRODUCK_PHYSICAL_SKILL_IDS.includes(skill) || !this.controller.hasPolicy(capability?.physicalPolicy)) {
+      return { accepted: false, status: 'unsupported', capability: skill, reason: `${skill} is not a physical skill command; use sit or stand_up for the sit_stand capability` };
+    }
+    return { accepted: true, status: 'available', capability: capability.id };
+  }
+
+  requestSkill(skill) {
+    const result = this.validateSkillRequest(skill);
+    if (!result.accepted) return result;
+    if (!this.controller.requestSkill(skill)) return { accepted: false, status: 'unsupported', capability: skill, reason: 'The controller refused the skill' };
+    return { ...result, status: 'running' };
   }
 
   // -------------------------------------------------------------- declared setup

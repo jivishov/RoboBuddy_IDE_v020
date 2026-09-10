@@ -83,8 +83,16 @@ export const MICRODUCK_UNSUPPORTED_CAPABILITIES = Object.freeze(
   MICRODUCK_CAPABILITY_AUDIT.filter((item) => item.status === S.UNSUPPORTED).map((item) => item.id),
 );
 
+// Explicit controller commands, separate from the capability audit above.
+export const MICRODUCK_SKILL_CAPABILITIES = Object.freeze({
+  sit: 'sit_stand', stand_up: 'sit_stand', ground_pick: 'ground_pick',
+  kick_left: 'kick_left', kick_right: 'kick_right', roulade: 'roulade',
+});
+export const MICRODUCK_PHYSICAL_SKILL_IDS = Object.freeze(Object.keys(MICRODUCK_SKILL_CAPABILITIES));
+
 export function microduckCapability(id) {
-  return MICRODUCK_CAPABILITY_AUDIT.find((item) => item.id === id) || null;
+  const capabilityId = Object.hasOwn(MICRODUCK_SKILL_CAPABILITIES, id) ? MICRODUCK_SKILL_CAPABILITIES[id] : id;
+  return MICRODUCK_CAPABILITY_AUDIT.find((item) => item.id === capabilityId) || null;
 }
 
 export function isPhysicallySupported(id) {
