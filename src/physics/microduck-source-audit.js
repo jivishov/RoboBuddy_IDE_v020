@@ -9,7 +9,7 @@ import { PARAMETER_EVIDENCE } from './model-registry.js';
 //     exact policy bytes, the 61-value observation contract, the joint order, the home pose,
 //     the command encoding, the skill priority chain, the action scaling, the filters and the
 //     50 Hz control cadence.
-//   * MICRODUCK_RL_SOURCE is the physical/RL environment authority. It supplies the collision
+//   * MICRODUCK_RL_SOURCE is the physical/RL environment authority. It supplies the
 //     task-specific collision plants, the BAM training-plant configuration, the source XML
 //     fallback actuator, the physics timestep, reset pose and ball prop - none of which exist
 //     in the deployed runtime source.
