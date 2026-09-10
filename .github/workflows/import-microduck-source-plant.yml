@@ -38,6 +38,7 @@ jobs:
           doc['model']['sha256'] = hashlib.sha256(Path('models/microduck/walk.xml').read_bytes()).hexdigest()
           fixture.write_text(json.dumps(doc, indent=2) + '\n')
           PY
+          node scripts/prepare_microduck_assets.mjs
       - name: Verify imported mesh byte identities and deterministic generation
         run: |
           python - <<'PY'
@@ -55,6 +56,7 @@ jobs:
           print('all imported STL bytes match pinned upstream source')
           PY
           python scripts/generate_microduck_models.py --check
+          node tests/validate_microduck_assets.mjs
       - name: Commit materialized plant and collision routing
         run: |
           git config user.name "github-actions[bot]"
@@ -64,5 +66,5 @@ jobs:
             echo "No generated changes"
             exit 0
           fi
-          git commit -m "fix(microduck): finalize task-specific collision routing"
+          git commit -m "fix(microduck): refresh physical plant asset integrity"
           git push origin HEAD:fix/microduck-full-plant-fidelity
