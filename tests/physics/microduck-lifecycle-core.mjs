@@ -481,7 +481,10 @@ await check('the simulator refuses unsupported capabilities and routes them nowh
     assert(result.status === 'unsupported', `${skill} did not report unsupported`);
   }
   assert(worker.counts('command') === before, 'a refused capability still reached the authority');
-  assert(sim.requestSkill('kick_right').accepted === true, 'a supported capability was refused');
+  const wrongPlant = sim.requestSkill('kick_right');
+  assert(wrongPlant.accepted === false && wrongPlant.status === 'wrong-plant', 'kick was not rejected on the walking collision plant');
+  assert(wrongPlant.requiredPackageKeys?.includes('kick'), 'wrong-plant response did not identify the required kick plant');
+  assert(worker.counts('command') === before, 'a wrong-plant capability reached the authority');
   sim.dispose();
 });
 

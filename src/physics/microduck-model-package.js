@@ -131,7 +131,7 @@ const BASE_LIMITATIONS = Object.freeze([
   'The articulated hierarchy, body transforms, joint axes, joint ranges, link inertials and named sites are read from the pinned Apache-2.0 MicroDuck runtime model. The contact set and training-plant parameters are reconciled against the pinned microduck_rl environment.',
   `Actuation now uses BAM ${MICRODUCK_BAM_VERSION} XL330/M6 (${BAM_URL}) rather than the XML position-servo approximation. The worker applies the BAM voltage law, back-EMF, load-dependent directional/Stribeck friction, identified armature and load-dependent voltage sag. The pinned training profile is ${JSON.stringify(MICRODUCK_TRAINING_PLANT_PROFILE)}.`,
   `The interactive physical workspace uses ${MICRODUCK_DEPLOYMENT_PLANT_PROFILE.id}: the deployed 200/160 firmware-gain schedule and deployed median-of-three IMU preprocessing, with BAM at the source CPU regression's nominal 7.4 V / 0.1 V-per-Nm sag condition. Those electrical values are a repeatable source-backed rehearsal condition, not a measurement of a particular assembled robot.`,
-  'Task-specific collision geometry now uses the exact STL mesh bytes from the pinned microduck_rl source. Walking uses the source reduced collision set; kick/recovery use the source all-collision plant. These 3D model files remain under upstream Creative Commons BY-SA-NC terms (version not specified upstream) and are outside RoboBuddy original-code MIT scope.',
+  'Task-specific collision geometry uses the exact STL mesh bytes from the pinned microduck_rl source. Locomotion uses robot_walk.xml; explicit stand/recovery, sit/stand, ground-pick and the conservative roulade runtime mapping use robot_allcollisions.xml; kick uses that all-collision robot plus the source ball.xml prop. These 3D model files remain under upstream Creative Commons BY-SA-NC terms (version not specified upstream) and are outside RoboBuddy original-code MIT scope.',
   'The trunk is a free MuJoCo body. Nothing writes root pose, root velocity, joint state or object state outside explicit logged setup/reset. There is no weld, snap, teleport, hidden grasp attachment, kick impulse, boundary clamp or success overwrite.',
   'No assembled-MicroDuck hardware comparison is available in this repository. Absolute walking speed, recovery probability, battery/internal-resistance values, real bus latency, thermal behavior and individual actuator calibration remain hardware-validation items and are not claimed as measured truth.',
 ]);
@@ -191,6 +191,19 @@ export const MICRODUCK_LOW_TRACTION_PACKAGE = registerModelPackage(basePackage({
   limitations: ['Adverse-condition fixture: sole and floor sliding friction are reduced to 0.02. This is a declared degraded surface, not a modelled real material.'],
 }));
 
+export const MICRODUCK_GROUNDCONTACT_PACKAGE = registerModelPackage(basePackage({
+  id: 'microduck-groundcontact-519142b-v1',
+  modelId: 'robobuddy-microduck-groundcontact-v1',
+  asset: 'models/microduck/groundcontact.xml',
+  sha256: '43c828db58973bc2d1a56ccba72a46f0ae89837f859f64641ea1c251d2cfd108',
+  variant: 'MicroDuck alpha free-base biped with the pinned robot_allcollisions.xml mesh-contact plant for body-on-ground skills',
+  floorFriction: MICRODUCK_NOMINAL_FLOOR_FRICTION,
+  limitations: [
+    'This package is the broad source collision plant used by pinned stand-up, sit/stand and ground-pick task configurations. It intentionally differs from the reduced walking collision plant.',
+    'The pinned microduck_rl revision does not contain the roulade task configuration even though the deployed runtime carries roulade.onnx. Roulade is therefore routed to this broad contact plant conservatively and remains experimental rather than being claimed as an exact pinned training-task match.',
+  ],
+}));
+
 export const MICRODUCK_KICK_PACKAGE = registerModelPackage((() => {
   const base = basePackage({
     id: 'microduck-kick-519142b-v1',
@@ -216,5 +229,6 @@ export const MICRODUCK_KICK_PACKAGE = registerModelPackage((() => {
 export const MICRODUCK_MODEL_PACKAGES = Object.freeze([
   MICRODUCK_WALK_PACKAGE,
   MICRODUCK_LOW_TRACTION_PACKAGE,
+  MICRODUCK_GROUNDCONTACT_PACKAGE,
   MICRODUCK_KICK_PACKAGE,
 ]);

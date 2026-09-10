@@ -47,7 +47,7 @@ export const MICRODUCK_RL_SOURCE = Object.freeze({
     'src/mjlab_microduck/tasks/microduck_ball_kick_env_cfg.py',
     'scripts/infer_policy.py',
   ]),
-  license: 'Apache-2.0 for code and MJCF; the STL mesh assets are CC BY-SA-NC and are NOT redistributed by this repository',
+  license: 'Upstream currently declares project software Apache-2.0 and 3D model files Creative Commons BY-SA-NC (CC version not specified). Exact pinned STL collision bytes are redistributed here under that separate upstream 3D-model scope.',
   selectionReason:
     'It is the newest revision whose robot_walk.xml is still the deployed model AND which already carries the source ball prop. '
     + 'The deployed-model window on this branch runs from 6594292 (2026-07-01, "update model (head_pitch in right direction)") to '

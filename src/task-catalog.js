@@ -3,8 +3,8 @@ import { OPENARM_V2_PHASE5A_SCENE, OPENARM_V2_BIMANUAL_CONTROLLER } from './phys
 import { LEKIWI_COURIER_PACKAGE } from './physics/lekiwi-model-package.js';
 import { LEKIWI_COURIER_CONTROLLER, LEKIWI_COURIER_ROUTE, LEKIWI_COURIER_SCENE, LEKIWI_WORKCELL } from './physics/lekiwi-scene.js';
 import { LEKIWI_SOURCE, LEROBOT_SOURCE } from './physics/lekiwi-source-audit.js';
-import { MICRODUCK_WALK_PACKAGE } from './physics/microduck-model-package.js';
-import { MICRODUCK_GAIT_ONSET_MS, MICRODUCK_WALK_SCENE } from './physics/microduck-scene.js';
+import { MICRODUCK_GROUNDCONTACT_PACKAGE, MICRODUCK_KICK_PACKAGE, MICRODUCK_WALK_PACKAGE } from './physics/microduck-model-package.js';
+import { MICRODUCK_GAIT_ONSET_MS, MICRODUCK_GROUNDCONTACT_SCENE, MICRODUCK_KICK_SCENE, MICRODUCK_WALK_SCENE } from './physics/microduck-scene.js';
 import { MICRODUCK_RL_SOURCE, MICRODUCK_RUNTIME_SOURCE } from './physics/microduck-source-audit.js';
 import { MICRODUCK_CAPABILITY_AUDIT } from './physics/microduck-capabilities.js';
 import { MICRODUCK_CONTROL_INTERVAL_SECONDS, MICRODUCK_PHYSICS_TIMESTEP_SECONDS } from './physics/microduck-controller.js';
@@ -187,53 +187,43 @@ const UNITREE_G1_RIG_SCENARIO = Object.freeze({
 });
 export const UNITREE_G1_RIG_TASKS = Object.freeze([Object.freeze({ profileId: 'unitree', id: UNITREE_G1_RIG_SCENARIO.id, title: UNITREE_G1_RIG_SCENARIO.title, robotId: UNITREE_G1_RIG_SCENARIO.robotId, simulationMode: 'kinematic_pose', source: `RoboBuddy_AI@${UNITREE_G1_VISUAL_REVISION}/simulator/js/robot-mesh-data-unitree-g1.js` })]);
 
-const MICRODUCK_PHYSICAL_SCENARIO = Object.freeze({
-  schema: 'robobuddy.physical-workspace.v1',
-  schemaVersion: 1,
-  simulationMode: 'physical_mujoco',
-  workspaceRevision: MICRODUCK_WALK_SCENE.revision,
-  id: 'microduck-physical-locomotion',
-  title: 'Physical MicroDuck Locomotion',
-  brief: `Command the MicroDuck alpha biped through the pinned deployed controller: your velocity request is encoded into the 61-value observation, a deployed ONNX policy chooses fourteen joint targets, an identified XL330 servo model turns them into torque, and MuJoCo decides what the robot does from foot-floor contact. Below about ${MICRODUCK_GAIT_ONSET_MS} m/s the matched policy holds a stand rather than starting a gait. Disabling actuation or traction removes the propulsion; nothing here moves the root directly.`,
-  robotId: MICRODUCK_WALK_PACKAGE.robotId,
-  physicalSceneId: MICRODUCK_WALK_SCENE.id,
-  physicalSceneRevision: MICRODUCK_WALK_SCENE.revision,
-  modelPackage: MICRODUCK_WALK_PACKAGE.id,
-  modelId: MICRODUCK_WALK_PACKAGE.modelId,
-  physicalApi: Object.freeze({ version: 'robobuddy.sim.v1', angleUnit: 'rad', timeUnit: 's', lengthUnit: 'm', velocityUnit: 'm/s', yawRateUnit: 'rad/s' }),
-  canonicalModel: Object.freeze({
-    repository: MICRODUCK_RUNTIME_SOURCE.repository,
-    revision: MICRODUCK_RUNTIME_SOURCE.revision,
-    sourcePath: 'kinematics/assets/alpha/robot_walk.xml',
-    visualSourcePath: 'robotctl/assets/duck.bin',
-    variant: MICRODUCK_RUNTIME_SOURCE.variant,
-    physicalEnvironmentRepository: MICRODUCK_RL_SOURCE.repository,
-    physicalEnvironmentRevision: MICRODUCK_RL_SOURCE.revision,
-    authority: 'MuJoCo PhysicsSession; the official MicroDuck visual consumes observed trunk and joint state only',
-  }),
-  controller: Object.freeze({
-    observationWidth: 61,
-    actionWidth: 14,
-    mouthWireIndex: 9,
-    physicsTimestepSeconds: MICRODUCK_PHYSICS_TIMESTEP_SECONDS,
-    controlIntervalSeconds: MICRODUCK_CONTROL_INTERVAL_SECONDS,
-    previousActionSemantics: 'raw policy output before action scaling',
-    source: `${MICRODUCK_RUNTIME_SOURCE.repository} duck-control/src/obs.rs and robotd/src/control.rs`,
-  }),
-  frames: Object.freeze({
-    physics: 'MuJoCo right-handed Z-up world, metres/radians; the trunk is a free body and the gyro is read at the source-named imu site',
-    rendering: 'Three.js Y-up millimetres derived from the observed MuJoCo trunk transform; the renderer never re-seats the robot on the floor and never advances physics',
-  }),
-  capabilities: Object.freeze(MICRODUCK_CAPABILITY_AUDIT.map((item) => Object.freeze({ id: item.id, label: item.label, status: item.status, physical: Boolean(item.physicalPolicy) }))),
-  portablePython: Object.freeze({ referenceActions: Object.freeze([]) }),
-  taskEvaluation: Object.freeze({
-    source: 'MuJoCo trunk free-body pose plus named foot-floor and sole-ball contacts',
-    requires: Object.freeze(['commanded-axis displacement', 'alternating foot-contact transitions', 'no fall', 'propulsion lost when actuation or traction is removed']),
-    syntheticSuccessEvents: false,
-  }),
-  limitations: Object.freeze([...MICRODUCK_WALK_PACKAGE.limitations]),
+function microduckPhysicalScenario({ id, title, brief, modelPackage, physicalScene, capabilityIds, taskEvaluation }) {
+  return Object.freeze({
+    schema: 'robobuddy.physical-workspace.v1', schemaVersion: 1, simulationMode: 'physical_mujoco',
+    workspaceRevision: physicalScene.revision, id, title, brief, robotId: modelPackage.robotId,
+    physicalSceneId: physicalScene.id, physicalSceneRevision: physicalScene.revision,
+    modelPackage: modelPackage.id, modelId: modelPackage.modelId,
+    physicalApi: Object.freeze({ version: 'robobuddy.sim.v1', angleUnit: 'rad', timeUnit: 's', lengthUnit: 'm', velocityUnit: 'm/s', yawRateUnit: 'rad/s' }),
+    canonicalModel: Object.freeze({ repository: MICRODUCK_RUNTIME_SOURCE.repository, revision: MICRODUCK_RUNTIME_SOURCE.revision, sourcePath: 'kinematics/assets/alpha/robot_walk.xml', visualSourcePath: 'robotctl/assets/duck.bin', variant: MICRODUCK_RUNTIME_SOURCE.variant, physicalEnvironmentRepository: MICRODUCK_RL_SOURCE.repository, physicalEnvironmentRevision: MICRODUCK_RL_SOURCE.revision, collisionPlant: modelPackage.asset, authority: 'MuJoCo PhysicsSession; the official MicroDuck visual consumes observed trunk and joint state only' }),
+    controller: Object.freeze({ observationWidth: 61, actionWidth: 14, mouthWireIndex: 9, physicsTimestepSeconds: MICRODUCK_PHYSICS_TIMESTEP_SECONDS, controlIntervalSeconds: MICRODUCK_CONTROL_INTERVAL_SECONDS, previousActionSemantics: 'raw policy output before action scaling', source: `${MICRODUCK_RUNTIME_SOURCE.repository} duck-control/src/obs.rs and robotd/src/control.rs` }),
+    frames: Object.freeze({ physics: 'MuJoCo right-handed Z-up world, metres/radians; the trunk is a free body and the gyro is read at the source-named imu site', rendering: 'Three.js Y-up millimetres derived from the observed MuJoCo trunk transform; the renderer never re-seats the robot on the floor and never advances physics' }),
+    capabilities: Object.freeze(MICRODUCK_CAPABILITY_AUDIT.filter((item) => capabilityIds.includes(item.id)).map((item) => Object.freeze({ id: item.id, label: item.label, status: item.status, physical: Boolean(item.physicalPolicy) }))),
+    portablePython: Object.freeze({ referenceActions: Object.freeze([]) }),
+    taskEvaluation: Object.freeze(taskEvaluation), limitations: Object.freeze([...modelPackage.limitations]),
+  });
+}
+
+const MICRODUCK_PHYSICAL_SCENARIO = microduckPhysicalScenario({
+  id: 'microduck-physical-locomotion', title: 'Physical MicroDuck Locomotion', modelPackage: MICRODUCK_WALK_PACKAGE, physicalScene: MICRODUCK_WALK_SCENE, capabilityIds: ['walk'],
+  brief: `Command MicroDuck through the pinned deployed controller on the source reduced walking collision plant. Below about ${MICRODUCK_GAIT_ONSET_MS} m/s the deployed scheduler may hold a stand; non-zero locomotion is never routed to the all-collision ground-contact plant.`,
+  taskEvaluation: { source: 'MuJoCo trunk free-body pose plus named foot-floor contacts', requires: Object.freeze(['commanded-axis displacement', 'alternating foot-contact transitions', 'no fall', 'propulsion lost when actuation or traction is removed']), syntheticSuccessEvents: false },
 });
-export const MICRODUCK_PHYSICAL_TASKS = Object.freeze([Object.freeze({ profileId: 'microduck', id: MICRODUCK_PHYSICAL_SCENARIO.id, title: MICRODUCK_PHYSICAL_SCENARIO.title, robotId: MICRODUCK_PHYSICAL_SCENARIO.robotId, simulationMode: MICRODUCK_PHYSICAL_SCENARIO.simulationMode, physicalSceneId: MICRODUCK_PHYSICAL_SCENARIO.physicalSceneId })]);
+const MICRODUCK_GROUNDCONTACT_SCENARIO = microduckPhysicalScenario({
+  id: 'microduck-physical-groundcontact', title: 'Physical MicroDuck Ground Contact', modelPackage: MICRODUCK_GROUNDCONTACT_PACKAGE, physicalScene: MICRODUCK_GROUNDCONTACT_SCENE, capabilityIds: ['stand', 'sit_stand', 'ground_pick', 'recovery', 'roulade'],
+  brief: 'Run explicit standing/body-pose, sit/stand, ground-pick and fall-recovery behaviours on the pinned robot_allcollisions.xml plant so trunk, head and limb contacts with the floor are represented by the source meshes. Roulade is available here only as an experimental conservative mapping because its task config is absent from the pinned RL revision.',
+  taskEvaluation: { source: 'MuJoCo trunk pose, joint state and named robot/floor contacts', requires: Object.freeze(['source all-collision plant', 'contact-driven body motion', 'declared setup separated from progress', 'no reset-as-recovery']), syntheticSuccessEvents: false },
+});
+const MICRODUCK_KICK_PHYSICAL_SCENARIO = microduckPhysicalScenario({
+  id: 'microduck-physical-kick', title: 'Physical MicroDuck Ball Kick', modelPackage: MICRODUCK_KICK_PACKAGE, physicalScene: MICRODUCK_KICK_SCENE, capabilityIds: ['kick_left', 'kick_right'],
+  brief: 'Run the deployed left/right kick policies on the source all-collision robot plus the pinned 70 mm / 15 g ball. Ball motion must follow named sole/ball MuJoCo contact; no kick impulse or ball-state overwrite exists.',
+  taskEvaluation: { source: 'MuJoCo named sole/ball contacts and ball free-body pose', requires: Object.freeze(['named foot-ball contact', 'contact-following ball displacement', 'miss negative control']), syntheticSuccessEvents: false },
+});
+const MICRODUCK_PHYSICAL_SCENARIOS = Object.freeze({
+  [MICRODUCK_PHYSICAL_SCENARIO.id]: MICRODUCK_PHYSICAL_SCENARIO,
+  [MICRODUCK_GROUNDCONTACT_SCENARIO.id]: MICRODUCK_GROUNDCONTACT_SCENARIO,
+  [MICRODUCK_KICK_PHYSICAL_SCENARIO.id]: MICRODUCK_KICK_PHYSICAL_SCENARIO,
+});
+export const MICRODUCK_PHYSICAL_TASKS = Object.freeze(Object.values(MICRODUCK_PHYSICAL_SCENARIOS).map((scenario) => Object.freeze({ profileId: 'microduck', id: scenario.id, title: scenario.title, robotId: scenario.robotId, simulationMode: scenario.simulationMode, physicalSceneId: scenario.physicalSceneId })));
 
 const MICRODUCK_SCENARIO = Object.freeze({ schema: 'robobuddy.microduck-workspace.v1', simulationMode: 'policy_sim', workspaceRevision: 'microduck-cycle04-live-python-v1', id: 'microduck-policy-demonstrator', title: 'MicroDuck Articulated Policy Demonstrator', robotId: 'microduck_runtime_visual', variant: 'walking', brief: 'Run live async Python against the exact pinned policies and approximate browser dynamics while inspecting the official compact runtime visual and modeled state.', canonicalModel: Object.freeze({ repository: 'pollen-robotics/microduck', revision: '590b986bd8c0d50ae02cb3ea2f59c463b6828168', sourcePath: 'robotctl/assets/duck.bin', hierarchySourcePath: 'kinematics/assets/alpha/robot_walk.xml', geometry: 'official compact robotctl monitor mesh' }), frames: Object.freeze({ geometry: 'Source Z-up metres converted to Three.js Y-up and displayed at millimetre scale', hierarchy: 'pinned runtime XML and DUCK v1 body records', mouthRollersContacts: 'original configured approximations' }), portablePython: Object.freeze({ referenceActions: Object.freeze([]) }) });
 // Both MicroDuck workspaces are first-class and each is entered by name. The demonstrator stays
@@ -266,7 +256,7 @@ export async function loadPatchedScenario(profileId, taskId) {
   if (descriptor.simulationMode === 'physical_mujoco') {
     if (profileId === 'openarm') return structuredClone(OPENARM_PHYSICAL_SCENARIO);
     if (profileId === 'lekiwi') return structuredClone(LEKIWI_PHYSICAL_SCENARIO);
-    if (profileId === 'microduck') return structuredClone(MICRODUCK_PHYSICAL_SCENARIO);
+    if (profileId === 'microduck') return structuredClone(MICRODUCK_PHYSICAL_SCENARIOS[descriptor.id]);
     return structuredClone(SO101_PHYSICAL_SCENARIO);
   }
   if (descriptor.simulationMode === 'kinematic_pose') return structuredClone(UNITREE_G1_RIG_SCENARIO);
@@ -323,7 +313,7 @@ export function taskPatchProvenance(descriptor) {
       physicalEnvironmentRevision: MICRODUCK_RL_SOURCE.revision,
       scenarioId: descriptor.id,
       physicalSceneId: descriptor.physicalSceneId,
-      modelPackage: MICRODUCK_PHYSICAL_SCENARIO.modelPackage,
+      modelPackage: MICRODUCK_PHYSICAL_SCENARIOS[descriptor.id]?.modelPackage ?? null,
       simulationMode: 'physical_mujoco',
     };
     return { repository: 'jivishov/RoboBuddy_IDE_v020', scenarioId: descriptor.id, physicalSceneId: descriptor.physicalSceneId, modelPackage: SO101_PHYSICAL_SCENARIO.modelPackage, simulationMode: 'physical_mujoco' };

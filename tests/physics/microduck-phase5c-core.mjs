@@ -343,7 +343,7 @@ check('an off-by-one mouth mapping is caught by the fixture', () => {
 
 // ------------------------------------------------------------- model contract
 check('every MicroDuck model package declares a free base and fourteen policy joints', () => {
-  assert(MICRODUCK_MODEL_PACKAGES.length === 3, `expected three packages, found ${MICRODUCK_MODEL_PACKAGES.length}`);
+  assert(MICRODUCK_MODEL_PACKAGES.length === 4, `expected four task-specific packages, found ${MICRODUCK_MODEL_PACKAGES.length}`);
   for (const modelPackage of MICRODUCK_MODEL_PACKAGES) {
     const trunk = modelPackage.bodies.find((body) => body.id === 'trunk_base');
     assert(trunk?.freeJointId === 'trunk_base_freejoint', `${modelPackage.id} has no free trunk`);
@@ -479,7 +479,7 @@ check('the physical and legacy capability labels stay disjoint', () => {
   assert(MICRODUCK_LEGACY_CAPABILITY.evidence === 'model-derived', 'the legacy capability is not model-derived');
   assert(MICRODUCK_PHYSICAL_CAPABILITY.limitations.some((line) => /unsupported in physical mode|Roller-mode/.test(line)),
     'the physical capability does not disclose its unsupported skills');
-  assert(MICRODUCK_PHYSICAL_CAPABILITY.limitations.some((line) => /not hardware accuracy|assembled MicroDuck/.test(line)),
+  assert(MICRODUCK_PHYSICAL_CAPABILITY.limitations.some((line) => /hardware-validation|assembled-hardware|assembled MicroDuck/.test(line)),
     'the physical capability does not disclose the missing hardware validation');
   assert(MICRODUCK_LEGACY_CAPABILITY.limitations.some((line) => /never used as a fallback/.test(line)),
     'the legacy capability does not state that it is not a fallback');
@@ -635,11 +635,15 @@ check('both MicroDuck workspaces are entered by name, and neither inherits the o
   const { physicsCapabilityFor } = await import('../../src/physics/capabilities.js');
 
   const tasks = tasksForProfile('microduck');
-  assert(tasks.length === 2, `MicroDuck should expose both workspaces, saw ${tasks.length}`);
+  assert(tasks.length === 4, `MicroDuck should expose one legacy plus three task-specific physical workspaces, saw ${tasks.length}`);
   const demonstrator = tasks.find((item) => item.id === 'microduck-policy-demonstrator');
   const physical = tasks.find((item) => item.id === 'microduck-physical-locomotion');
+  const groundContact = tasks.find((item) => item.id === 'microduck-physical-groundcontact');
+  const kick = tasks.find((item) => item.id === 'microduck-physical-kick');
   assert(demonstrator && demonstrator.simulationMode === 'policy_sim', 'the policy demonstrator is no longer a selectable MicroDuck workspace');
   assert(physical && physical.simulationMode === 'physical_mujoco', 'the physical locomotion workspace is no longer a selectable MicroDuck workspace');
+  assert(groundContact && groundContact.simulationMode === 'physical_mujoco', 'the physical ground-contact workspace is missing');
+  assert(kick && kick.simulationMode === 'physical_mujoco', 'the physical kick workspace is missing');
 
   // The demonstrator stays the default because it is the profile's complete learner surface:
   // roller variants, the control deck, camera modes, visual cues, audio and peripherals, none of

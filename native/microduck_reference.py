@@ -108,6 +108,7 @@ POLICY_FILES = {
 MODELS = {
     "walk": ROOT / "models" / "microduck" / "walk.xml",
     "lowtraction": ROOT / "models" / "microduck" / "walk_lowtraction.xml",
+    "groundcontact": ROOT / "models" / "microduck" / "groundcontact.xml",
     "kick": ROOT / "models" / "microduck" / "kick.xml",
 }
 
@@ -451,6 +452,7 @@ def run_trial(*, model_key, policy_id, seconds, command, timestep=PHYSICS_TIMEST
     yaw0 = 2 * math.atan2(start_yaw[3], start_yaw[0])
     yaw1 = 2 * math.atan2(plant.data.qpos[6], plant.data.qpos[3])
     result = {
+        "collisionPlant": model_key,
         "modelPackageAsset": str(plant.path.relative_to(ROOT)),
         "modelSha256": plant.sha256,
         "policy": policy_id,
@@ -464,7 +466,7 @@ def run_trial(*, model_key, policy_id, seconds, command, timestep=PHYSICS_TIMEST
                        "firmwareGain": 0 if not actuation else (
                            round(NOMINAL_FIRMWARE_GAIN * STANDING_GAIN_RATIO) if standing_tuned
                            else NOMINAL_FIRMWARE_GAIN),
-                       "appliedKp": round(plant.applied_kp, 6)},
+                       "appliedKp": None if plant.applied_kp is None else round(plant.applied_kp, 6)},
         "requested": {"command": command if command_fn is None else "time-varying",
                       "actuationEnabled": actuation, "durationSeconds": seconds},
         "setupLog": plant.setup_log,
@@ -526,26 +528,25 @@ FACE_UP = (math.sqrt(0.5), 0.0, math.sqrt(0.5), 0.0)
 ON_SIDE = (math.sqrt(0.5), math.sqrt(0.5), 0.0, 0.0)
 
 TRIALS = {
-    "stand": dict(model_key="walk", policy_id="stand", seconds=6.0, command=ZERO_CMD, standing_tuned=True),
+    "stand": dict(model_key="groundcontact", policy_id="stand", seconds=6.0, command=ZERO_CMD, standing_tuned=True),
     "walk": dict(model_key="walk", policy_id="walking", seconds=6.0, command=cmd(vx=0.30)),
     "walk-fast": dict(model_key="walk", policy_id="walking", seconds=6.0, command=cmd(vx=0.40)),
     "walk-turn": dict(model_key="walk", policy_id="walking", seconds=6.0, command=cmd(vx=0.30, vyaw=0.8)),
     "walk-no-actuation": dict(model_key="walk", policy_id="walking", seconds=6.0, command=cmd(vx=0.30), actuation=False),
     "walk-low-traction": dict(model_key="lowtraction", policy_id="walking", seconds=6.0, command=cmd(vx=0.30)),
-    "sit": dict(model_key="walk", policy_id="sitstand", seconds=4.0, command=cmd(vx=1.0)),
-    "ground-pick": dict(model_key="walk", policy_id="ground_pick", seconds=3.0, command=ZERO_CMD, standing_tuned=True, command_fn=ground_pick_command()),
-    "roulade": dict(model_key="walk", policy_id="roulade", seconds=3.0, command=ZERO_CMD, standing_tuned=True),
+    "sit": dict(model_key="groundcontact", policy_id="sitstand", seconds=4.0, command=cmd(vx=1.0)),
+    "ground-pick": dict(model_key="groundcontact", policy_id="ground_pick", seconds=3.0, command=ZERO_CMD, standing_tuned=True, command_fn=ground_pick_command()),
+    "roulade": dict(model_key="groundcontact", policy_id="roulade", seconds=3.0, command=ZERO_CMD, standing_tuned=True),
     "kick-right": dict(model_key="kick", policy_id="kick_right", seconds=3.0, command=ZERO_CMD, standing_tuned=True, ball_xy=(0.09, -0.042)),
     "kick-left": dict(model_key="kick", policy_id="kick_left", seconds=3.0, command=ZERO_CMD, standing_tuned=True, ball_xy=(0.09, 0.042)),
     "kick-miss": dict(model_key="kick", policy_id="kick_right", seconds=3.0, command=ZERO_CMD, standing_tuned=True, ball_xy=(0.55, -0.042)),
-    "recover-face-down": dict(model_key="walk", policy_id="stand", seconds=8.0, command=ZERO_CMD, standing_tuned=True, perturbation=FACE_DOWN, settle_seconds=1.5),
-    "recover-face-up": dict(model_key="walk", policy_id="stand", seconds=8.0, command=ZERO_CMD, standing_tuned=True, perturbation=FACE_UP, settle_seconds=1.5),
-    "recover-on-side": dict(model_key="walk", policy_id="stand", seconds=8.0, command=ZERO_CMD, standing_tuned=True, perturbation=ON_SIDE, settle_seconds=1.5),
+    "recover-face-down": dict(model_key="groundcontact", policy_id="stand", seconds=8.0, command=ZERO_CMD, standing_tuned=True, perturbation=FACE_DOWN, settle_seconds=1.5),
+    "recover-face-up": dict(model_key="groundcontact", policy_id="stand", seconds=8.0, command=ZERO_CMD, standing_tuned=True, perturbation=FACE_UP, settle_seconds=1.5),
+    "recover-on-side": dict(model_key="groundcontact", policy_id="stand", seconds=8.0, command=ZERO_CMD, standing_tuned=True, perturbation=ON_SIDE, settle_seconds=1.5),
     # Negative controls for the recovery capability. A physical recovery has to be able to
     # fail, and a failure has to be reported as one.
-    "recover-no-actuation": dict(model_key="walk", policy_id="stand", seconds=8.0, command=ZERO_CMD, standing_tuned=True, perturbation=FACE_DOWN, settle_seconds=1.5, actuation=False),
-    "recover-low-traction": dict(model_key="lowtraction", policy_id="stand", seconds=8.0, command=ZERO_CMD, standing_tuned=True, perturbation=FACE_DOWN, settle_seconds=1.5),
-    "recover-short-budget": dict(model_key="walk", policy_id="stand", seconds=1.5, command=ZERO_CMD, standing_tuned=True, perturbation=FACE_DOWN, settle_seconds=1.5),
+    "recover-no-actuation": dict(model_key="groundcontact", policy_id="stand", seconds=8.0, command=ZERO_CMD, standing_tuned=True, perturbation=FACE_DOWN, settle_seconds=1.5, actuation=False),
+    "recover-short-budget": dict(model_key="groundcontact", policy_id="stand", seconds=1.5, command=ZERO_CMD, standing_tuned=True, perturbation=FACE_DOWN, settle_seconds=1.5),
 }
 
 

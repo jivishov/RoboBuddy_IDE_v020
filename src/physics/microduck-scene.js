@@ -1,7 +1,7 @@
 import { PHYSICS_BACKEND_API_VERSION } from './backend-contract.js';
 import {
   MICRODUCK_BALL_BODY, MICRODUCK_BALL_OFFSET_M, MICRODUCK_BALL_RADIUS_M,
-  MICRODUCK_FLOOR_ID, MICRODUCK_JOINT_CONTROLLER, MICRODUCK_KICK_PACKAGE,
+  MICRODUCK_FLOOR_ID, MICRODUCK_GROUNDCONTACT_PACKAGE, MICRODUCK_JOINT_CONTROLLER, MICRODUCK_KICK_PACKAGE,
   MICRODUCK_LOW_TRACTION_PACKAGE, MICRODUCK_ROBOT_ID, MICRODUCK_WALK_PACKAGE,
 } from './microduck-model-package.js';
 
@@ -76,6 +76,17 @@ export const MICRODUCK_LOW_TRACTION_SCENE = scene({
   },
 });
 
+export const MICRODUCK_GROUNDCONTACT_SCENE = scene({
+  id: 'microduck-physical-groundcontact',
+  modelPackage: MICRODUCK_GROUNDCONTACT_PACKAGE,
+  taskGoal: {
+    id: 'microduck-body-ground-contact-skills',
+    description: 'Run body-on-ground skills against the pinned all-collision robot plant.',
+    successCriteria: 'outcomes come from the requested policy plus actual MuJoCo body/floor contact; reset/setup never counts as progress',
+    evaluatedFrom: 'authoritative MuJoCo trunk pose and named robot/floor contacts',
+  },
+});
+
 export const MICRODUCK_KICK_SCENE = scene({
   id: 'microduck-physical-kick',
   modelPackage: MICRODUCK_KICK_PACKAGE,
@@ -97,6 +108,7 @@ export const MICRODUCK_KICK_SCENE = scene({
 export const MICRODUCK_SCENES = Object.freeze({
   walk: MICRODUCK_WALK_SCENE,
   lowTraction: MICRODUCK_LOW_TRACTION_SCENE,
+  groundContact: MICRODUCK_GROUNDCONTACT_SCENE,
   kick: MICRODUCK_KICK_SCENE,
 });
 

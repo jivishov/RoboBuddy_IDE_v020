@@ -34,6 +34,15 @@ for name, report in reports.items():
     assert report["modelSha256"], name
     assert report["policySha256"], name
 
+# Collision routing is part of the evidence, not an incidental filename choice.
+for name in ('walk', 'walk-fast', 'walk-no-actuation'):
+    assert reports[name]['collisionPlant'] == 'walk', (name, reports[name]['collisionPlant'])
+assert reports['walk-low-traction']['collisionPlant'] == 'lowtraction'
+for name in ('stand', 'sit', 'ground-pick', 'roulade', 'recover-face-down', 'recover-face-up', 'recover-on-side', 'recover-no-actuation', 'recover-short-budget'):
+    assert reports[name]['collisionPlant'] == 'groundcontact', (name, reports[name]['collisionPlant'])
+for name in ('kick-right', 'kick-left', 'kick-miss'):
+    assert reports[name]['collisionPlant'] == 'kick', (name, reports[name]['collisionPlant'])
+
 # Deployment-reference gain is fed into BAM, not converted into MuJoCo stiffness.
 assert reports["walk"]["controller"]["firmwareGain"] == 200, reports["walk"]["controller"]
 assert reports["stand"]["controller"]["firmwareGain"] == 160, reports["stand"]["controller"]

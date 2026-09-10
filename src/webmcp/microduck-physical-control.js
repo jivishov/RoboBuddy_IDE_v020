@@ -255,9 +255,10 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
       const capability = microduckCapability(parsed.skill);
       const result = simulator.requestSkill(parsed.skill);
       if (!result.accepted) {
-        throw new WebMcpDomainError('CAPABILITY_UNSUPPORTED', `${parsed.skill} is unsupported in MicroDuck physical mode: ${result.reason}`, {
-          retryable: false,
-          details: { capability: parsed.skill, status: MICRODUCK_CAPABILITY_STATUS.UNSUPPORTED, routedToLegacy: false },
+        const plantMismatch = result.status === 'wrong-plant';
+        throw new WebMcpDomainError(plantMismatch ? 'PLANT_MISMATCH' : 'CAPABILITY_UNSUPPORTED', `${parsed.skill} cannot run in the active MicroDuck physical plant: ${result.reason}`, {
+          retryable: plantMismatch,
+          details: { capability: parsed.skill, status: plantMismatch ? result.status : MICRODUCK_CAPABILITY_STATUS.UNSUPPORTED, requiredPackageKeys: result.requiredPackageKeys || [], routedToLegacy: false },
         });
       }
       assertCurrent(facade, baseline, expectedEpoch, signal);

@@ -102,8 +102,9 @@ export class MicroDuckPhysicalBridge {
       skillResult = this.simulator.requestSkill(skill);
       if (!skillResult.accepted) {
         const capability = microduckCapability(skill);
-        throw liveError('CAPABILITY_UNSUPPORTED', `${skill} is unsupported in MicroDuck physical mode: ${skillResult.reason}`, {
-          capability: skill, status: capability?.status ?? 'unsupported in physical mode', routedToLegacy: false,
+        const plantMismatch = skillResult.status === 'wrong-plant';
+        throw liveError(plantMismatch ? 'PLANT_MISMATCH' : 'CAPABILITY_UNSUPPORTED', `${skill} cannot run in the active MicroDuck physical plant: ${skillResult.reason}`, {
+          capability: skill, status: plantMismatch ? skillResult.status : (capability?.status ?? 'unsupported in physical mode'), requiredPackageKeys: skillResult.requiredPackageKeys || [], routedToLegacy: false,
         });
       }
     }

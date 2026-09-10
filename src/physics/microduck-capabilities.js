@@ -11,7 +11,7 @@ import {
   MICRODUCK_ACTION_WIDTH,
   MICRODUCK_OBSERVATION_WIDTH,
 } from './microduck-controller.js';
-import { MICRODUCK_KICK_PACKAGE, MICRODUCK_LOW_TRACTION_PACKAGE, MICRODUCK_WALK_PACKAGE } from './microduck-model-package.js';
+import { MICRODUCK_GROUNDCONTACT_PACKAGE, MICRODUCK_KICK_PACKAGE, MICRODUCK_LOW_TRACTION_PACKAGE, MICRODUCK_WALK_PACKAGE } from './microduck-model-package.js';
 
 // How a MicroDuck capability may be classified. Execution backend, capability and evidence
 // stay separate: a workspace being physical does not make every skill in it physical.
@@ -61,13 +61,11 @@ export const MICRODUCK_CAPABILITY_AUDIT = Object.freeze([
   }),
   Object.freeze({
     id: 'recovery', label: 'Fall recovery', status: S.PHYSICAL_VERIFIED, physicalPolicy: 'stand',
-    evidence: 'Native reference from a declared, logged face-down or face-up drop: the standing policy returns the trunk to 0.1161 m at under 0.25 deg tilt through contact alone. '
-      + 'It can fail, and does: with actuation disabled it stays down at 89.9 deg, on the reduced-traction floor it thrashes for 8 s and stays down at 85.7 deg, and a 1.5 s budget ends incomplete at 100.6 deg. No reset is counted as a recovery.',
+    evidence: 'Runs only on the source all-collision ground-contact plant. Positive and negative BAM/MuJoCo recovery controls are validated from declared setup orientations, actuator force, trunk pose and contact; reset is never counted as recovery.',
   }),
   Object.freeze({
     id: 'roulade', label: 'Roulade (forward roll)', status: S.PHYSICAL_EXPERIMENTAL, physicalPolicy: 'roulade',
-    evidence: 'Native reference, 3 s: a real contact-driven forward roll of 0.511 m, peaking at 0.190 m trunk height and returning upright. '
-      + 'Classified experimental because a roll loads the trunk and head colliders hardest, and those are the repository-fitted primitives rather than the source meshes.',
+    evidence: 'The deployed runtime includes roulade.onnx. It is routed to the broad source all-collision plant so trunk/head contact is represented by exact source meshes. The pinned microduck_rl revision does not contain the roulade task configuration, so this remains experimental rather than an exact task-training-plant claim.',
   }),
   Object.freeze({
     id: 'roller', label: 'Roller-mode locomotion', status: S.UNSUPPORTED, physicalPolicy: null,
@@ -95,6 +93,28 @@ export function microduckCapability(id) {
 export function isPhysicallySupported(id) {
   const record = microduckCapability(id);
   return Boolean(record && record.physicalPolicy);
+}
+
+// Collision-plant routing is part of policy compatibility. A source policy is not allowed
+// to run merely because its observation/action widths match: its task must also use the
+// collision plant against which that behaviour is represented here.
+export const MICRODUCK_CAPABILITY_PACKAGE_KEYS = Object.freeze({
+  stand: Object.freeze(['groundContact']),
+  walk: Object.freeze(['walk', 'lowTraction']),
+  sit_stand: Object.freeze(['groundContact']),
+  ground_pick: Object.freeze(['groundContact']),
+  kick_left: Object.freeze(['kick']),
+  kick_right: Object.freeze(['kick']),
+  recovery: Object.freeze(['groundContact']),
+  roulade: Object.freeze(['groundContact']),
+});
+
+export function microduckRequiredPackageKeys(capabilityId) {
+  return MICRODUCK_CAPABILITY_PACKAGE_KEYS[capabilityId] || Object.freeze([]);
+}
+
+export function microduckPackageSupportsCapability(packageKey, capabilityId) {
+  return microduckRequiredPackageKeys(capabilityId).includes(packageKey);
 }
 
 /**
@@ -157,14 +177,11 @@ export function assertMicroDuckCompatibility(modelPackage, policyId, presented =
 }
 
 const PHYSICAL_LIMITATIONS = Object.freeze([
-  'The articulated hierarchy, joint frames, ranges and inertials are the pinned Apache-2.0 MicroDuck alpha model; the collision set, the identified XL330 servo model and the 5 ms / 50 Hz cadence '
-  + 'are reconciled from the pinned microduck_rl revision whose robot model is structurally identical to it.',
-  'Collision shapes are repository-authored primitives fitted to the source mesh envelopes, because the upstream mesh colliders are CC BY-SA-NC and are not redistributed. '
-  + 'The soles are fitted to the measured contact face and reproduce the upstream standing height to 0.07 mm; the trunk and head colliders are coarser, and a body-on-ground trial from the side diverges from the upstream mesh model.',
-  'The BAM voltage-domain actuator the policies were trained against - including its 3-6 tick action delay and its voltage, friction and encoder-bias randomisation - is not reproduced. '
-  + 'Observations are published as clean simulator ground truth, so no robustness margin is measured.',
+  'Task-specific collision geometry is source-derived, not a single universal approximation: locomotion uses the pinned robot_walk.xml reduced set; explicit body-on-ground skills use robot_allcollisions.xml; kick uses robot_allcollisions.xml plus the source ball.xml prop.',
+  'The committed STL collider bytes are copied exactly from the pinned microduck_rl revision and retain upstream Creative Commons BY-SA-NC terms; upstream does not state a CC version. RoboBuddy original software remains MIT-scoped separately.',
+  'The interactive physical workspace uses BAM 1.0.1 XL330/M6 dynamics with the deployed firmware-gain schedule and deployed median-of-three IMU preprocessing. Training-only domain randomisation/delay is retained as a separate source reference profile rather than silently mixed into deployment rehearsal.',
   'Roller-mode locomotion and roller crouch are unsupported in physical mode: no matched roller plant exists at the pinned revision. They are not routed anywhere else.',
-  'Native and browser agreement is implementation conformance, not hardware accuracy. No walking speed, traction, stability margin, kick distance, recovery probability or actuator behaviour here has been compared with an assembled MicroDuck.',
+  'Native/browser agreement and source-model fidelity are software/model evidence, not assembled-hardware calibration. Battery/internal resistance, bus latency, thermal effects, individual servo variation, wear and real contact materials remain hardware-validation items.',
 ]);
 
 export const MICRODUCK_PHYSICAL_CAPABILITY = capabilityRecord({
@@ -188,5 +205,6 @@ export const MICRODUCK_LEGACY_CAPABILITY = capabilityRecord({
 export const MICRODUCK_PHYSICAL_PACKAGES = Object.freeze({
   walk: MICRODUCK_WALK_PACKAGE,
   lowTraction: MICRODUCK_LOW_TRACTION_PACKAGE,
+  groundContact: MICRODUCK_GROUNDCONTACT_PACKAGE,
   kick: MICRODUCK_KICK_PACKAGE,
 });

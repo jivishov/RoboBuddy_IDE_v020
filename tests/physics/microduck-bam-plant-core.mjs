@@ -81,7 +81,8 @@ assert.equal(MICRODUCK_WALK_PACKAGE.plant.actuator.version, '1.0.1');
 assert.equal(MICRODUCK_WALK_PACKAGE.plant.interactiveProfile, 'deployment-reference');
 assert(!MICRODUCK_WALK_PACKAGE.limitations.some((text) => /BAM M6 .*NOT reproduced/i.test(text)));
 assert(MICRODUCK_WALK_PACKAGE.limitations.some((text) => /hardware comparison/i.test(text)));
-assert(MICRODUCK_WALK_PACKAGE.limitations.some((text) => /license-constrained/i.test(text)));
+assert(MICRODUCK_WALK_PACKAGE.limitations.some((text) => /Creative Commons BY-SA-NC/i.test(text)), 'source 3D collision asset license is not disclosed');
+assert(MICRODUCK_WALK_PACKAGE.limitations.some((text) => /outside .*MIT scope|outside RoboBuddy original-code MIT scope/i.test(text)), 'source 3D collision assets are not scoped outside RoboBuddy MIT code');
 
 const worker = readFileSync(resolve(ROOT, 'src/physics/microduck-mujoco-worker.js'), 'utf8');
 assert(/configureBamMotorPlant/.test(worker), 'browser worker no longer converts the XML fallback to BAM motor mode');

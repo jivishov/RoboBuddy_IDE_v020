@@ -16,7 +16,8 @@ import {
 import {
   MICRODUCK_CAPABILITY_AUDIT, MICRODUCK_PHYSICAL_CAPABILITY, MICRODUCK_PHYSICAL_PACKAGES,
   MICRODUCK_PHYSICAL_POLICIES, assertMicroDuckCompatibility, isPhysicallySupported,
-  microduckCapability, microduckCompatibilityIdentity,
+  microduckCapability, microduckCompatibilityIdentity, microduckPackageSupportsCapability,
+  microduckRequiredPackageKeys,
 } from './microduck-capabilities.js';
 import { MICRODUCK_GAIT_ONSET_MS, MICRODUCK_SCENES, boundedMicroDuckCommand } from './microduck-scene.js';
 import { MicroDuckPhysicalEvaluator, tiltDegrees } from './microduck-task-evaluator.js';
@@ -209,6 +210,9 @@ export class MicroDuckPhysicalSimulator {
   setCommand(requested = {}) {
     this.#assertLoaded();
     const { command, limitedBy } = boundedMicroDuckCommand(requested);
+    if (!['walk', 'lowTraction'].includes(this.packageKey) && command.twist.some((value) => Math.abs(value) > 1e-12)) {
+      throw new Error(`MicroDuck collision-plant mismatch: non-zero velocity commands require the walk plant; active package is ${this.packageKey}`);
+    }
     this.requested = command;
     this.requestedLimitedBy = limitedBy;
     this.evaluator = new MicroDuckPhysicalEvaluator({ commandedTwist: command.twist });
@@ -224,6 +228,13 @@ export class MicroDuckPhysicalSimulator {
     const capability = microduckCapability(skill) || MICRODUCK_CAPABILITY_AUDIT.find((item) => item.physicalPolicy === skill);
     if (capability && !capability.physicalPolicy) {
       return { accepted: false, status: 'unsupported', capability: capability.id, reason: capability.evidence };
+    }
+    if (capability && !microduckPackageSupportsCapability(this.packageKey, capability.id)) {
+      const requiredPackageKeys = [...microduckRequiredPackageKeys(capability.id)];
+      return {
+        accepted: false, status: 'wrong-plant', capability: capability.id, requiredPackageKeys,
+        reason: `${capability.id} requires MicroDuck collision plant ${requiredPackageKeys.join(' or ')}; active package is ${this.packageKey}`,
+      };
     }
     const started = this.controller.requestSkill(skill);
     if (!started) return { accepted: false, status: 'unsupported', capability: skill, reason: `${skill} is not a physical skill of this workspace` };
@@ -398,7 +409,7 @@ export class MicroDuckPhysicalSimulator {
           setupLog: Array.isArray(observation.setupLog) ? observation.setupLog.map((item) => ({ ...item })) : [],
         }
         : null,
-      capabilities: MICRODUCK_CAPABILITY_AUDIT.map((item) => ({ id: item.id, label: item.label, status: item.status, physical: Boolean(item.physicalPolicy) })),
+      capabilities: MICRODUCK_CAPABILITY_AUDIT.map((item) => ({ id: item.id, label: item.label, status: item.status, physical: Boolean(item.physicalPolicy), availableInActivePlant: microduckPackageSupportsCapability(this.packageKey, item.id), requiredPackageKeys: [...microduckRequiredPackageKeys(item.id)] })),
       gaitOnsetMS: MICRODUCK_GAIT_ONSET_MS,
       hardwareValidated: false,
     };
