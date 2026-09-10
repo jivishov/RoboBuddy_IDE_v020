@@ -79,3 +79,84 @@ for (const task of ['microduck-physical-locomotion', 'microduck-physical-groundc
     expect(errors).toEqual([]);
   });
 }
+
+for (const mode of ['abort', 'access-off']) {
+  test(`MicroDuck discards in-flight inference after ${mode}`, async ({ page }) => {
+    test.setTimeout(240_000);
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(String(error)));
+    await openPhysical(page);
+    await page.locator('[data-agent-access="assist"]').click();
+    await expect.poll(() => page.evaluate(() => window.__interfaceRegistrations.some(({ tool, signal }) => tool.name === 'control_microduck_physical_simulation' && !signal?.aborted))).toBe(true);
+    await page.evaluate(() => {
+      const sim = window.__robobuddyCi.app.sim.backend;
+      const entry = window.__interfaceRegistrations.findLast(({ tool, signal }) => tool.name === 'control_microduck_physical_simulation' && !signal?.aborted);
+      const probe = { inferences: 0, commands: 0, steps: 0, pending: false, abort: new AbortController() };
+      const infer = sim.policyRuntime.infer.bind(sim.policyRuntime);
+      const send = sim.session.sendCommand.bind(sim.session);
+      const advanceSteps = sim.session.advanceSteps.bind(sim.session);
+      const advance = sim.advanceSeconds.bind(sim);
+      // Real ONNX inference and MuJoCo still execute. Delay only the return of the
+      // second inference so opt-out happens at a deterministic await boundary.
+      sim.policyRuntime.infer = async (...args) => {
+        const action = await infer(...args);
+        probe.inferences += 1;
+        if (probe.inferences === 2) {
+          probe.before = sim.lastObservation.simulationTimeSeconds;
+          probe.pending = true;
+          await new Promise((resolve) => { probe.release = resolve; });
+        }
+        return action;
+      };
+      sim.session.sendCommand = (...args) => { probe.commands += 1; return send(...args); };
+      sim.session.advanceSteps = (...args) => { probe.steps += args[0]; return advanceSteps(...args); };
+      sim.advanceSeconds = (...args) => {
+        const run = advance(...args);
+        probe.backendDone = run.then(() => null, (error) => error.code);
+        return run;
+      };
+      probe.restore = () => {
+        sim.policyRuntime.infer = infer;
+        sim.session.sendCommand = send;
+        sim.session.advanceSteps = advanceSteps;
+        sim.advanceSeconds = advance;
+      };
+      window.__cancellationProbe = probe;
+      probe.result = entry.tool.execute({ schema_version: 'robobuddy.microduck.physical.v1', command: 'set_command', request: { vx: 0.35 }, advance_seconds: 2 }, { signal: probe.abort.signal });
+    });
+    await expect.poll(() => page.evaluate(() => window.__cancellationProbe.pending)).toBe(true);
+    if (mode === 'abort') await page.evaluate(() => window.__cancellationProbe.abort.abort());
+    else {
+      await page.locator('[data-agent-access="off"]').click();
+      await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-access', 'off');
+    }
+    const result = await page.evaluate(async () => {
+      const probe = window.__cancellationProbe;
+      probe.release();
+      try {
+        const response = await probe.result;
+        const backendError = await probe.backendDone;
+        return { response, backendError, inferences: probe.inferences, commands: probe.commands, steps: probe.steps,
+          before: probe.before, after: window.__robobuddyCi.app.sim.backend.lastObservation.simulationTimeSeconds };
+      } finally { probe.restore(); }
+    });
+    // setAccess rotates the registration epoch; AgentFacade.assertActive reports
+    // that revocation as STALE_REGISTRATION. A call-signal abort has its separate
+    // OPERATION_CANCELLED code. Both must stop the real backend, not just its reply.
+    const expectedError = mode === 'abort' ? 'OPERATION_CANCELLED' : 'STALE_REGISTRATION';
+    console.log(`MicroDuck ${mode} cancellation evidence: ${JSON.stringify(result)}`);
+    expect(result.response).toMatchObject({ ok: false, error: { code: expectedError } });
+    expect(result.backendError).toBe(expectedError);
+    expect(result.inferences).toBe(2);
+    expect(result.commands).toBe(1);
+    expect(result.steps).toBe(4);
+    expect(result.before).toBeCloseTo(0.02, 8);
+    expect(result.after).toBe(result.before);
+    // Cancellation is scoped to the tool call, not a permanent simulator latch.
+    await page.locator('[data-agent-access="assist"]').click();
+    const resumed = await invoke(page, { command: 'advance', advance_seconds: 0.02 });
+    expect(resumed.ok, JSON.stringify(resumed)).toBe(true);
+    expect(resumed.actual.simulationTimeSeconds).toBeCloseTo(0.04, 8);
+    expect(errors).toEqual([]);
+  });
+}

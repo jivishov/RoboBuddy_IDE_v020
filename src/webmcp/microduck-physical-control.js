@@ -212,6 +212,9 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
   const controlId = `webmcp-microduck-${expectedEpoch}-${++facade.controlSequence}`;
   facade.activeControlId = controlId;
   const simulator = facade.app.sim.backend;
+  // Check the original registration, workspace, physics authority and call signal
+  // inside advancement, not just after the entire requested budget has executed.
+  const advancementOptions = { assertActive: () => assertCurrent(facade, baseline, expectedEpoch, signal) };
   const base = {
     ok: true, profileId: 'microduck', robot: PROFILES.microduck?.label || 'MicroDuck',
     schemaVersion: WEBMCP_MICRODUCK_PHYSICAL_SCHEMA_VERSION, backend: 'browser-mujoco', hardwareValidated: false,
@@ -242,7 +245,7 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
       await simulator.applyPerturbation(parsed.perturbation);
       assertCurrent(facade, baseline, expectedEpoch, signal);
       if (parsed.settleSeconds > 0) {
-        await simulator.settle(parsed.settleSeconds);
+        await simulator.settle(parsed.settleSeconds, advancementOptions);
         assertCurrent(facade, baseline, expectedEpoch, signal);
       }
       facade.app.setStatus?.(`Agent applied the declared ${parsed.perturbation} setup perturbation`);
@@ -268,7 +271,7 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
       }
       assertCurrent(facade, baseline, expectedEpoch, signal);
       if (parsed.advanceSeconds > 0) {
-        await simulator.advanceSeconds(parsed.advanceSeconds);
+        await simulator.advanceSeconds(parsed.advanceSeconds, advancementOptions);
         assertCurrent(facade, baseline, expectedEpoch, signal);
       }
       facade.app.setStatus?.(`Agent requested the physical ${parsed.skill} skill`);
@@ -285,7 +288,7 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
     if (parsed.command === 'advance') {
       const run = parsed.advanceSeconds === 0
         ? { executedTicks: 0, completed: true, cancelled: false, simulatedSeconds: 0 }
-        : await simulator.advanceSeconds(parsed.advanceSeconds);
+        : await simulator.advanceSeconds(parsed.advanceSeconds, advancementOptions);
       assertCurrent(facade, baseline, expectedEpoch, signal);
       facade.app.renderPanels?.();
       return {
@@ -301,7 +304,7 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
     assertCurrent(facade, baseline, expectedEpoch, signal);
     let run = null;
     if (parsed.advanceSeconds > 0) {
-      run = await simulator.advanceSeconds(parsed.advanceSeconds);
+      run = await simulator.advanceSeconds(parsed.advanceSeconds, advancementOptions);
       assertCurrent(facade, baseline, expectedEpoch, signal);
     }
     facade.app.setStatus?.('Agent requested a bounded MicroDuck physical command');
