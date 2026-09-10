@@ -25,7 +25,8 @@ jobs:
             echo 'Expected the unpatched cancellation regression to fail'; exit 1
           fi
           cat /tmp/microduck-cancellation-before.log
-          grep -q 'Missing expected rejection' /tmp/microduck-cancellation-before.log
+          # The old dispatcher eventually rejects, but only after running all 100 ticks.
+          grep -q '100 !== 2' /tmp/microduck-cancellation-before.log
       - name: Apply narrowly scoped source guards and browser regressions
         run: |
           python3 - <<'PY'
