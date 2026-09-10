@@ -44,6 +44,7 @@ jobs:
           node --check src/task-catalog.js
           node --check tests/physics/microduck-phase5c-core.mjs
           node --check tests/physics/microduck-lifecycle-core.mjs
+          node --check tests/physics/microduck-browser-mesh-vfs-core.mjs
           node --check tests/microduck-phase5c-browser.spec.mjs
           python -m py_compile scripts/generate_microduck_models.py
           python -m py_compile native/microduck_controller_reference.py native/microduck_reference.py native/microduck_bam_reference.py native/microduck_bam_physical_reference.py tests/validate_microduck_bam_evidence.py
@@ -59,6 +60,9 @@ jobs:
 
       - name: MicroDuck session, setup path, cadence, cancellation and lifecycle gates
         run: node tests/physics/microduck-lifecycle-core.mjs
+
+      - name: MicroDuck exact-mesh browser VFS loading contract
+        run: node tests/physics/microduck-browser-mesh-vfs-core.mjs
 
       - name: MicroDuck pinned asset gate
         run: node tests/validate_microduck_assets.mjs
