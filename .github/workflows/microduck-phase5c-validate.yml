@@ -44,8 +44,10 @@ jobs:
           node --check src/task-catalog.js
           node --check tests/physics/microduck-phase5c-core.mjs
           node --check tests/physics/microduck-lifecycle-core.mjs
+          node --check tests/physics/microduck-cancellation-core.mjs
           node --check tests/physics/microduck-browser-mesh-vfs-core.mjs
           node --check tests/microduck-phase5c-browser.spec.mjs
+          node --check tests/microduck-interfaces-browser.spec.mjs
           python -m py_compile scripts/generate_microduck_models.py
           python -m py_compile native/microduck_controller_reference.py native/microduck_reference.py native/microduck_bam_reference.py native/microduck_bam_physical_reference.py tests/validate_microduck_bam_evidence.py
 
@@ -69,6 +71,9 @@ jobs:
           node tests/physics/microduck-interfaces-core.mjs /tmp/microduck-interfaces.json
           python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
           python tests/validate_microduck_interfaces.py /tmp/microduck-interfaces.json
+
+      - name: MicroDuck in-flight cancellation and Agent Access revocation regressions
+        run: node tests/physics/microduck-cancellation-core.mjs
 
       - name: MicroDuck pinned asset gate
         run: node tests/validate_microduck_assets.mjs
