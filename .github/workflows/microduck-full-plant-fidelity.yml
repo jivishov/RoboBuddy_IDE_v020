@@ -8,38 +8,56 @@ on:
       - 'src/physics/microduck-bam-plant.js'
       - 'src/physics/microduck-mujoco-worker.js'
       - 'src/physics/microduck-model-package.js'
+      - 'src/physics/microduck-source-audit.js'
+      - 'src/physics/microduck-capabilities.js'
+      - 'src/physics/microduck-scene.js'
+      - 'src/physics/microduck-physical-simulator.js'
       - 'models/microduck/**'
       - 'assets/microduck/**'
       - 'scripts/generate_microduck_models.py'
+      - 'native/microduck_reference.py'
       - 'native/microduck_bam_reference.py'
       - 'native/microduck_bam_physical_reference.py'
       - 'tests/validate_microduck_assets.mjs'
       - 'tests/validate_microduck_bam_evidence.py'
       - 'tests/validate.mjs'
       - 'tests/physics/microduck-bam-plant-core.mjs'
+      - 'tests/physics/microduck-phase5c-core.mjs'
+      - 'tests/physics/microduck-lifecycle-core.mjs'
+      - 'docs/physics/microduck-provenance.md'
       - 'LICENSE'
       - 'LICENSES/MIT.txt'
       - 'THIRD_PARTY_NOTICES.md'
       - '.github/workflows/import-microduck-source-plant.yml'
+      - '.github/workflows/finalize-microduck-provenance.yml'
       - '.github/workflows/microduck-full-plant-fidelity.yml'
   pull_request:
     paths:
       - 'src/physics/microduck-bam-plant.js'
       - 'src/physics/microduck-mujoco-worker.js'
       - 'src/physics/microduck-model-package.js'
+      - 'src/physics/microduck-source-audit.js'
+      - 'src/physics/microduck-capabilities.js'
+      - 'src/physics/microduck-scene.js'
+      - 'src/physics/microduck-physical-simulator.js'
       - 'models/microduck/**'
       - 'assets/microduck/**'
       - 'scripts/generate_microduck_models.py'
+      - 'native/microduck_reference.py'
       - 'native/microduck_bam_reference.py'
       - 'native/microduck_bam_physical_reference.py'
       - 'tests/validate_microduck_assets.mjs'
       - 'tests/validate_microduck_bam_evidence.py'
       - 'tests/validate.mjs'
       - 'tests/physics/microduck-bam-plant-core.mjs'
+      - 'tests/physics/microduck-phase5c-core.mjs'
+      - 'tests/physics/microduck-lifecycle-core.mjs'
+      - 'docs/physics/microduck-provenance.md'
       - 'LICENSE'
       - 'LICENSES/MIT.txt'
       - 'THIRD_PARTY_NOTICES.md'
       - '.github/workflows/import-microduck-source-plant.yml'
+      - '.github/workflows/finalize-microduck-provenance.yml'
       - '.github/workflows/microduck-full-plant-fidelity.yml'
 
 permissions:
@@ -62,9 +80,15 @@ jobs:
         run: |
           node --check src/physics/microduck-bam-plant.js
           node --check src/physics/microduck-model-package.js
+          node --check src/physics/microduck-source-audit.js
+          node --check src/physics/microduck-capabilities.js
+          node --check src/physics/microduck-scene.js
           node --check src/physics/microduck-mujoco-worker.js
-          python -m py_compile scripts/generate_microduck_models.py native/microduck_bam_reference.py native/microduck_bam_physical_reference.py tests/validate_microduck_bam_evidence.py
+          node --check src/physics/microduck-physical-simulator.js
+          python -m py_compile scripts/generate_microduck_models.py native/microduck_reference.py native/microduck_bam_reference.py native/microduck_bam_physical_reference.py tests/validate_microduck_bam_evidence.py
           node tests/physics/microduck-bam-plant-core.mjs
+          node tests/physics/microduck-phase5c-core.mjs
+          node tests/physics/microduck-lifecycle-core.mjs
           python scripts/generate_microduck_models.py --check
           node tests/validate_microduck_assets.mjs
           node tests/validate.mjs
