@@ -24,7 +24,14 @@ function assertSceneMatchesPackage(scene, modelPackage) {
 }
 
 export class BrowserMuJoCoBackend {
-  constructor({ workerUrl = new URL('./mujoco-worker.js', import.meta.url) } = {}) {
+  // `setupOperations` opts a backend into the declared setup path: a small, explicitly
+  // allowlisted set of operations that may write physical state directly. It exists so a
+  // pre-trial perturbation - start the robot face-down, place an object, cut motor torque -
+  // is a separate, logged operation rather than something smuggled through ordinary control.
+  // Backends that do not declare it reject setup entirely, so no robot gains a state-writing
+  // path by accident.
+  constructor({ workerUrl = new URL('./mujoco-worker.js', import.meta.url), setupOperations = [] } = {}) {
+    this.setupOperations = new Set(setupOperations);
     this.workerUrl = workerUrl; this.worker = null; this.sequence = 0; this.pending = new Map(); this.loaded = false; this.disposed = false;
     this.sceneRevision = null; this.robotId = null; this.modelPackageId = null; this.lastObservation = null; this.lastScene = null;
     this.sessionId = null; this.epoch = 0; this.state = PhysicsBackendState.IDLE; this.trace = []; this.generation = 0; this.commandBudget = null;
@@ -81,6 +88,32 @@ export class BrowserMuJoCoBackend {
     this.state = wasPaused ? PhysicsBackendState.PAUSED : PhysicsBackendState.READY;
     this.#record('command', { commandId: envelope.commandId, command: structuredClone(envelope.command), maxSteps: envelope.maxSteps, remainingSteps: this.commandBudget?.remainingSteps ?? null, observation });
     return { status: 'accepted', commandId: envelope.commandId, remainingSteps: this.commandBudget?.remainingSteps ?? null, observation };
+  }
+
+  // The declared setup path. It is deliberately not part of the command envelope: setup
+  // establishes a new initial condition, so it takes no command budget, is refused while a
+  // command budget is outstanding, and is recorded in the trace under its own event type.
+  // The worker validates every operation and stamps it into the observation's setup log, so
+  // a run that began from a perturbation can never present itself as a nominal one.
+  async applySetup(payload = {}, context = {}) {
+    this.#assertLoaded(); this.#assertContext(context);
+    const type = String(payload?.type || '');
+    if (!this.setupOperations.has(type)) throw new Error(`Setup operation ${type || '<missing>'} is not declared by this backend`);
+    // Refused only while a bounded command still has steps left to run. A budget that has
+    // been fully spent is finished, not active - treating it as active would make every
+    // declared perturbation after the first advance impossible.
+    if (this.commandBudget && this.commandBudget.remainingSteps > 0) throw new Error('Setup may not run while a bounded command is still executing');
+    const generation = this.generation;
+    try {
+      const raw = await this.#call('setup', payload); this.#assertGeneration(generation, context);
+      const observation = this.#decorateObservation(raw);
+      this.lastObservation = observation;
+      this.#record('setup', { setup: structuredClone(payload), observation });
+      return observation;
+    } catch (error) {
+      if (generation === this.generation && this.loaded) this.#failLoadedScene('setup failed');
+      throw error;
+    }
   }
 
   async advanceSteps(stepCount = 1, context = {}) {
@@ -204,7 +237,19 @@ export class BrowserMuJoCoBackend {
     if (!Number.isFinite(simulationTimeSeconds) || simulationTimeSeconds < 0) throw new Error('MuJoCo returned invalid simulation time');
     if (!Number.isFinite(timestepSeconds) || timestepSeconds <= 0) throw new Error('MuJoCo returned invalid timestep');
     if (!/^[0-9a-f]{64}$/.test(modelSha256)) throw new Error('MuJoCo worker did not provide a valid model SHA-256');
-    return { schemaVersion: PHYSICS_BACKEND_API_VERSION, sessionId: this.sessionId, epoch: this.epoch, simulationTimeSeconds, view, robotId: this.robotId, frames: { world: structuredClone(WORLD_FRAME) }, model: { id: String(raw.model?.id || ''), asset: String(raw.model?.asset || ''), sha256: modelSha256 }, engine: { name: 'MuJoCo', version: raw.engine?.version == null ? null : String(raw.engine.version), versionEvidence: String(raw.engine?.versionEvidence || 'unknown'), timestepSeconds }, joints: structuredClone(raw.joints || {}), bodies: structuredClone(raw.bodies || {}), contactCount: Math.max(0, Number(raw.contactCount) || 0), contactsReadable: Boolean(raw.contactsReadable), contacts: structuredClone(Array.isArray(raw.contacts) ? raw.contacts : []), sensors: {} };
+    return { schemaVersion: PHYSICS_BACKEND_API_VERSION, sessionId: this.sessionId, epoch: this.epoch, simulationTimeSeconds, view, robotId: this.robotId, frames: { world: structuredClone(WORLD_FRAME) }, model: { id: String(raw.model?.id || ''), asset: String(raw.model?.asset || ''), sha256: modelSha256 }, engine: { name: 'MuJoCo', version: raw.engine?.version == null ? null : String(raw.engine.version), versionEvidence: String(raw.engine?.versionEvidence || 'unknown'), timestepSeconds }, joints: structuredClone(raw.joints || {}), bodies: structuredClone(raw.bodies || {}), contactCount: Math.max(0, Number(raw.contactCount) || 0), contactsReadable: Boolean(raw.contactsReadable), contacts: structuredClone(Array.isArray(raw.contacts) ? raw.contacts : []), sensors: raw.imu ? { imu: structuredClone(raw.imu) } : {},
+      // Present only on backends whose worker reports them. They carry the physical facts a
+      // free-base locomotion controller needs and the honesty flags a reviewer needs: which
+      // named foot geoms are actually touching the floor or the ball, whether the actuators
+      // are producing force at all, and the log of every declared setup intervention.
+      footContacts: raw.footContacts ? structuredClone(raw.footContacts) : null,
+      actuationEnabled: raw.actuationEnabled === undefined ? null : Boolean(raw.actuationEnabled),
+      // The servo gain the authority actually applied, and the force it produced. Published
+      // because "actuation disabled" is only believable if the force can be read as zero.
+      firmwareGain: raw.firmwareGain === undefined ? null : Number(raw.firmwareGain),
+      appliedServoKp: raw.appliedServoKp === undefined ? null : Number(raw.appliedServoKp),
+      actuatorForceTotalNm: raw.actuatorForceTotalNm === undefined ? null : Number(raw.actuatorForceTotalNm),
+      setupLog: Array.isArray(raw.setupLog) ? structuredClone(raw.setupLog) : [] };
   }
 
   #executedSteps(previousTime, nextTime, timestep) {

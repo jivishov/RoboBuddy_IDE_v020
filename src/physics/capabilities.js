@@ -1,4 +1,5 @@
 import { EXECUTION_BACKENDS, MODEL_EVIDENCE, capabilityRecord } from './model-registry.js';
+import { MICRODUCK_LEGACY_CAPABILITY, MICRODUCK_PHYSICAL_CAPABILITY } from './microduck-capabilities.js';
 
 const LEGACY_LIMITS = Object.freeze([
   'Physical MuJoCo backend not yet active for this workspace.',
@@ -39,7 +40,7 @@ export const PHYSICS_PREVIEW_CAPABILITIES = Object.freeze({
     ],
   }),
   unitree: capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'kinematic joint-pose inspection only', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: ['No dynamic balance or walking controller is active.', 'No physical contact plant is active.', 'No hardware-validation claim is made.'] }),
-  microduck: capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'legacy policy demonstrator', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: ['Approximate browser dynamics remain active until the matched model/controller migration is complete.', 'No RL-environment, locomotion, contact, or hardware-parity claim is made.'] }),
+  microduck: MICRODUCK_PHYSICAL_CAPABILITY,
 });
 
 // LeKiwi is the one profile that still exposes a legacy source-plant workspace beside its physical
@@ -54,6 +55,10 @@ export const LEKIWI_LEGACY_CAPABILITY = capabilityRecord({
 
 export function physicsCapabilityFor(profileId, { physical = true } = {}) {
   if (profileId === 'lekiwi' && !physical) return LEKIWI_LEGACY_CAPABILITY;
+  // MicroDuck keeps its reference-aligned policy demonstrator beside the new physical
+  // workspace. The demonstrator is selected deliberately, never as a fallback, and it must
+  // never inherit the physical workspace's badge.
+  if (profileId === 'microduck' && !physical) return MICRODUCK_LEGACY_CAPABILITY;
   return PHYSICS_PREVIEW_CAPABILITIES[profileId] || capabilityRecord({ backend: EXECUTION_BACKENDS.LEGACY, capability: 'unsupported physical workspace', evidence: MODEL_EVIDENCE.MODEL_DERIVED, limitations: LEGACY_LIMITS });
 }
 export function capabilityLabel(record) { return `${record.backend} · ${record.evidence}`; }

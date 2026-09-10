@@ -4,6 +4,7 @@ import { createMicroduckVisualCueSchema } from './microduck-visual-cues.js';
 import { executeProfileControl, getProfileControlDefinition } from './robot-controls.js';
 import { executeOpenArmPhysicalControl, getOpenArmPhysicalControlDefinition } from './openarm-physical-control.js';
 import { executeLeKiwiPhysicalControl, getLeKiwiPhysicalControlDefinition } from './lekiwi-physical-control.js';
+import { executeMicroDuckPhysicalControl, getMicroDuckPhysicalControlDefinition } from './microduck-physical-control.js';
 
 const READ_ONLY_ANNOTATIONS = Object.freeze({ readOnlyHint: true, untrustedContentHint: true });
 const UI_ONLY_ANNOTATIONS = Object.freeze({ readOnlyHint: false, untrustedContentHint: true });
@@ -96,6 +97,10 @@ function createTools(facade, epoch) {
   if (openarmControl) tools.push({ ...openarmControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeOpenArmPhysicalControl(facade, input, signal, epoch)) });
   const lekiwiControl = getLeKiwiPhysicalControlDefinition(facade);
   if (lekiwiControl) tools.push({ ...lekiwiControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeLeKiwiPhysicalControl(facade, input, signal, epoch)) });
+  // Present only for the ready MicroDuck PHYSICAL workspace. The legacy demonstrator keeps
+  // its own separate tool, so a physical badge can never sit on a synthetic command path.
+  const microduckPhysicalControl = getMicroDuckPhysicalControlDefinition(facade);
+  if (microduckPhysicalControl) tools.push({ ...microduckPhysicalControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeMicroDuckPhysicalControl(facade, input, signal, epoch)) });
 
   if (facade.shouldRegisterMicroduckControl()) {
     tools.push({

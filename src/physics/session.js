@@ -69,6 +69,19 @@ export class PhysicsSession {
     return result;
   }
 
+  // A declared pre-trial intervention: an initial orientation, an object placement, a
+  // torque-off condition. It establishes a new initial condition rather than advancing the
+  // task, so it is a distinct session operation from sendCommand, it publishes its
+  // observation tagged as setup, and the backend refuses it unless the operation is on that
+  // backend's declared allowlist.
+  async applySetup(payload) {
+    this.#assertLoaded();
+    if (typeof this.backend.applySetup !== 'function') throw new Error('This physics backend declares no setup path');
+    const observation = await this.#runLoadedOperation(() => this.backend.applySetup(structuredClone(payload), this.#context()));
+    this.#publishObservation(observation, 'applySetup');
+    return observation;
+  }
+
   async advanceSteps(steps) {
     this.#assertLoaded();
     if (!Number.isInteger(steps) || steps < 1) throw new RangeError('steps must be a positive integer');
