@@ -90,6 +90,10 @@ assert(/updateBamBeforePhysicsStep/.test(worker), 'BAM is not applied at every p
 assert(/MicroDuckDeploymentImuFilter/.test(worker), 'deployed IMU median filter disappeared');
 assert(!/applyFirmwareGain\(/.test(worker), 'legacy position-kp actuation path returned');
 assert(/passiveBamFrictionRetained: true/.test(worker), 'motor-off stopped declaring retained passive gearbox friction');
+// Scheduled controller gain and effective physical gain are deliberately separate. A
+// torque-off must not continue to advertise 200/160 as the gain physically in effect.
+assert(/firmwareGain:\s*actuationEnabled\s*\?\s*appliedFirmwareGain\s*:\s*0/.test(worker), 'torque-off no longer reports zero effective firmware gain');
+assert(/microDuckBamSmallSignalKpNmRad\(actuationEnabled\s*\?\s*appliedFirmwareGain\s*:\s*0,\s*effectiveVinV\)/.test(worker), 'torque-off no longer reports zero effective BAM small-signal gain');
 
 const referencePath = process.argv[2];
 if (referencePath) {
