@@ -1,0 +1,56 @@
+name: MicroDuck ground repair
+on:
+  push:
+    branches: [repair/microduck-ground-contact]
+    paths: [.github/workflows/microduck-ground-repair.yml]
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Record baseline physical and baked visual frames
+        run: |
+          pip install --disable-pip-version-check 'mujoco==3.11.0' numpy
+          python - <<'PY'
+          import mujoco, json
+          for name in ['walk', 'groundcontact', 'kick']:
+              m = mujoco.MjModel.from_xml_path(f'models/microduck/{name}.xml')
+              d = mujoco.MjData(m)
+              if m.nkey: mujoco.mj_resetDataKeyframe(m, d, 0)
+              mujoco.mj_forward(m, d)
+              print('PLANT', name, 'qpos', d.qpos.tolist(), 'contacts', d.ncon)
+              for i in range(m.nbody):
+                  n = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_BODY, i)
+                  if n in ['trunk_base','foot_left','foot_right','ankle_left','ankle_right']:
+                      print('BODY', n, d.xpos[i].tolist(), d.xquat[i].tolist())
+              for i in range(m.ngeom):
+                  n = mujoco.mj_id2name(m, mujoco.mjtObj.mjOBJ_GEOM, i)
+                  if n and any(w in n for w in ['sole','floor']):
+                      print('GEOM', n, d.geom_xpos[i].tolist(), 'type', int(m.geom_type[i]))
+          PY
+          node --input-type=module - <<'JS'
+          import fs from 'node:fs';
+          import {decodeMicroDuckBakedVisual} from './src/microduck/baked-visual.js';
+          const b = fs.readFileSync('assets/microduck/visual/duck.bin');
+          const v = decodeMicroDuckBakedVisual(b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength));
+          console.log('BAKED_ROOT', JSON.stringify(v.bodies[0]));
+          const d=JSON.parse(fs.readFileSync('assets/microduck/generated/procedural-rig.json'));
+          console.log('ATTACHMENTS',JSON.stringify(d.configuredAttachments));
+          JS
+      - name: Export exact source snapshot for offline inspection
+        run: git archive --format=zip HEAD -o /tmp/robobuddy-source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: microduck-ground-source
+          path: /tmp/robobuddy-source.zip
+          retention-days: 3
