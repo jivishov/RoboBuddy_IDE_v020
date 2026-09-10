@@ -1,7 +1,7 @@
 import { LIVE_SIM_API_VERSION } from './live-python-bridge.js';
 import { MICRODUCK_MAX_ADVANCE_SECONDS } from '../physics/microduck-physical-simulator.js';
 import { MICRODUCK_CONTROL_INTERVAL_SECONDS, MICRODUCK_POLICY_JOINT_ORDER } from '../physics/microduck-controller.js';
-import { MICRODUCK_CAPABILITY_AUDIT, microduckCapability } from '../physics/microduck-capabilities.js';
+import { MICRODUCK_CAPABILITY_AUDIT, MICRODUCK_PHYSICAL_SKILL_IDS, MICRODUCK_UNSUPPORTED_CAPABILITIES, microduckCapability } from '../physics/microduck-capabilities.js';
 import { MICRODUCK_COMMAND_LIMITS, MICRODUCK_GAIT_ONSET_MS } from '../physics/microduck-scene.js';
 
 // The live-Python bridge for the MicroDuck physical workspace.
@@ -17,7 +17,7 @@ import { MICRODUCK_COMMAND_LIMITS, MICRODUCK_GAIT_ONSET_MS } from '../physics/mi
 // decision and the actual physical state, so a program cannot mistake one for another.
 
 const COMMAND_FIELDS = Object.freeze(['vx', 'vy', 'vyaw', 'neckPitch', 'headPitch', 'headYaw', 'headRoll', 'bodyZ', 'bodyRoll', 'bodyPitch']);
-const SKILL_IDS = Object.freeze(MICRODUCK_CAPABILITY_AUDIT.map((item) => item.id));
+const SKILL_IDS = Object.freeze([...MICRODUCK_PHYSICAL_SKILL_IDS, ...MICRODUCK_UNSUPPORTED_CAPABILITIES]);
 
 function liveError(code, message, details = null) {
   const error = new Error(message);
@@ -27,8 +27,8 @@ function liveError(code, message, details = null) {
 }
 
 function finiteNonNegative(value, label) {
-  const number = Number(value);
-  if (!Number.isFinite(number) || number < 0) throw new RangeError(`${label} must be a finite non-negative number`);
+  const number = value;
+  if (typeof number !== 'number' || !Number.isFinite(number) || number < 0) throw new RangeError(`${label} must be a finite non-negative number`);
   return number;
 }
 
@@ -58,6 +58,7 @@ export class MicroDuckPhysicalBridge {
       ...structuredClone(this.owner),
       backend: 'browser-mujoco',
       commandFields: [...COMMAND_FIELDS],
+      skillCommands: [...MICRODUCK_PHYSICAL_SKILL_IDS],
       commandLimits: structuredClone(MICRODUCK_COMMAND_LIMITS),
       gaitOnsetMS: MICRODUCK_GAIT_ONSET_MS,
       controlIntervalSeconds: MICRODUCK_CONTROL_INTERVAL_SECONDS,
@@ -83,23 +84,25 @@ export class MicroDuckPhysicalBridge {
     let advanceSeconds = 0;
     for (const [key, raw] of Object.entries(action)) {
       if (key === 'skill') {
-        skill = String(raw);
-        if (!SKILL_IDS.includes(skill)) throw liveError('INVALID_ARGUMENT', `Unknown MicroDuck capability: ${skill}`);
+        skill = raw;
+        if (typeof skill !== 'string' || !SKILL_IDS.includes(skill)) throw liveError('INVALID_ARGUMENT', 'Unknown MicroDuck skill command; use sit or stand_up for sit/stand');
         continue;
       }
       if (key === 'advance_seconds') { advanceSeconds = finiteNonNegative(raw, 'advance_seconds'); continue; }
       if (!COMMAND_FIELDS.includes(key)) throw liveError('INVALID_ARGUMENT', `Unknown MicroDuck command field: ${key}`);
-      const value = Number(raw);
-      if (!Number.isFinite(value)) throw liveError('INVALID_ARGUMENT', `${key} must be finite`);
+      const value = raw;
+      if (typeof value !== 'number' || !Number.isFinite(value)) throw liveError('INVALID_ARGUMENT', `${key} must be a finite number`);
       request[key] = value;
     }
     if (advanceSeconds > MICRODUCK_MAX_ADVANCE_SECONDS) throw new RangeError(`advance_seconds is bounded to ${MICRODUCK_MAX_ADVANCE_SECONDS} simulated seconds per call`);
     void maxSteps;
 
-    const accepted = Object.keys(request).length ? this.simulator.setCommand(request) : null;
+    // Validate the entire combined action before latching either part. A rejected
+    // skill must not leave its accompanying velocity command running.
+    if (Object.keys(request).length) this.simulator.validateCommand(request);
     let skillResult = null;
     if (skill) {
-      skillResult = this.simulator.requestSkill(skill);
+      skillResult = this.simulator.validateSkillRequest(skill);
       if (!skillResult.accepted) {
         const capability = microduckCapability(skill);
         const plantMismatch = skillResult.status === 'wrong-plant';
@@ -108,8 +111,11 @@ export class MicroDuckPhysicalBridge {
         });
       }
     }
+    const accepted = Object.keys(request).length ? this.simulator.setCommand(request) : null;
+    if (skill) skillResult = this.simulator.requestSkill(skill);
     let run = null;
     if (advanceSeconds > 0) run = await this.simulator.advanceSeconds(advanceSeconds);
+    this.#assertOwner();
     return {
       apiVersion: LIVE_SIM_API_VERSION,
       status: 'accepted',
@@ -159,18 +165,32 @@ export class MicroDuckPhysicalBridge {
    */
   async waitForGoal(goal = {}, { timeoutSeconds = 2, controllerPeriodSeconds = MICRODUCK_CONTROL_INTERVAL_SECONDS } = {}) {
     this.#assertOwner();
-    const timeout = Math.min(finiteNonNegative(timeoutSeconds, 'timeout_seconds'), MICRODUCK_MAX_ADVANCE_SECONDS);
-    const period = Math.max(MICRODUCK_CONTROL_INTERVAL_SECONDS, finiteNonNegative(controllerPeriodSeconds, 'controller_period_seconds'));
-    const upright = goal?.upright !== false;
-    const deadlineTicks = Math.max(1, Math.round(timeout / period));
-    let reached = false;
-    for (let tick = 0; tick < deadlineTicks; tick += 1) {
-      await this.simulator.advanceSeconds(period);
-      const report = this.simulator.report();
-      if (upright && report?.upright) { reached = true; break; }
-      if (this.simulator.cancelled) break;
+    if (!goal || typeof goal !== 'object' || Array.isArray(goal) || Object.keys(goal).some((key) => key !== 'upright')
+      || (goal.upright !== undefined && typeof goal.upright !== 'boolean')) {
+      throw liveError('INVALID_ARGUMENT', 'MicroDuck wait_for_goal supports only an upright boolean goal');
     }
-    return { ...this.getObservation(), reached, timedOut: !reached, timeoutSeconds: timeout };
+    const timeout = Math.min(finiteNonNegative(timeoutSeconds, 'timeout_seconds'), MICRODUCK_MAX_ADVANCE_SECONDS);
+    const period = finiteNonNegative(controllerPeriodSeconds, 'controller_period_seconds');
+    const dt = MICRODUCK_CONTROL_INTERVAL_SECONDS;
+    // Use whole controller ticks, flooring the budget so a wait never exceeds its timeout.
+    const budgetTicks = Math.floor(timeout / dt + 1e-10);
+    const periodTicks = Math.max(1, Math.min(Math.floor(MICRODUCK_MAX_ADVANCE_SECONDS / dt), Math.floor(period / dt + 1e-10)));
+    const desired = goal.upright !== false;
+    const goalReached = () => this.simulator.report()?.upright === desired;
+    let reached = goalReached();
+    let elapsedTicks = 0;
+    let interrupted = false;
+    while (!reached && elapsedTicks < budgetTicks) {
+      this.#assertOwner();
+      const ticks = Math.min(periodTicks, budgetTicks - elapsedTicks);
+      const run = await this.simulator.advanceSeconds(ticks * dt);
+      this.#assertOwner();
+      elapsedTicks += run.executedTicks;
+      reached = goalReached();
+      if (!run.completed) { interrupted = true; break; }
+    }
+    return { ...this.getObservation(), reached, timedOut: !reached && !interrupted,
+      interrupted, timeoutSeconds: timeout, simulatedSeconds: elapsedTicks * dt };
   }
 
   async pause() { this.#assertOwner(); await this.simulator.pause(); return { paused: true }; }
@@ -205,7 +225,8 @@ export class MicroDuckPhysicalBridge {
     if (this.cancelled) throw liveError('OPERATION_CANCELLED', 'This MicroDuck run was cancelled');
     const authority = this.simulator.getPhysicalAuthorityToken?.();
     if (!authority?.sessionId) throw liveError('SIMULATION_NOT_READY', 'MicroDuck PhysicsSession authority is unavailable');
-    if (authority.sessionId !== this.owner.sessionId || authority.sceneRevision !== this.owner.sceneRevision || authority.robotId !== this.owner.robotId) {
+    if (authority.sessionId !== this.owner.sessionId || authority.sceneRevision !== this.owner.sceneRevision || authority.robotId !== this.owner.robotId
+      || authority.epoch !== this.owner.epoch || this.simulator.runEpoch !== this.owner.runEpoch) {
       throw liveError('OPERATION_CANCELLED', 'The MicroDuck physical session was replaced during this run');
     }
   }

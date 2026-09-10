@@ -17,7 +17,7 @@ import {
   MICRODUCK_CAPABILITY_AUDIT, MICRODUCK_PHYSICAL_CAPABILITY, MICRODUCK_PHYSICAL_PACKAGES,
   MICRODUCK_PHYSICAL_POLICIES, assertMicroDuckCompatibility, isPhysicallySupported,
   microduckCapability, microduckCompatibilityIdentity, microduckPackageSupportsCapability,
-  microduckRequiredPackageKeys,
+  microduckRequiredPackageKeys, MICRODUCK_PHYSICAL_SKILL_IDS,
 } from './microduck-capabilities.js';
 import { MICRODUCK_GAIT_ONSET_MS, MICRODUCK_SCENES, boundedMicroDuckCommand } from './microduck-scene.js';
 import { MicroDuckPhysicalEvaluator, tiltDegrees } from './microduck-task-evaluator.js';
@@ -206,13 +206,19 @@ export class MicroDuckPhysicalSimulator {
   }
 
   // ------------------------------------------------------------ command surface
-  /** Latch a bounded command. Accepting it is not achieving it. */
-  setCommand(requested = {}) {
+  /** Validate without mutating command, controller or evaluator state. */
+  validateCommand(requested = {}) {
     this.#assertLoaded();
     const { command, limitedBy } = boundedMicroDuckCommand(requested);
     if (!['walk', 'lowTraction'].includes(this.packageKey) && command.twist.some((value) => Math.abs(value) > 1e-12)) {
       throw new Error(`MicroDuck collision-plant mismatch: non-zero velocity commands require the walk plant; active package is ${this.packageKey}`);
     }
+    return { command, limitedBy };
+  }
+
+  /** Latch a bounded command. Accepting it is not achieving it. */
+  setCommand(requested = {}) {
+    const { command, limitedBy } = this.validateCommand(requested);
     this.requested = command;
     this.requestedLimitedBy = limitedBy;
     this.evaluator = new MicroDuckPhysicalEvaluator({ commandedTwist: command.twist });
@@ -223,9 +229,9 @@ export class MicroDuckPhysicalSimulator {
    * Ask for a skill. An unsupported capability is refused here and routed nowhere: the
    * physical workspace has no legacy dynamics to fall back to.
    */
-  requestSkill(skill) {
+  validateSkillRequest(skill) {
     this.#assertLoaded();
-    const capability = microduckCapability(skill) || MICRODUCK_CAPABILITY_AUDIT.find((item) => item.physicalPolicy === skill);
+    const capability = microduckCapability(skill);
     if (capability && !capability.physicalPolicy) {
       return { accepted: false, status: 'unsupported', capability: capability.id, reason: capability.evidence };
     }
@@ -236,9 +242,17 @@ export class MicroDuckPhysicalSimulator {
         reason: `${capability.id} requires MicroDuck collision plant ${requiredPackageKeys.join(' or ')}; active package is ${this.packageKey}`,
       };
     }
-    const started = this.controller.requestSkill(skill);
-    if (!started) return { accepted: false, status: 'unsupported', capability: skill, reason: `${skill} is not a physical skill of this workspace` };
-    return { accepted: true, status: 'running', capability: capability?.id ?? skill };
+    if (!MICRODUCK_PHYSICAL_SKILL_IDS.includes(skill) || !this.controller.hasPolicy(capability?.physicalPolicy)) {
+      return { accepted: false, status: 'unsupported', capability: skill, reason: `${skill} is not a physical skill command; use sit or stand_up for the sit_stand capability` };
+    }
+    return { accepted: true, status: 'available', capability: capability.id };
+  }
+
+  requestSkill(skill) {
+    const result = this.validateSkillRequest(skill);
+    if (!result.accepted) return result;
+    if (!this.controller.requestSkill(skill)) return { accepted: false, status: 'unsupported', capability: skill, reason: 'The controller refused the skill' };
+    return { ...result, status: 'running' };
   }
 
   // -------------------------------------------------------------- declared setup
@@ -280,14 +294,28 @@ export class MicroDuckPhysicalSimulator {
   }
 
   /** Settle a perturbation with the servos holding the home pose. Logged, not evaluated. */
-  async settle(seconds) {
+  async settle(seconds, { assertActive = null } = {}) {
     this.#assertLoaded();
+    if (assertActive !== null && typeof assertActive !== 'function') throw new TypeError('assertActive must be a synchronous guard function');
+    assertActive?.();
     const steps = Math.max(1, Math.round(Number(seconds) / this.modelPackage.physics.timestepSeconds));
     const targetsRad = Object.fromEntries(
       MICRODUCK_POLICY_JOINT_ORDER.map((id) => [id, this.modelPackage.initialJointPositionsRad[id]]),
     );
-    await this.session.sendCommand({ type: 'set_joint_targets', targetsRad }, { maxSteps: steps });
-    await this.session.advanceSteps(steps);
+    const session = this.session;
+    await session.sendCommand({ type: 'set_joint_targets', targetsRad }, { maxSteps: steps });
+    assertActive?.();
+    // A worker batch already submitted cannot be retracted. Guarded callers submit
+    // at most one controller interval (20 ms) at a time, never the whole settle budget.
+    // The target frame and every physics step are unchanged; no policy runs here.
+    const batchSize = assertActive ? MICRODUCK_CONTROL_DECIMATION : steps;
+    for (let remaining = steps; remaining > 0;) {
+      assertActive?.();
+      const batch = Math.min(batchSize, remaining);
+      await session.advanceSteps(batch);
+      remaining -= batch;
+      assertActive?.();
+    }
     this.controller.reset();
     this.evaluator = new MicroDuckPhysicalEvaluator({ commandedTwist: this.requested.twist });
     return this.lastObservation;
@@ -303,8 +331,13 @@ export class MicroDuckPhysicalSimulator {
    * required control or physics step is dropped to keep up with wall-clock time - a slow
    * machine reports a lower real-time factor, it does not get a different trajectory.
    */
-  async advanceSeconds(seconds, { bodyActive = false, onTick = null } = {}) {
+  async advanceSeconds(seconds, { bodyActive = false, onTick = null, assertActive = null } = {}) {
     this.#assertLoaded();
+    // Optional synchronous ownership/cancellation guard. It must run on BOTH sides
+    // of awaited work, especially inference, before committing controller feedback
+    // or submitting more commands. A rejected call does not poison the next one.
+    if (assertActive !== null && typeof assertActive !== 'function') throw new TypeError('assertActive must be a synchronous guard function');
+    assertActive?.();
     const duration = Number(seconds);
     if (!Number.isFinite(duration) || duration <= 0) throw new RangeError('advanceSeconds requires a positive duration');
     if (duration > MICRODUCK_MAX_ADVANCE_SECONDS) throw new RangeError(`advanceSeconds is bounded to ${MICRODUCK_MAX_ADVANCE_SECONDS} simulated seconds per call`);
@@ -314,8 +347,11 @@ export class MicroDuckPhysicalSimulator {
     let executedTicks = 0;
     let lastStep = null;
     for (let tick = 0; tick < ticks; tick += 1) {
+      assertActive?.();
       if (this.cancelled || epoch !== this.runEpoch) break;
       const observation = this.lastObservation || await this.session.getObservation();
+      assertActive?.();
+      if (this.cancelled || epoch !== this.runEpoch) break;
       const pending = this.controller.beginTick({
         observation: {
           gyroRadS: observation.sensors?.imu?.gyroRadS,
@@ -327,6 +363,7 @@ export class MicroDuckPhysicalSimulator {
         bodyActive,
       });
       const rawAction = await this.policyRuntime.infer(pending.policyId, pending.observation);
+      assertActive?.();
       // A run that was cancelled or replaced while inference was in flight must not write
       // targets into the next workspace.
       if (this.cancelled || epoch !== this.runEpoch) break;
@@ -341,9 +378,12 @@ export class MicroDuckPhysicalSimulator {
         { type: 'set_joint_targets', targetsRad: { ...lastStep.targetsRad }, firmwareGain: lastStep.gain },
         { maxSteps: MICRODUCK_CONTROL_DECIMATION },
       );
+      assertActive?.();
+      if (this.cancelled || epoch !== this.runEpoch) break;
       await this.session.advanceSteps(MICRODUCK_CONTROL_DECIMATION);
       executedTicks += 1;
       if (typeof onTick === 'function') onTick({ tick, step: lastStep, observation: this.lastObservation });
+      assertActive?.();
     }
     return {
       requestedSeconds: duration,
@@ -400,9 +440,10 @@ export class MicroDuckPhysicalSimulator {
           footContacts: observation.footContacts ? structuredClone(observation.footContacts) : null,
           ballPositionM: observation.bodies?.[MICRODUCK_BALL_BODY]?.positionM ?? null,
           actuationEnabled: observation.actuationEnabled,
-          // The servo gain the authority actually applied and the force it produced. The
-          // controller view above reports the gain it ASKED for; this is what physics used.
-          // Both are published because a torque-off is only believable if the force reads zero.
+          // The effective BAM firmware gain and actual actuator force come from the physical
+          // authority. The controller view above reports the scheduled gain it ASKED for.
+          // `appliedServoKp` is retained only as the source-XML equivalent compatibility
+          // diagnostic; BAM torque physics does not use that fallback PD stiffness.
           firmwareGain: observation.firmwareGain ?? null,
           appliedServoKp: observation.appliedServoKp ?? null,
           actuatorForceTotalNm: observation.actuatorForceTotalNm ?? null,

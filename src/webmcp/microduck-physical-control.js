@@ -1,5 +1,5 @@
 import { PROFILES } from '../profiles.js';
-import { MICRODUCK_CAPABILITY_AUDIT, MICRODUCK_CAPABILITY_STATUS, microduckCapability } from '../physics/microduck-capabilities.js';
+import { MICRODUCK_CAPABILITY_AUDIT, MICRODUCK_CAPABILITY_STATUS, MICRODUCK_PHYSICAL_SKILL_IDS, microduckCapability } from '../physics/microduck-capabilities.js';
 import { MICRODUCK_COMMAND_LIMITS, MICRODUCK_GAIT_ONSET_MS } from '../physics/microduck-scene.js';
 import { MICRODUCK_MAX_ADVANCE_SECONDS } from '../physics/microduck-physical-simulator.js';
 import { MICRODUCK_CONTROL_INTERVAL_SECONDS } from '../physics/microduck-controller.js';
@@ -17,11 +17,7 @@ const L = MICRODUCK_COMMAND_LIMITS;
 // Only capabilities the physical package actually carries are commandable. Roller-mode
 // locomotion and roller crouch are absent by construction, and are reported as unsupported
 // rather than routed to the legacy demonstrator.
-const PHYSICAL_SKILLS = Object.freeze(
-  MICRODUCK_CAPABILITY_AUDIT
-    .filter((item) => item.physicalPolicy && !['stand', 'walk', 'recovery'].includes(item.id))
-    .map((item) => item.id),
-);
+const PHYSICAL_SKILLS = MICRODUCK_PHYSICAL_SKILL_IDS;
 const UNSUPPORTED_SKILLS = Object.freeze(
   MICRODUCK_CAPABILITY_AUDIT.filter((item) => !item.physicalPolicy).map((item) => item.id),
 );
@@ -54,6 +50,9 @@ export function createMicroDuckPhysicalControlSchema() {
   const version = { type: 'string', const: WEBMCP_MICRODUCK_PHYSICAL_SCHEMA_VERSION };
   return {
     type: 'object',
+    // Root closure sees only sibling properties, not properties inside oneOf.
+    // Each command branch below still rejects fields from all other branches.
+    properties: { schema_version: version, command: { type: 'string' }, request: {}, skill: {}, advance_seconds: {}, perturbation: {}, settle_seconds: {} },
     oneOf: [
       {
         type: 'object',
@@ -66,7 +65,7 @@ export function createMicroDuckPhysicalControlSchema() {
         properties: {
           schema_version: version,
           command: { type: 'string', const: 'request_skill' },
-          skill: { type: 'string', enum: [...PHYSICAL_SKILLS, ...UNSUPPORTED_SKILLS], description: 'a capability id; unsupported ids are rejected explicitly rather than routed elsewhere' },
+          skill: { type: 'string', enum: [...PHYSICAL_SKILLS, ...UNSUPPORTED_SKILLS], description: 'an explicit controller command (sit or stand_up for sit/stand); unsupported roller ids are rejected without a legacy fallback' },
           advance_seconds: advance,
         },
         required: ['schema_version', 'command', 'skill'],
@@ -121,12 +120,12 @@ function parse(input) {
   plain(input);
   if (input.schema_version !== WEBMCP_MICRODUCK_PHYSICAL_SCHEMA_VERSION) invalid(`schema_version must be ${WEBMCP_MICRODUCK_PHYSICAL_SCHEMA_VERSION}.`);
   const advanceOf = (value, required = false) => {
-    if (value == null) {
+    if (value === undefined) {
       if (required) invalid('advance_seconds is required for this command.');
       return 0;
     }
-    const seconds = Number(value);
-    if (!Number.isFinite(seconds) || seconds < 0 || seconds > MICRODUCK_MAX_ADVANCE_SECONDS) invalid(`advance_seconds must be between 0 and ${MICRODUCK_MAX_ADVANCE_SECONDS}.`);
+    const seconds = value;
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0 || seconds > MICRODUCK_MAX_ADVANCE_SECONDS) invalid(`advance_seconds must be between 0 and ${MICRODUCK_MAX_ADVANCE_SECONDS}.`);
     return seconds;
   };
   if (input.command === 'reset' || input.command === 'stop') {
@@ -144,7 +143,7 @@ function parse(input) {
   }
   if (input.command === 'request_skill') {
     onlyKeys(input, ['schema_version', 'command', 'skill', 'advance_seconds']);
-    if (typeof input.skill !== 'string' || !input.skill) invalid('skill must be a capability id.');
+    if (![...PHYSICAL_SKILLS, ...UNSUPPORTED_SKILLS].includes(input.skill)) invalid('skill must be a supported command id; use sit or stand_up for sit/stand.');
     return { command: 'request_skill', skill: input.skill, advanceSeconds: advanceOf(input.advance_seconds) };
   }
   if (input.command !== 'set_command') invalid('MicroDuck physical command must be set_command, request_skill, advance, setup_perturbation, stop or reset.');
@@ -154,8 +153,11 @@ function parse(input) {
   const request = {};
   for (const [key, raw] of Object.entries(input.request)) {
     if (!allowed.has(key)) invalid(`Unknown MicroDuck command field: ${key}.`);
-    const value = Number(raw);
-    if (!Number.isFinite(value)) invalid(`${key} must be finite.`);
+    const value = raw;
+    if (typeof value !== 'number' || !Number.isFinite(value)) invalid(`${key} must be a finite number.`);
+    const ranges = { vx: L.vxMS, vy: L.vyMS, vyaw: L.vyawRadS, neckPitch: L.neckPitchRad, headPitch: L.headPitchRad, headYaw: L.headYawRad, headRoll: L.headRollRad, bodyZ: L.bodyZM, bodyRoll: L.bodyRollRad, bodyPitch: L.bodyPitchRad };
+    const [minimum, maximum] = ranges[key];
+    if (value < minimum || value > maximum) invalid(`${key} must be between ${minimum} and ${maximum}.`);
     request[key] = value;
   }
   if (!Object.keys(request).length) invalid('request must contain at least one field.');
@@ -209,13 +211,19 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
   if (facade.activeControlId) throw new WebMcpDomainError('COMMAND_CONFLICT', 'Another bounded robot-control call is active.', { retryable: true });
   const controlId = `webmcp-microduck-${expectedEpoch}-${++facade.controlSequence}`;
   facade.activeControlId = controlId;
-  const simulator = facade.app.sim;
+  const simulator = facade.app.sim.backend;
+  // Check the original registration, workspace, physics authority and call signal
+  // inside advancement, not just after the entire requested budget has executed.
+  const advancementOptions = { assertActive: () => assertCurrent(facade, baseline, expectedEpoch, signal) };
   const base = {
     ok: true, profileId: 'microduck', robot: PROFILES.microduck?.label || 'MicroDuck',
     schemaVersion: WEBMCP_MICRODUCK_PHYSICAL_SCHEMA_VERSION, backend: 'browser-mujoco', hardwareValidated: false,
   };
   try {
     assertCurrent(facade, baseline, expectedEpoch, signal);
+    if (typeof simulator?.setCommand !== 'function' || typeof simulator?.advanceSeconds !== 'function') {
+      throw new WebMcpDomainError('SIMULATION_NOT_READY', 'The active MicroDuck physical command backend is unavailable.');
+    }
 
     if (parsed.command === 'reset') {
       if (!(await facade.app.resetSimulation())) throw new WebMcpDomainError('SIMULATION_NOT_READY', 'MicroDuck physical simulation could not be reset.', { retryable: true });
@@ -237,7 +245,7 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
       await simulator.applyPerturbation(parsed.perturbation);
       assertCurrent(facade, baseline, expectedEpoch, signal);
       if (parsed.settleSeconds > 0) {
-        await simulator.settle(parsed.settleSeconds);
+        await simulator.settle(parsed.settleSeconds, advancementOptions);
         assertCurrent(facade, baseline, expectedEpoch, signal);
       }
       facade.app.setStatus?.(`Agent applied the declared ${parsed.perturbation} setup perturbation`);
@@ -263,7 +271,7 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
       }
       assertCurrent(facade, baseline, expectedEpoch, signal);
       if (parsed.advanceSeconds > 0) {
-        await simulator.advanceSeconds(parsed.advanceSeconds);
+        await simulator.advanceSeconds(parsed.advanceSeconds, advancementOptions);
         assertCurrent(facade, baseline, expectedEpoch, signal);
       }
       facade.app.setStatus?.(`Agent requested the physical ${parsed.skill} skill`);
@@ -278,7 +286,9 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
     }
 
     if (parsed.command === 'advance') {
-      const run = await simulator.advanceSeconds(parsed.advanceSeconds);
+      const run = parsed.advanceSeconds === 0
+        ? { executedTicks: 0, completed: true, cancelled: false, simulatedSeconds: 0 }
+        : await simulator.advanceSeconds(parsed.advanceSeconds, advancementOptions);
       assertCurrent(facade, baseline, expectedEpoch, signal);
       facade.app.renderPanels?.();
       return {
@@ -294,7 +304,7 @@ export async function executeMicroDuckPhysicalControl(facade, input, signal, exp
     assertCurrent(facade, baseline, expectedEpoch, signal);
     let run = null;
     if (parsed.advanceSeconds > 0) {
-      run = await simulator.advanceSeconds(parsed.advanceSeconds);
+      run = await simulator.advanceSeconds(parsed.advanceSeconds, advancementOptions);
       assertCurrent(facade, baseline, expectedEpoch, signal);
     }
     facade.app.setStatus?.('Agent requested a bounded MicroDuck physical command');

@@ -484,6 +484,11 @@ await check('the simulator refuses unsupported capabilities and routes them nowh
   const wrongPlant = sim.requestSkill('kick_right');
   assert(wrongPlant.accepted === false && wrongPlant.status === 'wrong-plant', 'kick was not rejected on the walking collision plant');
   assert(wrongPlant.requiredPackageKeys?.includes('kick'), 'wrong-plant response did not identify the required kick plant');
+  for (const alias of ['sit', 'stand_up']) {
+    const aliasResult = sim.requestSkill(alias);
+    assert(aliasResult.accepted === false && aliasResult.status === 'wrong-plant', `${alias} bypassed the ground-contact plant gate`);
+    assert(aliasResult.requiredPackageKeys?.includes('groundContact'), `${alias} did not identify the required ground-contact plant`);
+  }
   assert(worker.counts('command') === before, 'a wrong-plant capability reached the authority');
   sim.dispose();
 });
