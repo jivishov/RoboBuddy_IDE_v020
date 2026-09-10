@@ -237,12 +237,24 @@ export class BrowserMuJoCoBackend {
     if (!Number.isFinite(simulationTimeSeconds) || simulationTimeSeconds < 0) throw new Error('MuJoCo returned invalid simulation time');
     if (!Number.isFinite(timestepSeconds) || timestepSeconds <= 0) throw new Error('MuJoCo returned invalid timestep');
     if (!/^[0-9a-f]{64}$/.test(modelSha256)) throw new Error('MuJoCo worker did not provide a valid model SHA-256');
-    return { schemaVersion: PHYSICS_BACKEND_API_VERSION, sessionId: this.sessionId, epoch: this.epoch, simulationTimeSeconds, view, robotId: this.robotId, frames: { world: structuredClone(WORLD_FRAME) }, model: { id: String(raw.model?.id || ''), asset: String(raw.model?.asset || ''), sha256: modelSha256 }, engine: { name: 'MuJoCo', version: raw.engine?.version == null ? null : String(raw.engine.version), versionEvidence: String(raw.engine?.versionEvidence || 'unknown'), timestepSeconds }, joints: structuredClone(raw.joints || {}), bodies: structuredClone(raw.bodies || {}), contactCount: Math.max(0, Number(raw.contactCount) || 0), contactsReadable: Boolean(raw.contactsReadable), contacts: structuredClone(Array.isArray(raw.contacts) ? raw.contacts : []), sensors: raw.imu ? { imu: structuredClone(raw.imu) } : {},
+    return { schemaVersion: PHYSICS_BACKEND_API_VERSION, sessionId: this.sessionId, epoch: this.epoch, simulationTimeSeconds, view, robotId: this.robotId, frames: { world: structuredClone(WORLD_FRAME) }, model: { id: String(raw.model?.id || ''), asset: String(raw.model?.asset || ''), sha256: modelSha256 }, engine: { name: 'MuJoCo', version: raw.engine?.version == null ? null : String(raw.engine.version), versionEvidence: String(raw.engine?.versionEvidence || 'unknown'), timestepSeconds,
+        // Published when the worker reports them. Gravity is here because "the robot fell because
+        // of gravity" is only checkable if the acting gravity is observable; the control interval
+        // is here because a physical claim depends on the cadence that produced it.
+        gravity: Array.isArray(raw.engine?.gravity) ? raw.engine.gravity.map(Number) : null,
+        controlIntervalSeconds: raw.engine?.controlIntervalSeconds == null ? null : Number(raw.engine.controlIntervalSeconds) }, joints: structuredClone(raw.joints || {}), bodies: structuredClone(raw.bodies || {}), contactCount: Math.max(0, Number(raw.contactCount) || 0), contactsReadable: Boolean(raw.contactsReadable), contacts: structuredClone(Array.isArray(raw.contacts) ? raw.contacts : []), sensors: raw.imu ? { imu: structuredClone(raw.imu) } : {},
       // Present only on backends whose worker reports them. They carry the physical facts a
       // free-base locomotion controller needs and the honesty flags a reviewer needs: which
       // named foot geoms are actually touching the floor or the ball, whether the actuators
       // are producing force at all, and the log of every declared setup intervention.
       footContacts: raw.footContacts ? structuredClone(raw.footContacts) : null,
+      // Free-base robots additionally publish their root as its own record, the contact set
+      // classified by named geometry pair, and the controller that is actually engaged. A
+      // support evaluation must be able to tell a foot from a torso, and a capability label
+      // must name the controller that earned it, so neither may be inferred downstream.
+      root: raw.root ? structuredClone(raw.root) : null,
+      contactClasses: raw.contactClasses ? structuredClone(raw.contactClasses) : null,
+      controller: raw.controller ? structuredClone(raw.controller) : null,
       actuationEnabled: raw.actuationEnabled === undefined ? null : Boolean(raw.actuationEnabled),
       // The servo gain the authority actually applied, and the force it produced. Published
       // because "actuation disabled" is only believable if the force can be read as zero.

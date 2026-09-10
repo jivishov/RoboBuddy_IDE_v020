@@ -3,6 +3,7 @@ import { So101PhysicalSimulator } from './physics/so101-physical-simulator.js';
 import { OpenArmPhysicalSimulator } from './physics/openarm-physical-simulator.js';
 import { LeKiwiPhysicalSimulator } from './physics/lekiwi-physical-simulator.js';
 import { MicroDuckPhysicalSimulator } from './physics/microduck-physical-simulator.js';
+import { UnitreeG1PhysicalSimulator } from './physics/unitree-g1-physical-simulator.js';
 
 export class SimulatorHost {
   constructor(canvas, {
@@ -11,6 +12,7 @@ export class SimulatorHost {
     openarmPhysicalFactory = (target) => new OpenArmPhysicalSimulator(target),
     lekiwiPhysicalFactory = (target) => new LeKiwiPhysicalSimulator(target),
     microduckPhysicalFactory = (target) => new MicroDuckPhysicalSimulator(target),
+    unitreeG1PhysicalFactory = (target) => new UnitreeG1PhysicalSimulator(target),
   } = {}) {
     this.canvas = canvas;
     this.epoch = 0;
@@ -23,6 +25,7 @@ export class SimulatorHost {
     this.openarmPhysicalFactory = openarmPhysicalFactory;
     this.lekiwiPhysicalFactory = lekiwiPhysicalFactory;
     this.microduckPhysicalFactory = microduckPhysicalFactory;
+    this.unitreeG1PhysicalFactory = unitreeG1PhysicalFactory;
     this.controllerPreemptHandler = () => {};
     this.disposed = false;
     this.animationFrame = requestAnimationFrame((time) => this.renderFrame(time));
@@ -54,6 +57,8 @@ export class SimulatorHost {
       ? this.openarmPhysicalFactory(this.canvas)
       : physical && profileId === 'lekiwi'
       ? this.lekiwiPhysicalFactory(this.canvas)
+      : physical && profileId === 'unitree'
+      ? this.unitreeG1PhysicalFactory(this.canvas)
       : this.sourceFactory(this.canvas);
     backend.setControllerPreemptHandler?.(this.controllerPreemptHandler);
     this.pending.add(backend);
@@ -92,6 +97,27 @@ export class SimulatorHost {
     if (typeof this.backend?.applyArmTargets !== 'function') throw new Error('The active simulator backend has no physical arm-target path.');
     return this.backend.applyArmTargets(...args);
   }
+  // Free-base physical paths. Like the mobile-manipulation paths above they fail loudly: the
+  // WebMCP and live-Python callers treat the result as an accepted command, so a missing backend
+  // method must surface as an error rather than a silent no-op.
+  engageStand(...args) {
+    if (typeof this.backend?.engageStand !== 'function') throw new Error('The active simulator backend has no verified standing controller.');
+    return this.backend.engageStand(...args);
+  }
+  releaseStand(...args) {
+    if (typeof this.backend?.releaseStand !== 'function') throw new Error('The active simulator backend has no standing controller to release.');
+    return this.backend.releaseStand(...args);
+  }
+  setActuationEnabled(...args) {
+    if (typeof this.backend?.setActuationEnabled !== 'function') throw new Error('The active simulator backend declares no actuation setup path.');
+    return this.backend.setActuationEnabled(...args);
+  }
+  applyLowLevelCommands(...args) {
+    if (typeof this.backend?.applyLowLevelCommands !== 'function') throw new Error('The active simulator backend has no low-level motor command path.');
+    return this.backend.applyLowLevelCommands(...args);
+  }
+  getPresentationAudit() { return this.backend?.getPresentationAudit?.() || null; }
+  getPresentationAlignment() { return this.backend?.getPresentationAlignment?.() || null; }
   advanceTime(...args) { return this.backend?.advanceTime?.(...args); }
   advanceBase(...args) { return this.backend?.advanceBase?.(...args); }
   getTelemetry() { return this.backend?.getTelemetry?.() || {}; }

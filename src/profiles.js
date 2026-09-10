@@ -56,12 +56,15 @@ export const PROFILES = Object.freeze({
     task:Object.freeze({title:'Arm positioning and bounded base velocity', steps:['Send a stowed arm pose','Pan the arm left and right on the canonical LeKiwi model','Return the arm to stow','Command a bounded forward base velocity','Stop base velocity explicitly'], limitations:'Canonical RoboBuddy visual geometry is used. No wheel-contact dynamics, odometry, SLAM, network timing, or hardware validation.'}),
   }),
   unitree: Object.freeze({
-    id:'unitree', label:'Unitree G1 29-DoF', shortLabel:'Unitree G1', driver:'RoboBuddy G1 pose rig (kinematic only)', transport:'none — browser-only pose workspace', simulationMode:'kinematic_pose',
+    id:'unitree', label:'Unitree G1 29-DoF', shortLabel:'Unitree G1', driver:'robobuddy.sim.v1 · browser MuJoCo', transport:'none — local browser simulation', simulationMode:'physical_mujoco',
     visual:Object.freeze({robotId:'unitree_g1_29dof', repository:'jivishov/RoboBuddy_AI', revision:ROBOBUDDY_AI_VISUAL_REVISION, modelRevision:'dd4fa6866e523ad61324f658d63736e4eda3a6e4', modelRepository:'unitreerobotics/unitree_ros', modelPath:'robots/g1_description/g1_29dof.urdf', license:'BSD-3-Clause'}),
     limits:unitreeG1JointLimits,
     rest:unitreeG1Rest,
     source:'RoboBuddy_AI canonical Unitree G1 mesh with 29 source-manifest joint envelopes, generated from unitreerobotics/unitree_ros at dd4fa6866e523ad61324f658d63736e4eda3a6e4. This is a browser-only visual pose workspace, not a Unitree SDK or hardware-control API.',
-    task:Object.freeze({title:'29-axis kinematic pose inspection', steps:['Inspect the neutral source-mesh pose','Send a bounded upper-body joint pose','Inspect a lower-body joint pose without moving the root','Return joints to neutral'], limitations:'The canonical G1 visual mesh and source joint ranges are used. Dynamic balance, walking, root translation, foot contact, collision, hand actuation, grasping, force/torque control, Unitree SDK control, and hardware validation are not simulated.'}),
+    // Two workspaces, two identities. The pose workspace keeps its original text so selecting it
+    // can never surface the physical workspace's claims, and vice versa.
+    kinematicTask:Object.freeze({title:'29-axis kinematic pose inspection', steps:['Inspect the neutral source-mesh pose','Send a bounded upper-body joint pose','Inspect a lower-body joint pose without moving the root','Return joints to neutral'], limitations:'The canonical G1 visual mesh and source joint ranges are used. Dynamic balance, walking, root translation, foot contact, collision, hand actuation, grasping, force/torque control, Unitree SDK control, and hardware validation are not simulated.'}),
+    task:Object.freeze({title:'Free-base dynamics, contact and standing', steps:['Let the free-base robot settle on its feet under gravity','Engage the verified standing posture controller','Read measured joint state, root pose and named foot contacts','Command bounded joint targets and compare requested, accepted and measured'], limitations:'Source-derived Unitree G1 29-DoF fixed-rubber-hand model in one browser MuJoCo authority. Standing is a bounded posture hold, not dynamic balance or perturbation recovery. Walking and dexterous hand control are unsupported and are not exposed. The separate kinematic pose workspace has no contact plant at all. Numerical verification is not hardware calibration.'}),
   }),
   microduck: Object.freeze({
     id:'microduck', label:'MicroDuck Physical', shortLabel:'MicroDuck', driver:'50 Hz controller · worker-backed MuJoCo', transport:'none — local browser simulation', simulationMode:'physical_mujoco',
@@ -72,11 +75,12 @@ export const PROFILES = Object.freeze({
   }),
 });
 
-export function fidelityNoticeFor(profileId) {
+export function fidelityNoticeFor(profileId, { physical = true } = {}) {
   const profile = PROFILES[profileId];
-  if (profile?.simulationMode === 'kinematic_pose') {
+  if (profile?.simulationMode === 'kinematic_pose' || (profileId === 'unitree' && !physical)) {
     return 'Reference-sourced Unitree G1 mesh and bounded joint-pose visualization. No fixed-step contact plant, balance, locomotion, collision, or hardware validation is active.';
   }
+  if (profileId === 'unitree') return 'The Unitree G1 physical workspace uses one browser MuJoCo authority on the pinned 29-DoF fixed-rubber-hand model. Joint commands become bounded actuator torque, never state assignment. Standing is a verified unsupported posture hold; walking, perturbation recovery and dexterous hands are unsupported. Numerical verification is not hardware calibration.';
   if (profileId === 'microduck') return 'MicroDuck physical tasks use one browser MuJoCo authority, source-derived collision plants and bounded policy control. Rendered body poses follow measured simulation state. Roller modes are unsupported; simulator verification is not hardware calibration.';
   return FIDELITY_NOTICE;
 }

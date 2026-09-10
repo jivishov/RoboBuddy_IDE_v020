@@ -179,6 +179,14 @@ export class PhysicalPythonRuntime {
       case 'get_observation':
         this.#assertConnected(active);
         return active.bridge.getObservation({ view: String(args.view || 'ground_truth') });
+      case 'engage_stand':
+        return active.bridge.engageStand({ controllerId: String(args.controller_id || ''), maxSteps: Number.isInteger(args.max_steps) ? args.max_steps : 200000 });
+      case 'release_stand':
+        return active.bridge.releaseStand();
+      case 'get_state':
+        return active.bridge.getState();
+      case 'set_actuation':
+        return active.bridge.applyDeclaredSetup({ type: 'set_actuation', enabled: Boolean(args.enabled) });
       case 'wait_for_goal':
         this.#assertConnected(active);
         return active.bridge.waitForGoal(args.targets, { toleranceRad: Number(args.tolerance_rad), timeoutSeconds: Number(args.timeout_seconds), controllerPeriodSeconds: Number(args.controller_period_seconds) });

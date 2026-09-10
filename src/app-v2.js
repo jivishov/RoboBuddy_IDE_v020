@@ -167,7 +167,7 @@ class App {
     // demonstrator label.
     const selectedMode = taskDescriptor(id, this.taskId)?.simulationMode || p.simulationMode;
     const migratedPhysical = id === 'so101' || id === 'openarm'
-      || ((id === 'lekiwi' || id === 'microduck') && selectedMode === 'physical_mujoco');
+      || ((id === 'lekiwi' || id === 'microduck' || id === 'unitree') && selectedMode === 'physical_mujoco');
     const visibleDriver = migratedPhysical ? 'robobuddy.sim.v1 · browser MuJoCo' : p.driver;
     $('driverLabel').textContent = visibleDriver;
     $('driverStatus').textContent = visibleDriver;
@@ -285,6 +285,9 @@ class App {
     const kinematic = this.isKinematicPoseWorkspace();
     const policy = this.isPolicyWorkspace();
     const physical = this.isPhysicalWorkspace();
+    // The Unitree profile carries two workspaces. The pose workspace keeps its own task text and
+    // fidelity notice, so selecting it can never surface the physical workspace's claims.
+    const task = kinematic && p.kinematicTask ? p.kinematicTask : p.task;
     const labels = [];
     for (const item of scenario?.portablePython?.referenceActions || []) {
       const label = String(item.label || 'physical action');
@@ -299,13 +302,13 @@ class App {
       : kinematic
       ? `RoboBuddy_AI@${scenario.canonicalModel.revision.slice(0, 12)} · Unitree URDF ${scenario.canonicalModel.sourceRevision.slice(0, 12)} · ${scenario.canonicalModel.license}`
       : `RoboBuddy_AI@${TASK_PATCH_REVISION.slice(0, 12)}`;
-    $('taskPanel').innerHTML = `<h2>${escapeHtml(scenario?.title || p.task.title)}</h2><p>${escapeHtml(scenario?.brief || p.source)}</p><p><strong>${sourceLabel}:</strong> ${escapeHtml(sourceText)}</p><ol>${labels.map((label, index) => `<li class="${index === 0 ? 'task-current' : ''}">${escapeHtml(label)}</li>`).join('')}</ol><details><summary>Fidelity boundary</summary><p>${escapeHtml(physical ? scenario.limitations.join(' ') : p.task.limitations)}</p></details>`;
+    $('taskPanel').innerHTML = `<h2>${escapeHtml(scenario?.title || task.title)}</h2><p>${escapeHtml(scenario?.brief || p.source)}</p><p><strong>${sourceLabel}:</strong> ${escapeHtml(sourceText)}</p><ol>${labels.map((label, index) => `<li class="${index === 0 ? 'task-current' : ''}">${escapeHtml(label)}</li>`).join('')}</ol><details><summary>Fidelity boundary</summary><p>${escapeHtml(physical ? scenario.limitations.join(' ') : task.limitations)}</p></details>`;
     $('fidelityText').textContent = physical
       ? `${p.shortLabel} uses one authoritative browser MuJoCo PhysicsSession. Rendering, live Python, WebMCP, and task evaluation consume that same state. ${scenario.limitations.join(' ')}`
       : policy
       ? `${fidelityNoticeFor(this.profileId)} ${p.task.limitations}`
       : kinematic
-      ? `${fidelityNoticeFor(this.profileId)} ${p.task.limitations}`
+      ? `${fidelityNoticeFor(this.profileId, { physical: false })} ${task.limitations}`
       : `${fidelityNoticeFor(this.profileId)} LeRobot revision ${LEROBOT_REVISION}. Task definitions, reference actions, collision/contact plant, and support rules are pinned to RoboBuddy_AI revision ${TASK_PATCH_REVISION}. ${p.task.limitations}`;
     $('sideRobotSummary').textContent = physical
       ? `${p.label}. Browser MuJoCo is the single physical authority for the rigid-body benchmark. The canonical mesh is presentation-only; actual joint/block state and task evidence come from MuJoCo observations. Hardware validation remains pending.`

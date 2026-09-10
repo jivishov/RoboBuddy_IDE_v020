@@ -8,6 +8,16 @@ import { MICRODUCK_GAIT_ONSET_MS, MICRODUCK_GROUNDCONTACT_SCENE, MICRODUCK_KICK_
 import { MICRODUCK_RL_SOURCE, MICRODUCK_RUNTIME_SOURCE } from './physics/microduck-source-audit.js';
 import { MICRODUCK_CAPABILITY_AUDIT } from './physics/microduck-capabilities.js';
 import { MICRODUCK_CONTROL_INTERVAL_SECONDS, MICRODUCK_PHYSICS_TIMESTEP_SECONDS } from './physics/microduck-controller.js';
+import { UNITREE_G1_FREEBASE_PACKAGE } from './physics/unitree-g1-model-package.js';
+import { UNITREE_G1_FREEBASE_SCENE, UNITREE_G1_STAND_GATE } from './physics/unitree-g1-scene.js';
+import {
+  CANONICAL_VISUAL_SOURCE, MENAGERIE_G1_REFERENCE, UNITREE_MUJOCO_SOURCE, UNITREE_RL_MJLAB_SOURCE, UNITREE_ROS_SOURCE,
+} from './physics/unitree-g1-source-audit.js';
+import {
+  G1_CONTROLLERS, G1_LOWLEVEL_CONTROL_INTERVAL_SECONDS, G1_OBSERVATION_INTERVAL_SECONDS,
+  G1_PHYSICS_TIMESTEP_SECONDS, G1_STAND_CONTROL_INTERVAL_SECONDS, G1_UNITREE_FSM_INTERVAL_SECONDS,
+} from './physics/unitree-g1-controller.js';
+import { UNITREE_G1_CAPABILITY_AUDIT } from './physics/unitree-g1-capabilities.js';
 
 export const TASK_PATCH_REVISION = '75fe2669c0ab0b029986de424c69162071174df8';
 export const TASK_PATCH_SOURCE = 'jivishov/RoboBuddy_AI';
@@ -187,6 +197,90 @@ const UNITREE_G1_RIG_SCENARIO = Object.freeze({
 });
 export const UNITREE_G1_RIG_TASKS = Object.freeze([Object.freeze({ profileId: 'unitree', id: UNITREE_G1_RIG_SCENARIO.id, title: UNITREE_G1_RIG_SCENARIO.title, robotId: UNITREE_G1_RIG_SCENARIO.robotId, simulationMode: 'kinematic_pose', source: `RoboBuddy_AI@${UNITREE_G1_VISUAL_REVISION}/simulator/js/robot-mesh-data-unitree-g1.js` })]);
 
+// Phase 5D. A distinct physical workspace beside the kinematic pose workspace: its own workspace
+// id, model package, scene revision, controller identity, evidence classification and capability
+// table. A physical backend failure surfaces as an error; it never falls back to the pose rig.
+const UNITREE_G1_PHYSICAL_SCENARIO = Object.freeze({
+  schema: 'robobuddy.physical-workspace.v1',
+  schemaVersion: 1,
+  simulationMode: 'physical_mujoco',
+  workspaceRevision: UNITREE_G1_FREEBASE_SCENE.revision,
+  id: 'unitree-g1-physical-dynamics',
+  title: 'Unitree G1 29-DoF Physical Dynamics',
+  brief: 'A free-base Unitree G1 in one MuJoCo authority: real gravity, source foot contacts, self-contact and a free external object. Joint commands become bounded actuator torque through the Unitree low-level motor law, never state assignment, so requested, accepted and measured joint values are three different numbers. The robot can genuinely fall. stand() is a verified unsupported posture hold, not balance recovery. Walking is unsupported and no walk operation exists.',
+  robotId: UNITREE_G1_FREEBASE_PACKAGE.robotId,
+  physicalSceneId: UNITREE_G1_FREEBASE_SCENE.id,
+  physicalSceneRevision: UNITREE_G1_FREEBASE_SCENE.revision,
+  modelPackage: UNITREE_G1_FREEBASE_PACKAGE.id,
+  modelId: UNITREE_G1_FREEBASE_PACKAGE.modelId,
+  physicalApi: Object.freeze({ version: 'robobuddy.sim.v1', angleUnit: 'rad', timeUnit: 's', lengthUnit: 'm', torqueUnit: 'N*m' }),
+  canonicalModel: Object.freeze({
+    repository: CANONICAL_VISUAL_SOURCE.repository,
+    revision: CANONICAL_VISUAL_SOURCE.revision,
+    module: CANONICAL_VISUAL_SOURCE.module,
+    visualSha256: CANONICAL_VISUAL_SOURCE.sha256,
+    sourceRepository: UNITREE_ROS_SOURCE.repository,
+    sourceRevision: UNITREE_ROS_SOURCE.revision,
+    sourcePath: UNITREE_ROS_SOURCE.mjcfPath,
+    sourceUrdfPath: UNITREE_ROS_SOURCE.urdfPath,
+    sourceMjcfSha256: UNITREE_ROS_SOURCE.mjcfSha256,
+    sourceUrdfSha256: UNITREE_ROS_SOURCE.urdfSha256,
+    variant: UNITREE_ROS_SOURCE.variant,
+    dynamicAugmentationRepository: UNITREE_MUJOCO_SOURCE.repository,
+    dynamicAugmentationRevision: UNITREE_MUJOCO_SOURCE.revision,
+    controllerRepository: UNITREE_RL_MJLAB_SOURCE.repository,
+    controllerRevision: UNITREE_RL_MJLAB_SOURCE.revision,
+    notAdopted: MENAGERIE_G1_REFERENCE,
+    license: 'BSD-3-Clause model geometry; Apache-2.0 controller configuration',
+    authority: 'MuJoCo PhysicsSession; the canonical Unitree G1 mesh consumes the observed pelvis transform and 29 measured joint positions only',
+  }),
+  controller: Object.freeze({
+    physicsTimestepSeconds: G1_PHYSICS_TIMESTEP_SECONDS,
+    controlIntervalSeconds: G1_LOWLEVEL_CONTROL_INTERVAL_SECONDS,
+    standIntervalSeconds: G1_STAND_CONTROL_INTERVAL_SECONDS,
+    observationIntervalSeconds: G1_OBSERVATION_INTERVAL_SECONDS,
+    unitreeFsmIntervalSeconds: G1_UNITREE_FSM_INTERVAL_SECONDS,
+    standControllerId: G1_CONTROLLERS.STAND,
+    sourceControllerId: G1_CONTROLLERS.SOURCE_FIXSTAND,
+    commandLaw: 'tau = tau_ff + kp (q_target - q) + kd (dq_target - dq), clamped to the source per-joint effort limit',
+    source: `${UNITREE_RL_MJLAB_SOURCE.repository} ${UNITREE_RL_MJLAB_SOURCE.fixStandPath} and ${UNITREE_MUJOCO_SOURCE.repository} ${UNITREE_MUJOCO_SOURCE.bridgePath}`,
+  }),
+  frames: Object.freeze({
+    physics: 'MuJoCo right-handed Z-up world, metres/radians; the pelvis is a free body and the IMU is read at the source-named imu site',
+    rendering: 'Three.js Y-up millimetres derived from the observed MuJoCo pelvis transform and measured joint radians converted to degrees at the rendering boundary; the renderer never re-seats the robot and never advances physics',
+  }),
+  capabilities: Object.freeze(UNITREE_G1_CAPABILITY_AUDIT.map((item) => Object.freeze({ id: item.id, label: item.label, capability: item.capability, evidence: item.evidence, backend: item.backend }))),
+  standGate: UNITREE_G1_STAND_GATE,
+  portablePython: Object.freeze({
+    referenceActions: Object.freeze([
+      Object.freeze({ label: 'Settle the free-base robot on its feet under gravity', hold_seconds: 0.2, targetsRad: Object.freeze({}) }),
+      Object.freeze({ label: 'Engage the verified standing posture controller', hold_seconds: 3.0, targetsRad: Object.freeze({}) }),
+      Object.freeze({ label: 'Read measured root pose, joint state and named foot contacts', hold_seconds: 0, targetsRad: Object.freeze({}) }),
+      Object.freeze({ label: 'Turn the waist while the posture controller holds the legs', hold_seconds: 1.5, targetsRad: Object.freeze({ waist_yaw_joint: 0.4 }) }),
+      Object.freeze({ label: 'Raise the left arm', hold_seconds: 1.5, targetsRad: Object.freeze({ left_shoulder_pitch_joint: -0.6, left_elbow_joint: 1.2 }) }),
+      Object.freeze({ label: 'Return the commanded joints to the standing posture', hold_seconds: 1.5, targetsRad: Object.freeze({ waist_yaw_joint: 0, left_shoulder_pitch_joint: 0.35, left_elbow_joint: 0.87 }) }),
+    ]),
+  }),
+  taskEvaluation: Object.freeze({
+    source: 'MuJoCo root pose and velocity plus named foot, non-foot, self and external-object contacts',
+    requires: Object.freeze([
+      'free root under real gravity',
+      'both named foot geoms in contact with the named floor geom throughout the evaluated interval',
+      'no non-foot ground contact',
+      'no external-object or fixture support contact',
+      'pelvis height and tilt inside the declared envelope',
+      'bounded terminal root linear and angular velocity',
+      'bounded actuator effort',
+    ]),
+    syntheticSuccessEvents: false,
+  }),
+  limitations: Object.freeze([...UNITREE_G1_FREEBASE_PACKAGE.limitations]),
+});
+export const UNITREE_G1_PHYSICAL_TASKS = Object.freeze([Object.freeze({ profileId: 'unitree', id: UNITREE_G1_PHYSICAL_SCENARIO.id, title: UNITREE_G1_PHYSICAL_SCENARIO.title, robotId: UNITREE_G1_PHYSICAL_SCENARIO.robotId, simulationMode: UNITREE_G1_PHYSICAL_SCENARIO.simulationMode, physicalSceneId: UNITREE_G1_PHYSICAL_SCENARIO.physicalSceneId })]);
+// The physical workspace is the default; the source kinematic pose workspace stays selectable and
+// keeps its own identity, evidence label and limitations.
+const UNITREE_TASKS = Object.freeze([...UNITREE_G1_PHYSICAL_TASKS, ...UNITREE_G1_RIG_TASKS]);
+
 function microduckPhysicalScenario({ id, title, brief, modelPackage, physicalScene, capabilityIds, taskEvaluation }) {
   return Object.freeze({
     schema: 'robobuddy.physical-workspace.v1', schemaVersion: 1, simulationMode: 'physical_mujoco',
@@ -235,7 +329,7 @@ export function tasksForProfile(profileId) {
   if (profileId === 'openarm') return OPENARM_PHYSICAL_TASKS;
   if (profileId === 'so101') return SO101_PHYSICAL_TASKS;
   if (profileId === 'lekiwi') return LEKIWI_TASKS;
-  if (profileId === 'unitree') return UNITREE_G1_RIG_TASKS;
+  if (profileId === 'unitree') return UNITREE_TASKS;
   if (profileId === 'microduck') return MICRODUCK_TASKS;
   return PATCH_TASKS[profileId] || [];
 }
@@ -252,6 +346,7 @@ export async function loadPatchedScenario(profileId, taskId) {
     if (profileId === 'openarm') return structuredClone(OPENARM_PHYSICAL_SCENARIO);
     if (profileId === 'lekiwi') return structuredClone(LEKIWI_PHYSICAL_SCENARIO);
     if (profileId === 'microduck') return structuredClone(MICRODUCK_PHYSICAL_SCENARIOS[descriptor.id]);
+    if (profileId === 'unitree') return structuredClone(UNITREE_G1_PHYSICAL_SCENARIO);
     return structuredClone(SO101_PHYSICAL_SCENARIO);
   }
   if (descriptor.simulationMode === 'kinematic_pose') return structuredClone(UNITREE_G1_RIG_SCENARIO);
@@ -308,6 +403,19 @@ export function taskPatchProvenance(descriptor) {
       scenarioId: descriptor.id,
       physicalSceneId: descriptor.physicalSceneId,
       modelPackage: MICRODUCK_PHYSICAL_SCENARIOS[descriptor.id]?.modelPackage ?? null,
+      simulationMode: 'physical_mujoco',
+    };
+    if (descriptor.profileId === 'unitree') return {
+      repository: 'jivishov/RoboBuddy_IDE_v020',
+      upstreamRepository: UNITREE_ROS_SOURCE.repository,
+      upstreamRevision: UNITREE_ROS_SOURCE.revision,
+      dynamicAugmentationRepository: UNITREE_MUJOCO_SOURCE.repository,
+      dynamicAugmentationRevision: UNITREE_MUJOCO_SOURCE.revision,
+      controllerRepository: UNITREE_RL_MJLAB_SOURCE.repository,
+      controllerRevision: UNITREE_RL_MJLAB_SOURCE.revision,
+      scenarioId: descriptor.id,
+      physicalSceneId: descriptor.physicalSceneId,
+      modelPackage: UNITREE_G1_PHYSICAL_SCENARIO.modelPackage,
       simulationMode: 'physical_mujoco',
     };
     return { repository: 'jivishov/RoboBuddy_IDE_v020', scenarioId: descriptor.id, physicalSceneId: descriptor.physicalSceneId, modelPackage: SO101_PHYSICAL_SCENARIO.modelPackage, simulationMode: 'physical_mujoco' };

@@ -241,9 +241,63 @@ function microduckPhysicalWorkspace(scenario) {
   };
 }
 
+function unitreeG1PhysicalWorkspace(scenario) {
+  const main = [
+    '# Unitree G1 29-DoF physical MuJoCo workspace. No Unitree SDK or hardware transport is opened.',
+    '# set_joint_targets() latches a bounded low-level command; it never means the joint got there.',
+    '# stand() engages the verified posture controller. It is a posture hold, not balance recovery,',
+    '# and it can fail. There is no walk(): walking is unsupported in this workspace.',
+    'from robobuddy.sim import connect',
+    'from robot_config import ROBOT_ID',
+    'from trajectories import STAGES',
+    '',
+    'robot = await connect(ROBOT_ID)',
+    'try:',
+    '    # Let the free-base robot settle on its feet under gravity before commanding anything.',
+    '    await robot.wait_sim(0.2)',
+    '',
+    '    # Earn the upright posture through the physical plant, then watch it hold.',
+    '    await robot.stand()',
+    '    await robot.wait_sim(2.0)',
+    '    await robot.wait_sim(2.0)',
+    '    state = await robot.get_state()',
+    "    print('pelvis height (m)', state['root']['position_m'][2], 'tilt (rad)', state['root']['tilt_rad'])",
+    "    print('left foot contacts', state['foot_contacts']['left'])",
+    "    print('right foot contacts', state['foot_contacts']['right'])",
+    '',
+    '    for stage in STAGES:',
+    '        await robot.set_joint_targets(stage["targets_rad"])',
+    '        await robot.wait_sim(stage["duration_seconds"])',
+    '        state = await robot.get_state()',
+    '        for joint in stage["targets_rad"]:',
+    '            record = state["joints"][joint]',
+    '            # Requested, accepted and measured are three different numbers. Read all three.',
+    "            print(stage['label'], joint,",
+    "                  'requested', round(record['requested_target_rad'], 4),",
+    "                  'accepted', round(record['accepted_target_rad'], 4),",
+    "                  'measured', round(record['position_rad'], 4),",
+    "                  'effort Nm', round(record['effort_nm'], 3))",
+    'finally:',
+    '    await robot.disconnect()',
+    '',
+  ].join('\n');
+  const stages = [
+    { index: 1, label: 'Turn the waist while the posture controller holds the legs', duration_seconds: 1.5, targets_rad: { waist_yaw_joint: 0.4 } },
+    { index: 2, label: 'Raise the left arm', duration_seconds: 1.5, targets_rad: { left_shoulder_pitch_joint: -0.6, left_elbow_joint: 1.2 } },
+    { index: 3, label: 'Return the commanded joints to the standing posture', duration_seconds: 1.5, targets_rad: { waist_yaw_joint: 0, left_shoulder_pitch_joint: 0.35, left_elbow_joint: 0.87 } },
+  ];
+  return {
+    'main.py': main,
+    'trajectories.py': `# Bounded joint targets in radians, in the source Unitree G1 joint names.\n# Every target is clamped to the source joint range before it becomes a torque, and no target\n# is ever written into the simulator as state.\n# Note: set_joint_targets() releases the standing controller, so commanding a leg joint here\n# will make the robot fall. That is the plant behaving correctly, not a defect.\nSTAGES = ${py(stages)}\n`,
+    'robot_config.py': `# Browser simulation only. No serial, CAN, DDS or network robot connection.\nROBOT_ID = ${JSON.stringify(scenario.robotId)}\nPHYSICAL_API_VERSION = "robobuddy.sim.v1"\nANGLE_UNIT = "rad"\nTIME_UNIT = "s"\nPHYSICS_TIMESTEP_S = ${scenario.controller.physicsTimestepSeconds}\nLOWLEVEL_CONTROL_INTERVAL_S = ${scenario.controller.controlIntervalSeconds}\nSTAND_CONTROLLER = ${JSON.stringify(scenario.controller.standControllerId)}\nWALKING = "unsupported"\n`,
+    'workcell.py': `# Read-only physical workspace metadata, not installed-hardware calibration.\nWORKCELL = ${py({ scenario_id: scenario.id, physical_scene_id: scenario.physicalSceneId, model_package: scenario.modelPackage, capabilities: scenario.capabilities, evaluator: scenario.taskEvaluation, limitations: scenario.limitations })}\n`,
+  };
+}
+
 function physicalWorkspace(profileId, scenario) {
   if (profileId === 'microduck') return microduckPhysicalWorkspace(scenario);
   if (profileId === 'lekiwi') return lekiwiPhysicalWorkspace(scenario);
+  if (profileId === 'unitree') return unitreeG1PhysicalWorkspace(scenario);
   const timestep = profileId === 'openarm' ? 0.001 : 0.005;
   const stages = scenario.portablePython.referenceActions.map((record, index) => ({
     index: index + 1,

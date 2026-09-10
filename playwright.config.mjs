@@ -4,7 +4,7 @@ const pythonLauncher = process.platform === 'win32' ? 'py -3' : 'python3';
 
 export default defineConfig({
   testDir: './tests',
-  testMatch: /(?:browser-smoke|microduck-policy-parity|webmcp|physics-slice-browser|physics-load-failure-browser|so101-physics-browser|so101-live-python-browser|so101-manipulation-browser|so101-ide-physical-browser|openarm-phase5a-browser|lekiwi-phase5b-browser|lekiwi-conformance-browser|lekiwi-presentation-browser|microduck-phase5c-browser|microduck-interfaces-browser|microduck-presentation-browser)\.spec\.mjs/,
+  testMatch: /(?:browser-smoke|microduck-policy-parity|webmcp|physics-slice-browser|physics-load-failure-browser|so101-physics-browser|so101-live-python-browser|so101-manipulation-browser|so101-ide-physical-browser|openarm-phase5a-browser|lekiwi-phase5b-browser|lekiwi-conformance-browser|lekiwi-presentation-browser|microduck-phase5c-browser|microduck-interfaces-browser|microduck-presentation-browser|unitree-g1-conformance-browser|unitree-g1-phase5d-browser|unitree-g1-presentation-browser)\.spec\.mjs/,
   workers: process.env.CI ? 1 : undefined,
   timeout: 120_000,
   expect: { timeout: 20_000 },

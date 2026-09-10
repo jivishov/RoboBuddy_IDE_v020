@@ -120,6 +120,29 @@ class PhysicalRobot:
             controller_period_seconds=float(controller_period_seconds),
         )
 
+    # --- free-base physical surface -----------------------------------------------------
+    # set_joint_targets() is send_action() named for what it is: it latches a bounded low-level
+    # command. It never means the joint reached the target, and it releases any engaged
+    # standing controller. There is deliberately no walk(): walking is unsupported.
+    async def set_joint_targets(self, targets, max_steps=1000):
+        return await _call("send_action", targets=dict(targets), max_steps=int(max_steps))
+
+    async def wait_sim(self, seconds):
+        return await _call("advance", seconds=float(seconds))
+
+    async def get_state(self):
+        return await _call("get_state")
+
+    async def stand(self, controller_id="robobuddy_g1_stand_v1", max_steps=200000):
+        return await _call("engage_stand", controller_id=str(controller_id), max_steps=int(max_steps))
+
+    async def release_stand(self):
+        return await _call("release_stand")
+
+    async def set_actuation(self, enabled):
+        """Declared pre-trial setup. It removes actuator effort; it is logged and is not control."""
+        return await _call("set_actuation", enabled=bool(enabled))
+
     async def pause(self): return await _call("pause")
     async def resume(self): return await _call("resume")
     async def reset(self): return await _call("reset")

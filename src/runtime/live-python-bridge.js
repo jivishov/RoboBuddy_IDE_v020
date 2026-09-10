@@ -225,6 +225,97 @@ export class LivePythonBridge {
     };
   }
 
+  // --- free-base physical surface -------------------------------------------------------------
+  // These are generic: the authority decides whether they are available. A scene that declares no
+  // standing controller, or a backend that declares no setup operation, refuses them outright, so
+  // no robot gains a capability here that its model package has not declared.
+
+  /** Engage a declared standing controller. Acceptance is not achievement: read the state back. */
+  async engageStand({ controllerId, commandId, maxSteps = 200000 } = {}) {
+    await this.#assertOwner();
+    if (!controllerId || typeof controllerId !== 'string') throw new TypeError('engage_stand requires a declared controller id');
+    if (!Number.isInteger(maxSteps) || maxSteps < 1) throw new RangeError('maxSteps must be a positive integer');
+    const accepted = await this.#withTimeout(this.session.sendCommand(
+      { type: 'engage_stand', controllerId },
+      { ...(commandId ? { commandId: String(commandId) } : {}), maxSteps },
+    ));
+    return {
+      apiVersion: LIVE_SIM_API_VERSION,
+      status: String(accepted?.status || 'accepted'),
+      controllerId,
+      commandId: accepted?.commandId || commandId || null,
+      remainingSteps: accepted?.remainingSteps ?? null,
+      note: 'the standing controller is engaged; it is a bounded posture controller and it can fail. Read achieved state from get_state().',
+    };
+  }
+
+  async releaseStand() {
+    await this.#assertOwner();
+    const accepted = await this.#withTimeout(this.session.sendCommand({ type: 'release_stand' }, { maxSteps: 1 }));
+    return { apiVersion: LIVE_SIM_API_VERSION, status: String(accepted?.status || 'accepted'), controllerId: null };
+  }
+
+  /** A declared pre-trial setup operation. It is logged by the authority and is never control. */
+  async applyDeclaredSetup(payload = {}) {
+    await this.#assertOwner();
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !payload.type) throw new TypeError('setup requires a declared operation object');
+    return this.#withTimeout(this.session.applySetup(structuredClone(payload)));
+  }
+
+  /**
+   * Ground-truth state in the public snake_case shape. Every value is measured; a requested target
+   * is reported beside the accepted command and the measured position, never in place of it.
+   */
+  async getState() {
+    const observation = await this.getObservation({ view: 'ground_truth' });
+    const joints = {};
+    for (const [jointId, joint] of Object.entries(observation.joints || {})) {
+      joints[jointId] = {
+        requested_target_rad: joint.requestedTargetRad ?? joint.targetRad ?? null,
+        accepted_target_rad: joint.acceptedTargetRad ?? joint.targetRad ?? null,
+        position_rad: joint.positionRad,
+        velocity_rad_s: joint.velocityRadS,
+        effort_nm: joint.effortNm ?? null,
+        effort_limit_nm: joint.effortLimitNm ?? null,
+        velocity_limit_rad_s: joint.velocityLimitRadS ?? null,
+        joint_range_rad: joint.jointRangeRad ?? null,
+        command_bounded: joint.commandBounded ?? null,
+        kp: joint.kp ?? null,
+        kd: joint.kd ?? null,
+      };
+    }
+    const classes = observation.contactClasses || null;
+    return {
+      apiVersion: LIVE_SIM_API_VERSION,
+      simulation_time_s: observation.simulationTimeSeconds,
+      model: observation.model ? structuredClone(observation.model) : null,
+      root: observation.root ? {
+        mode: observation.root.mode,
+        position_m: observation.root.positionM,
+        quaternion_wxyz: observation.root.quaternionWxyz,
+        linear_velocity_m_s: observation.root.linearVelocityMS,
+        angular_velocity_rad_s: observation.root.angularVelocityRadS,
+        upright_z: observation.root.uprightZ,
+        tilt_rad: observation.root.tiltRad,
+      } : null,
+      joints,
+      foot_contacts: classes ? {
+        left: (classes.leftFootFloor || []).map((entry) => entry.geoms),
+        right: (classes.rightFootFloor || []).map((entry) => entry.geoms),
+      } : null,
+      contacts: classes ? {
+        non_foot_ground: (classes.otherBodyFloor || []).map((entry) => entry.geoms),
+        self: (classes.robotSelf || []).map((entry) => entry.geoms),
+        external_object: (classes.robotExternalObject || []).map((entry) => entry.geoms),
+        fixture: (classes.robotFixture || []).map((entry) => entry.geoms),
+      } : null,
+      controller_mode: observation.controller?.id ?? null,
+      controller_claim: observation.controller?.claim ?? null,
+      actuation_enabled: observation.actuationEnabled,
+      setup_log: Array.isArray(observation.setupLog) ? structuredClone(observation.setupLog) : [],
+    };
+  }
+
   async pause() {
     await this.#assertOwner();
     return this.#withTimeout(this.session.pause());
