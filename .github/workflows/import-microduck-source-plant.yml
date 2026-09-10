@@ -1,0 +1,77 @@
+name: Import pinned MicroDuck source plant
+
+on:
+  push:
+    branches: [fix/microduck-full-plant-fidelity]
+    paths: [.github/workflows/import-microduck-source-plant.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/microduck-full-plant-fidelity
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Fetch exact pinned MicroDuck RL source
+        run: |
+          rm -rf /tmp/microduck_rl
+          git clone --filter=blob:none https://github.com/pollen-robotics/microduck_rl.git /tmp/microduck_rl
+          git -C /tmp/microduck_rl checkout --detach 519142b1f5bf59fdfd44d06c205119e7fff8e3cb
+          test "$(git -C /tmp/microduck_rl rev-parse HEAD)" = "519142b1f5bf59fdfd44d06c205119e7fff8e3cb"
+      - name: Materialize exact task-specific source geometry and licensing
+        run: |
+          python scripts/finalize_microduck_full_plant.py --source-checkout /tmp/microduck_rl
+          python - <<'PY'
+          import json, hashlib
+          from pathlib import Path
+          fixture = Path('assets/microduck/fixtures/controller-conformance.json')
+          doc = json.loads(fixture.read_text())
+          doc['model']['sha256'] = hashlib.sha256(Path('models/microduck/walk.xml').read_bytes()).hexdigest()
+          fixture.write_text(json.dumps(doc, indent=2) + '\n')
+          PY
+      - name: Upgrade Phase 5C workflow from position-servo to BAM evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('.github/workflows/microduck-phase5c-validate.yml')
+          s = p.read_text()
+          s = s.replace('          python -m py_compile native/microduck_reference.py\n', '          python -m py_compile native/microduck_reference.py\n          python -m py_compile native/microduck_bam_physical_reference.py\n          python -m py_compile tests/validate_microduck_bam_evidence.py\n')
+          s = s.replace('          python native/microduck_reference.py --trial all --json /tmp/microduck-all.json\n          python native/microduck_reference.py --trial walk --timestep 0.001 --json /tmp/microduck-walk-tight.json\n          python native/microduck_reference.py --trial stand --timestep 0.001 --json /tmp/microduck-stand-tight.json\n', '          python native/microduck_bam_physical_reference.py --trial all --json /tmp/microduck-all.json\n          python native/microduck_bam_physical_reference.py --trial walk --timestep 0.001 --json /tmp/microduck-walk-tight.json\n          python native/microduck_bam_physical_reference.py --trial stand --timestep 0.001 --json /tmp/microduck-stand-tight.json\n')
+          start = s.index('      - name: Validate native MicroDuck physical, negative and sensitivity gates')
+          end = s.index('      - name: Fleet regressions must not be weakened by Phase 5C', start)
+          replacement = '''      - name: Validate source-pinned BAM physical, negative and sensitivity gates\n        run: python tests/validate_microduck_bam_evidence.py /tmp/microduck-all.json /tmp/microduck-walk-tight.json /tmp/microduck-stand-tight.json\n\n'''
+          s = s[:start] + replacement + s[end:]
+          p.write_text(s)
+          PY
+      - name: Verify imported mesh byte identities and deterministic generation
+        run: |
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          pin_dir = Path('/tmp/microduck_rl/src/mjlab_microduck/robot/microduck/assets')
+          dst = Path('models/microduck/assets')
+          for src in sorted(pin_dir.glob('*.stl')):
+              copied = dst / src.name
+              assert copied.read_bytes() == src.read_bytes(), src.name
+              data = copied.read_bytes()
+              blob = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+              assert f'{blob}  assets/{src.name}' in Path('models/microduck/source/GIT_BLOB_SHA1SUMS').read_text(), src.name
+          print('all imported STL bytes match pinned upstream source')
+          PY
+          python scripts/generate_microduck_models.py --check
+      - name: Self-remove importer and commit materialized plant
+        run: |
+          rm .github/workflows/import-microduck-source-plant.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat(microduck): use pinned source collision meshes and BAM gates"
+          git push origin HEAD:fix/microduck-full-plant-fidelity
