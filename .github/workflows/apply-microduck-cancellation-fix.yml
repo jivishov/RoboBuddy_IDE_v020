@@ -169,8 +169,13 @@ jobs:
                     before: probe.before, after: window.__robobuddyCi.app.sim.backend.lastObservation.simulationTimeSeconds };
                 } finally { probe.restore(); }
               });
-              expect(result.response).toMatchObject({ ok: false, error: { code: 'OPERATION_CANCELLED' } });
-              expect(result.backendError).toBe('OPERATION_CANCELLED');
+              // setAccess rotates the registration epoch; AgentFacade.assertActive reports
+              // that revocation as STALE_REGISTRATION. A call-signal abort has its separate
+              // OPERATION_CANCELLED code. Both must stop the real backend, not just its reply.
+              const expectedError = mode === 'abort' ? 'OPERATION_CANCELLED' : 'STALE_REGISTRATION';
+              console.log(`MicroDuck ${mode} cancellation evidence: ${JSON.stringify(result)}`);
+              expect(result.response).toMatchObject({ ok: false, error: { code: expectedError } });
+              expect(result.backendError).toBe(expectedError);
               expect(result.inferences).toBe(2);
               expect(result.commands).toBe(1);
               expect(result.steps).toBe(4);
