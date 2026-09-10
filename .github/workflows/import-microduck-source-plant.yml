@@ -1,4 +1,4 @@
-name: Verify and refresh pinned MicroDuck source plant
+name: Apply and verify MicroDuck collision routing
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  verify-refresh:
+  apply-verify:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -20,6 +20,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Fetch exact pinned MicroDuck RL source
         run: |
           rm -rf /tmp/microduck_rl
@@ -36,22 +39,22 @@ jobs:
           meshes = Path('models/microduck/assets')
           for name in ('robot_walk.xml', 'robot_allcollisions.xml', 'ball.xml', 'config_mjcf_walk.json'):
               upstream = pin / name
-              committed = source / name
               if upstream.exists():
-                  assert committed.read_bytes() == upstream.read_bytes(), f'{name}: committed source byte mismatch'
+                  assert (source / name).read_bytes() == upstream.read_bytes(), f'{name}: committed source byte mismatch'
           sums = (source / 'GIT_BLOB_SHA1SUMS').read_text()
           upstream_meshes = sorted((pin / 'assets').glob('*.stl'))
-          assert upstream_meshes, 'pinned upstream has no STL assets'
-          assert {p.name for p in upstream_meshes} == {p.name for p in meshes.glob('*.stl')}, 'STL asset set mismatch'
+          assert upstream_meshes
+          assert {p.name for p in upstream_meshes} == {p.name for p in meshes.glob('*.stl')}
           for src in upstream_meshes:
-              copied = meshes / src.name
-              data = copied.read_bytes()
+              data = (meshes / src.name).read_bytes()
               assert data == src.read_bytes(), f'{src.name}: committed STL byte mismatch'
               blob = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
               assert f'{blob}  assets/{src.name}' in sums, f'{src.name}: Git blob provenance mismatch'
           print('committed MicroDuck source XML/STL bytes match pinned upstream')
           PY
-      - name: Refresh conformance and asset integrity metadata
+      - name: Apply task-specific collision routing migration
+        run: python scripts/finalize_microduck_collision_routing.py
+      - name: Refresh integrity metadata and validate static routing
         run: |
           python - <<'PY'
           import json, hashlib
@@ -62,18 +65,18 @@ jobs:
           fixture.write_text(json.dumps(doc, indent=2) + '\n')
           PY
           node scripts/prepare_microduck_assets.mjs
-      - name: Verify deterministic plant and refreshed manifest
-        run: |
           python scripts/generate_microduck_models.py --check
           node tests/validate_microduck_assets.mjs
-      - name: Commit refreshed integrity metadata
+          node tests/physics/microduck-phase5c-core.mjs
+          node tests/physics/microduck-lifecycle-core.mjs
+      - name: Commit collision routing implementation
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add assets/microduck/fixtures/controller-conformance.json assets/microduck/generated/procedural-rig.json assets/microduck/manifest.json
+          git add src native tests assets/microduck
           if git diff --cached --quiet; then
-            echo "MicroDuck source plant and asset integrity metadata already converged"
+            echo "MicroDuck collision routing already converged"
             exit 0
           fi
-          git commit -m "fix(microduck): refresh source-plant asset integrity"
+          git commit -m "fix(microduck): apply task-specific collision plant routing"
           git push origin HEAD:fix/microduck-full-plant-fidelity
