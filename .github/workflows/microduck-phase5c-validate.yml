@@ -46,7 +46,7 @@ jobs:
           node --check tests/physics/microduck-lifecycle-core.mjs
           node --check tests/microduck-phase5c-browser.spec.mjs
           python -m py_compile scripts/generate_microduck_models.py
-          python -m py_compile native/microduck_reference.py
+          python -m py_compile native/microduck_reference.py native/microduck_bam_reference.py native/microduck_bam_physical_reference.py tests/validate_microduck_bam_evidence.py
 
       - name: Committed MJCF assets match the deterministic generator
         run: python scripts/generate_microduck_models.py --check
@@ -66,12 +66,13 @@ jobs:
       - name: Repository static fidelity checks
         run: node tests/validate.mjs
 
-      - name: Generate native MuJoCo physical, negative and sensitivity evidence
+      - name: Generate native MuJoCo BAM physical, negative and sensitivity evidence
         run: |
-          python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0" numpy onnxruntime
-          python native/microduck_reference.py --trial all --json /tmp/microduck-all.json
-          python native/microduck_reference.py --trial walk --timestep 0.001 --json /tmp/microduck-walk-tight.json
-          python native/microduck_reference.py --trial stand --timestep 0.001 --json /tmp/microduck-stand-tight.json
+          python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0" numpy onnxruntime 'better-actuator-models==1.0.1'
+          python native/microduck_bam_reference.py --json /tmp/microduck-bam-library.json
+          python native/microduck_bam_physical_reference.py --trial all --json /tmp/microduck-all.json
+          python native/microduck_bam_physical_reference.py --trial walk --timestep 0.001 --json /tmp/microduck-walk-tight.json
+          python native/microduck_bam_physical_reference.py --trial stand --timestep 0.001 --json /tmp/microduck-stand-tight.json
 
       - name: The committed conformance fixture is reproducible from the native reference
         run: |
@@ -82,7 +83,6 @@ jobs:
           from pathlib import Path
           committed = json.loads(Path('/tmp/committed-fixture.json').read_text())
           regenerated = json.loads(Path('assets/microduck/fixtures/controller-conformance.json').read_text())
-          # The engine version string is the only field allowed to move with the runner.
           for doc in (committed, regenerated):
               doc['pins'].pop('mujoco', None)
           if committed != regenerated:
@@ -101,134 +101,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Validate native MicroDuck physical, negative and sensitivity gates
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          reports = json.loads(Path('/tmp/microduck-all.json').read_text())
-          tight_walk = json.loads(Path('/tmp/microduck-walk-tight.json').read_text())['walk']
-          tight_stand = json.loads(Path('/tmp/microduck-stand-tight.json').read_text())['stand']
-
-          def m(name):
-              return reports[name]['measured']
-
-          def c(name):
-              return reports[name]['contacts']
-
-          # --- provenance and engine ------------------------------------------------
-          for name, report in reports.items():
-              assert report['engine']['timestepSeconds'] == 0.005, (name, report['engine'])
-              assert report['engine']['controlDecimation'] == 4, (name, report['engine'])
-              assert abs(report['engine']['controlIntervalSeconds'] - 0.02) < 1e-12, (name, report['engine'])
-              assert report['modelSha256'], name
-              assert report['policySha256'], name
-
-          # --- nominal standing: it holds itself up, on its feet ---------------------
-          stand = m('stand')
-          assert stand['finalTiltDeg'] < 2.0, stand
-          assert 0.10 < stand['finalTrunkHeightM'] < 0.13, stand
-          assert stand['planarDistanceM'] < 0.02, stand
-          assert c('stand')['leftStanceFraction'] > 0.95, c('stand')
-          assert c('stand')['rightStanceFraction'] > 0.95, c('stand')
-
-          # --- nominal walking: contact-driven, not a slide --------------------------
-          walk = m('walk')
-          assert walk['commandedAxisDistanceM'] > 0.4, walk
-          assert not walk['upstreamFallenGate'], walk
-          assert c('walk')['leftContactTransitions'] >= 16, c('walk')
-          assert c('walk')['rightContactTransitions'] >= 16, c('walk')
-          assert c('walk')['leftAirFraction'] > 0.25, c('walk')
-          assert c('walk')['rightAirFraction'] > 0.25, c('walk')
-          assert m('walk-fast')['commandedAxisDistanceM'] > walk['commandedAxisDistanceM'], m('walk-fast')
-
-          # --- the servo gain schedule is real physics, not a reported number --------
-          # The deployed daemon writes a position-P-gain register every tick and does not hold
-          # one value: standing, kicks and rise run at 0.8 of the running gain. microduck_rl
-          # pins the correspondence (`<!-- 200 kp -->` above kp 0.55), so the softening has to
-          # show up as a different applied stiffness, not just a different label.
-          assert reports['walk']['controller']['firmwareGain'] == 200, reports['walk']['controller']
-          assert abs(reports['walk']['controller']['appliedKp'] - 0.55) < 1e-9, reports['walk']['controller']
-          assert reports['stand']['controller']['firmwareGain'] == 160, reports['stand']['controller']
-          assert abs(reports['stand']['controller']['appliedKp'] - 0.44) < 1e-9, reports['stand']['controller']
-          assert m('walk')['meanActuatorForceNm'] > 0.1, m('walk')
-
-          # --- actuation disabled: the propulsion mechanism is gone ------------------
-          off = m('walk-no-actuation')
-          assert off['upstreamFallenGate'], off
-          assert off['finalTrunkHeightM'] < 0.07, off
-          assert off['finalTiltDeg'] > 40, off
-          assert off['commandedAxisDistanceM'] < walk['commandedAxisDistanceM'] * 0.4, off
-          # A torque-off must produce NO actuator force. These are position actuators, so
-          # commanding zero radians would instead drive every joint to a straight-legged pose
-          # at full strength - measured at up to 0.289 N m through a trial labelled "no
-          # actuation". Zero here is what makes the negative control mean what it says.
-          for name in ('walk-no-actuation', 'recover-no-actuation'):
-              assert reports[name]['controller']['firmwareGain'] == 0, reports[name]['controller']
-              assert reports[name]['controller']['appliedKp'] == 0.0, reports[name]['controller']
-              assert m(name)['meanActuatorForceNm'] == 0.0, (name, m(name))
-              assert m(name)['peakActuatorForceNm'] == 0.0, (name, m(name))
-
-          # --- traction reduced: commanded propulsion materially degrades ------------
-          slip = m('walk-low-traction')
-          assert slip['commandedAxisDistanceM'] < walk['commandedAxisDistanceM'] * 0.4, slip
-
-          # --- kicking requires actual foot-ball contact, and a miss stays a miss ----
-          for side in ('kick-right', 'kick-left'):
-              hit = reports[side]
-              assert hit['ball']['footContactCount'] > 0, side
-              assert hit['ball']['planarDistanceM'] > 0.3, side
-              for contact in c(side)['footBallContacts']:
-                  assert 'microduck_ball_geom' in contact['geoms'], contact
-          miss = reports['kick-miss']
-          assert miss['ball']['footContactCount'] == 0, miss['ball']
-          assert miss['ball']['planarDistanceM'] < 1e-3, miss['ball']
-
-          # --- recovery is physical, and can fail ------------------------------------
-          for name in ('recover-face-down', 'recover-face-up'):
-              rec = m(name)
-              assert rec['uprightRecovered'], (name, rec)
-              assert rec['finalTrunkHeightM'] > 0.10, (name, rec)
-              setup = reports[name]['setupLog']
-              assert any(item['event'] == 'setup_trunk_orientation' for item in setup), (name, setup)
-          # Recovery must be able to fail, and these two are the unambiguous ways: no torque,
-          # and not enough time. Reduced traction is NOT one of them. It was, while standing
-          # ran at the full running gain; applying the deployed 0.8 standing ratio made the
-          # rise gentler, and the robot now gets up on a 0.02-friction floor. That is a real
-          # consequence of correcting the gain, so it is recorded as a success here rather
-          # than kept as a negative control that no longer discriminates.
-          for name in ('recover-no-actuation', 'recover-short-budget'):
-              fail = m(name)
-              assert not fail['uprightRecovered'], (name, fail)
-          slippery_rise = m('recover-low-traction')
-          assert slippery_rise['uprightRecovered'], slippery_rise
-          assert slippery_rise['finalTrunkHeightM'] > 0.10, slippery_rise
-
-          # --- sit descends and holds under contact ----------------------------------
-          sit = m('sit')
-          assert sit['finalTrunkHeightM'] < 0.08, sit
-
-          # --- numerical sensitivity: a 5x tighter timestep changes no conclusion -----
-          ratio = tight_walk['measured']['commandedAxisDistanceM'] / walk['commandedAxisDistanceM']
-          assert 0.9 <= ratio <= 1.1, (ratio, tight_walk['measured'], walk)
-          assert abs(tight_stand['measured']['finalTrunkHeightM'] - stand['finalTrunkHeightM']) < 0.005, (tight_stand['measured'], stand)
-
-          print('native MicroDuck physical, negative and sensitivity gates: OK')
-          print(f"  walk        {walk['commandedAxisDistanceM']:+.4f} m commanded-axis, "
-                f"{c('walk')['leftContactTransitions']}/{c('walk')['rightContactTransitions']} contact transitions")
-          print(f"  no actuation{off['commandedAxisDistanceM']:+.4f} m, trunk {off['finalTrunkHeightM']:.4f} m, tilt {off['finalTiltDeg']:.1f} deg, "
-                f"actuator force {off['peakActuatorForceNm']:.4f} N m peak")
-          print(f"  gain        walk {reports['walk']['controller']['firmwareGain']} (kp {reports['walk']['controller']['appliedKp']}), "
-                f"stand {reports['stand']['controller']['firmwareGain']} (kp {reports['stand']['controller']['appliedKp']}), "
-                f"walk effort {m('walk')['meanActuatorForceNm']:.4f} N m mean")
-          print(f"  low traction{slip['commandedAxisDistanceM']:+.4f} m "
-                f"({100 * slip['commandedAxisDistanceM'] / walk['commandedAxisDistanceM']:.0f}% of nominal)")
-          print(f"  kick        {reports['kick-right']['ball']['planarDistanceM']:.4f} m via "
-                f"{reports['kick-right']['ball']['footContactCount']} contacts; miss {miss['ball']['planarDistanceM']:.4f} m via "
-                f"{miss['ball']['footContactCount']}")
-          print(f"  timestep 5x walking distance ratio {ratio:.4f}")
-          PY
+      - name: Validate native MicroDuck BAM physical, negative and sensitivity gates
+        run: python tests/validate_microduck_bam_evidence.py /tmp/microduck-all.json /tmp/microduck-walk-tight.json /tmp/microduck-stand-tight.json
 
       - name: Fleet regressions must not be weakened by Phase 5C
         run: |
@@ -247,8 +121,6 @@ jobs:
           python tests/validate_starters.py
           python tests/execute_starters.py
 
-      # package-lock.json is deliberately untracked in this repository, so `npm ci` cannot run.
-      # This mirrors the install line the established fidelity workflow already uses.
       - name: MicroDuck physical browser journey
         run: |
           npm install --ignore-scripts --no-audit --no-fund
