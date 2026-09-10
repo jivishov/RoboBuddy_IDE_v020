@@ -47,11 +47,13 @@ jobs:
           npm install --ignore-scripts --no-audit --no-fund
           npx playwright install --with-deps chromium
           npx playwright test tests/microduck-interfaces-browser.spec.mjs --reporter=line
-      - name: Commit tested source; retire one-time repair files
+      - name: Commit tested source only
         run: |
           test "$(git ls-remote origin refs/heads/fix/microduck-full-plant-fidelity | cut -f1)" = "${{ github.sha }}"
-          git add src/app-v2.js src/task-workspace.js src/task-catalog.js src/physics/microduck-capabilities.js src/physics/microduck-physical-simulator.js src/runtime/microduck-physical-bridge.js src/webmcp/microduck-physical-control.js playwright.config.mjs .github/workflows/microduck-phase5c-validate.yml
-          git rm scripts/apply_microduck_public_interfaces.py .github/workflows/repair-microduck-public-interfaces.yml
+          # Workflow edits and one-time workflow cleanup use the connected GitHub tool,
+          # not this contents-only Actions token. Keep this commit source-only.
+          git restore .github/workflows/microduck-phase5c-validate.yml
+          git add src/app-v2.js src/task-workspace.js src/task-catalog.js src/physics/microduck-capabilities.js src/physics/microduck-physical-simulator.js src/runtime/microduck-physical-bridge.js src/webmcp/microduck-physical-control.js playwright.config.mjs
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix(microduck): wire physical IDE commands and runnable starters'
