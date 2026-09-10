@@ -11,7 +11,7 @@ permissions:
 jobs:
   finalize:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -20,28 +20,33 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Reconcile final provenance records
-        run: python scripts/finalize_microduck_provenance.py
-      - name: Validate reconciled records
+      - name: Correct reconciled source-audit wording
         run: |
-          python -m py_compile scripts/finalize_microduck_provenance.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/physics/microduck-source-audit.js')
+          text = path.read_text()
+          old = "//   * MICRODUCK_RL_SOURCE is the physical/RL environment authority. It supplies the collision\n//     task-specific collision plants, the BAM training-plant configuration, the source XML"
+          new = "//   * MICRODUCK_RL_SOURCE is the physical/RL environment authority. It supplies the\n//     task-specific collision plants, the BAM training-plant configuration, the source XML"
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one provenance-header target, found {text.count(old)}')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - name: Validate final provenance records
+        run: |
           node --check src/physics/microduck-source-audit.js
           node --check src/physics/microduck-capabilities.js
           node tests/physics/microduck-bam-plant-core.mjs
           node tests/physics/microduck-phase5c-core.mjs
           node tests/physics/microduck-lifecycle-core.mjs
           node tests/validate.mjs
-      - name: Commit final provenance reconciliation
+          grep -q 'exact STL collision mesh bytes' docs/physics/microduck-provenance.md
+          grep -q "BAM actuator model" src/physics/microduck-source-audit.js
+          ! grep -E 'repository-authored boxes|largest declared actuator-fidelity gap|Neither is reproduced' src/physics/microduck-source-audit.js docs/physics/microduck-provenance.md
+      - name: Commit wording correction
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/physics/microduck-source-audit.js src/physics/microduck-capabilities.js docs/physics/microduck-provenance.md
-          if git diff --cached --quiet; then
-            echo "MicroDuck provenance already reconciled"
-            exit 0
-          fi
-          git commit -m "docs(microduck): reconcile provenance with BAM collision plant"
+          git add src/physics/microduck-source-audit.js
+          git commit -m "docs(microduck): polish source-audit provenance wording"
           git push origin HEAD:fix/microduck-full-plant-fidelity
