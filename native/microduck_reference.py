@@ -74,6 +74,25 @@ HEAD_LOWPASS = 0.5
 LEGS_LOWPASS = 0.7
 STANDING_THRESHOLD = 0.05
 
+# The deployed daemon writes a firmware position-P-gain register on every servo every tick
+# (duck-control/src/bus.rs `write_position_p_gain`), and it is not constant: standing, kicks
+# and the sit/rise cycle run at `standing_gain_ratio` 0.8 of the running gain.
+#
+# microduck_rl pins the correspondence in the model itself. The `chosen_actuator` class the
+# robot's 29 joints use carries `<!-- 200 kp -->` directly above `kp="0.55"`, and the
+# commented-out alternative carries `<!-- 125 kp -->` above `kp="0.35"`. Two points, and the
+# relationship through them is proportional to within 2%, so a firmware gain maps onto the
+# identified stiffness by simple ratio. The same pair shows the torque limit does NOT move
+# with the gain: the 125 kp variant keeps `forcerange="-0.96 0.96"`.
+NOMINAL_FIRMWARE_GAIN = 200
+IDENTIFIED_KP = 0.55
+STANDING_GAIN_RATIO = 0.8
+
+
+def kp_for_firmware_gain(gain):
+    """The identified MuJoCo stiffness for a deployed firmware gain."""
+    return IDENTIFIED_KP * float(gain) / float(NOMINAL_FIRMWARE_GAIN)
+
 POLICY_FILES = {
     "walking": "alpha_walking.onnx",
     "stand": "alpha_stand.onnx",
@@ -103,6 +122,21 @@ def quat_rotate_inverse(quat, vec):
     xyz = np.asarray(quat[1:4], dtype=np.float64)
     t = np.cross(xyz, vec) * 2.0
     return vec - w * t + np.cross(xyz, t)
+
+
+def projected_gravity(quat):
+    """World -Z in the trunk frame, normalised.
+
+    duck-control/src/imu.rs builds the observation's gravity block as
+    `normalise(rotate_inverse(quat, [0, 0, -1]))` and says why: "in steady state gravity
+    must be a unit vector at any orientation - the policy observes it directly and was
+    trained on normalised input". For a unit quaternion the normalisation is a no-op, but
+    a declared setup perturbation can hand us a quaternion that is not quite unit, and
+    then the policy would see a short gravity vector it has never been trained on.
+    """
+    g = quat_rotate_inverse(np.asarray(quat, dtype=np.float64), np.array([0.0, 0.0, -1.0]))
+    norm = float(np.linalg.norm(g))
+    return g / norm if norm > 0.0 else g
 
 
 def build_observation(gyro, projected_gravity, joint_pos, joint_vel, last_action, command):
@@ -194,12 +228,36 @@ class Plant:
         self.ball_geom = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, "microduck_ball_geom")
         self.ball_joint = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "microduck_ball_free")
         self.setup_log = []
+        self.nominal_kp = float(m.actuator_gainprm[0, 0]) if m.nu else IDENTIFIED_KP
+        self.applied_kp = self.nominal_kp
         self.reset()
+
+    # -- actuation --------------------------------------------------------------
+    def set_actuator_kp(self, kp):
+        """Set the position-servo stiffness on every joint, as the daemon sets the register.
+
+        A MuJoCo `position` actuator applies `gainprm[0] * ctrl + biasprm[1] * qpos`, so kp
+        lives in both. `forcerange` is deliberately left alone: the source's own 125 kp
+        variant keeps the same torque limit, so the gain moves and the limit does not.
+
+        kp = 0 is a true torque-off: the actuator produces no force whatever ctrl says. That
+        is a different thing from commanding zero radians, which is a full-strength command
+        to a straight-legged pose.
+        """
+        kp = float(kp)
+        for i in range(self.model.nu):
+            self.model.actuator_gainprm[i, 0] = kp
+            self.model.actuator_biasprm[i, 1] = -kp
+        self.applied_kp = kp
+
+    def actuator_force_total(self):
+        return float(np.abs(np.asarray(self.data.actuator_force)).sum())
 
     # -- declared setup / reset -------------------------------------------------
     def reset(self):
         key = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_KEY, "HOME")
         mujoco.mj_resetDataKeyframe(self.model, self.data, key)
+        self.set_actuator_kp(self.nominal_kp)
         mujoco.mj_forward(self.model, self.data)
         self.setup_log.append({"event": "reset", "simulationTime": float(self.data.time)})
 
@@ -239,8 +297,7 @@ class Plant:
         d = self.data
         return dict(
             gyro=d.sensordata[self.gyro_adr:self.gyro_adr + 3].astype(np.float64).copy(),
-            gravity=quat_rotate_inverse(d.xquat[self.trunk].astype(np.float64),
-                                        np.array([0.0, 0.0, -1.0])),
+            gravity=projected_gravity(d.xquat[self.trunk].astype(np.float64)),
             joint_pos=d.qpos[self.qadr:self.qadr + ACTION_LEN].astype(np.float64).copy(),
             joint_vel=d.qvel[self.vadr:self.vadr + ACTION_LEN].astype(np.float64).copy(),
         )
@@ -355,6 +412,8 @@ def run_trial(*, model_key, policy_id, seconds, command, timestep=PHYSICS_TIMEST
     ball_start = plant.ball_position()
     sink = new_contact_sink()
     trunk_z = []
+    effort_sum = 0.0
+    effort_peak = 0.0
     ticks = int(round(seconds / (timestep * decimation)))
     for _ in range(ticks):
         obs = plant.observe()
@@ -362,9 +421,20 @@ def run_trial(*, model_key, policy_id, seconds, command, timestep=PHYSICS_TIMEST
         _, _, targets, _ = controller.step(policy_id, obs["gyro"], obs["gravity"],
                                            obs["joint_pos"], obs["joint_vel"], cmd,
                                            standing_tuned=standing_tuned)
-        # actuation disabled is a declared torque-off condition, not a physics change
-        plant.data.ctrl[:] = targets if actuation else np.zeros(ACTION_LEN)
+        # The controller's own gain schedule reaches the servos, exactly as the daemon writes
+        # it to the firmware register: standing tuning runs at 0.8 of the running gain.
+        #
+        # A declared torque-off zeroes that gain. It does NOT zero ctrl: commanding 0 rad is
+        # a full-strength command to a straight-legged pose, which is actuation, not its
+        # absence. The targets stay published so the trial still shows what the policy asked
+        # for while the motors produced nothing.
+        gain = round(NOMINAL_FIRMWARE_GAIN * STANDING_GAIN_RATIO) if standing_tuned else NOMINAL_FIRMWARE_GAIN
+        plant.set_actuator_kp(kp_for_firmware_gain(gain) if actuation else 0.0)
+        plant.data.ctrl[:] = targets
         plant.advance(decimation, sink)
+        effort = plant.actuator_force_total()
+        effort_sum += effort
+        effort_peak = max(effort_peak, effort)
         trunk_z.append(float(plant.data.qpos[2]))
 
     end = np.array(plant.data.qpos[0:3], dtype=np.float64)
@@ -390,7 +460,11 @@ def run_trial(*, model_key, policy_id, seconds, command, timestep=PHYSICS_TIMEST
                    "controlIntervalSeconds": timestep * decimation},
         "controller": {"actionScale": action_scale, "standingTuned": standing_tuned,
                        "headLowpassAlpha": HEAD_LOWPASS if filters else None,
-                       "legsLowpassAlpha": LEGS_LOWPASS if filters else None},
+                       "legsLowpassAlpha": LEGS_LOWPASS if filters else None,
+                       "firmwareGain": 0 if not actuation else (
+                           round(NOMINAL_FIRMWARE_GAIN * STANDING_GAIN_RATIO) if standing_tuned
+                           else NOMINAL_FIRMWARE_GAIN),
+                       "appliedKp": round(plant.applied_kp, 6)},
         "requested": {"command": command if command_fn is None else "time-varying",
                       "actuationEnabled": actuation, "durationSeconds": seconds},
         "setupLog": plant.setup_log,
@@ -400,6 +474,11 @@ def run_trial(*, model_key, policy_id, seconds, command, timestep=PHYSICS_TIMEST
             "planarDistanceM": round(float(math.hypot(disp[0], disp[1])), 6),
             "averageSpeedMS": round(float(math.hypot(disp[0], disp[1]) / seconds), 6),
             "yawChangeRad": round(float(math.atan2(math.sin(yaw1 - yaw0), math.cos(yaw1 - yaw0))), 6),
+            # Summed |actuator_force| over the run. A declared torque-off must be exactly
+            # zero here; commanding zero radians instead leaves this firmly non-zero, which
+            # is how the two were told apart in the first place.
+            "meanActuatorForceNm": round(effort_sum / max(ticks, 1), 6),
+            "peakActuatorForceNm": round(effort_peak, 6),
             "finalTrunkHeightM": round(float(end[2]), 6),
             "minTrunkHeightM": round(float(min(trunk_z)), 6),
             "maxTrunkHeightM": round(float(max(trunk_z)), 6),

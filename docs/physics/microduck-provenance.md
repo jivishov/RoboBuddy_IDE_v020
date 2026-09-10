@@ -172,6 +172,75 @@ Fit quality, measured at the home pose against the compiled upstream mesh model:
 | Sole contact patch, world y (left) | 0.0249 … 0.0589 | 0.0247 … 0.0586 |
 | Settled standing trunk height | 0.1161 m | 0.1161 m |
 
+### The servo gain is scheduled, and the schedule is physical
+
+The deployed daemon does not hold one servo stiffness. `duck-control/src/bus.rs` writes a
+position-P-gain register on every joint (`write_position_p_gain`), and `robotd/src/control.rs`
+schedules the value: the running gain is 200, and standing, both kicks and the sit/rise cycle
+run at `standing_gain_ratio` 0.8 of it, so 160.
+
+`microduck_rl` pins the correspondence between that firmware number and the identified
+stiffness inside the model itself. The `chosen_actuator` class the robot's joints use carries
+
+```xml
+<!-- 200 kp -->
+<position kp="0.55" kv="0.0" forcerange="-0.96 0.96" ctrlrange="-10.0 10.0"/>
+<!-- 125 kp -->
+<!-- <position kp="0.35" kv="0.0" forcerange="-0.96 0.96" ctrlrange="-10.0 10.0"/> -->
+```
+
+Two points, proportional through both to within 2% (0.00275 vs 0.00280 N·m/rad per firmware
+unit), and exact at the robot's own gain of 200. So a firmware gain maps onto stiffness by
+ratio: `kp = 0.55 × gain / 200`, giving **0.44 N·m/rad** while standing. The same pair settles
+something guessing would get wrong: the torque limit does **not** move with the gain. The
+125 kp variant keeps `forcerange="-0.96 0.96"`.
+
+That schedule now reaches the physics. The gain travels with each target frame, exactly as the
+daemon writes the register alongside each command, and the worker writes it into
+`actuator_gainprm` and the matching `actuator_biasprm` term. It previously did not: the
+controller computed the softened gain, published it as `firmwareGain`, and nothing acted on it,
+so standing, kicks, sit and rise all ran at 0.55 - 25% stiffer than the deployed robot - while
+the published state said otherwise. Walking was and remains 0.55, so nominal walking evidence
+is unchanged (+0.6943 m, bit-identical).
+
+Applying it changed two measured outcomes, both recorded rather than tuned away: kick distance
+moved from 2.5137 m to 2.5483 m (5 to 6 sole/ball contacts), and low-traction recovery began
+to succeed (see Negative controls). Standing itself is unaffected in kind - 0.1159 m at 0.16°
+tilt - so the softer gain does not cost the robot its stance.
+
+The published state separates the two views: `controller.firmwareGain` is what the controller
+asked for, `actual.firmwareGain` / `actual.appliedServoKp` / `actual.actuatorForceTotalNm` are
+what MuJoCo applied and produced. They are both published so a claim about the gain is
+falsifiable from the observation alone.
+
+**Train/deploy note.** `microduck_constants.py` sets `kp_fw=200.0` with kp randomisation
+explicitly off, so the policies were trained at a single stiffness and have never seen 0.44.
+The real robot is softened at deploy time regardless; reproducing the deployed controller means
+reproducing that, and it is declared here rather than smoothed over.
+
+### Two smaller contract corrections
+
+* **The standing threshold is inclusive.** `duck-control/src/policy.rs` compares
+  `twist_magnitude <= standing_threshold`. This used a strict `<`, so a twist of exactly 0.05 -
+  the one value a person is most likely to type - walked where the deployed robot stands.
+* **Projected gravity is normalised.** `duck-control/src/imu.rs` builds the block as
+  `normalise(rotate_inverse(quat, [0,0,-1]))` and says why: "gravity must be a unit vector at
+  any orientation - the policy observes it directly and was trained on normalised input". For a
+  unit quaternion this is a no-op, which is why it went unnoticed, but a declared setup
+  perturbation can supply a quaternion that is not quite unit and the policy would then see a
+  short gravity vector it was never trained on. The rotation now has one implementation, shared
+  by the controller and the authoritative worker, rather than a copy in each.
+
+### Declared divergence: the IMU median filter
+
+`duck-control/src/imu.rs` passes both gyro and projected gravity through a median-of-three
+before they reach the observation, and estimates its own gyro bias. **Neither is reproduced.**
+Both exist to reject spikes from a real MEMS sensor; on noise-free simulator ground truth a
+median-of-three mostly returns the previous sample, so reproducing it would add roughly one
+control tick (20 ms) of IMU lag that the training environment never applied. The deployed robot
+does see that lag, so this is a divergence, not a non-issue - it is declared here alongside the
+actuator gap below rather than claimed as fidelity.
+
 ### Declared actuator-fidelity gap
 
 The policies were trained against `microduck_rl`'s BAM M6 voltage-domain actuator, with a 3-6
@@ -225,15 +294,40 @@ measured property of this policy in this plant, not a limit imposed by the works
 
 | Control | Result |
 |---|---|
-| Actuation disabled (declared torque-off) | commanded-axis 0.123 m of *falling*, trunk collapses to 0.037 m at 67.8° tilt. No commanded locomotion mechanism remains. |
-| Traction reduced (sole/floor friction 0.02) | commanded-axis distance falls from 0.694 m to 0.158 m, a **77% loss**; the robot slides 0.217 m sideways instead of walking |
+| Actuation disabled (declared torque-off) | **0.0000 N·m** of actuator force, peak and mean. Commanded-axis 0.048 m of *falling*, trunk collapses to 0.036 m at 91.2° tilt. |
+| Traction reduced (sole/floor friction 0.02) | commanded-axis distance falls from 0.694 m to 0.158 m, a **77% loss**; the robot slides sideways instead of walking |
 | Kick miss (ball outside reach) | **0** foot-ball contacts, **0.0000 m** of ball motion. A miss stays a miss. |
-| Recovery, actuation disabled | stays down at 0.0475 m / 89.9° |
-| Recovery, reduced traction | thrashes for 8 s (190 contact transitions) and stays down at 0.0926 m / 85.7° |
-| Recovery, 1.5 s budget | incomplete, reported as not recovered at 0.0771 m / 100.6° |
+| Recovery, actuation disabled | 0.0000 N·m of force; stays down at 0.047 m / 89.1° |
+| Recovery, 1.5 s budget | incomplete, reported as not recovered at 0.078 m / 89.1° |
 | Policy / model mismatch | rejected before execution, on any of the 14 compatibility-identity fields |
 
 Recovery can fail, and does. No reset is ever counted as a recovery.
+
+Reduced traction is **not** on that list, and used to be. It stopped discriminating when the
+deployed standing gain was applied to physics (below): the softer rise slips less, and the
+robot now gets up on a 0.02-friction floor, reaching 0.116 m at 0.19° tilt. That is a real
+consequence of correcting the gain, so it is recorded here as a success rather than kept as a
+negative control that no longer holds.
+
+#### What "actuation disabled" means, and what it used to mean
+
+These are MuJoCo **position** actuators: `ctrl` is a target angle, not a torque. The torque-off
+condition therefore zeroes the *servo gain*, and leaves `ctrl` carrying whatever the controller
+last asked for, so the observation still shows the policy's intent beside zero force.
+
+It did not always. The condition was originally implemented as `ctrl = 0`, which is not the
+absence of actuation but a full-strength command to 0 rad on every joint - a straight-legged
+pose the home pose is nowhere near. Measured on this plant, that left the servos working at up
+to **0.289 N·m** through a trial labelled "no actuation", and settled the robot at 67.3° rather
+than the 80°+ a real torque-off produces. The robot did fall, so every behavioural gate passed;
+it just fell for the wrong reason, and the evidence did not mean what it said.
+
+The correction is checked in three places, and each was verified to fail without it: the
+native evidence asserts mean and peak actuator force are exactly zero; the lifecycle gate
+asserts the gain, the stiffness and the force are zero while the targets survive; and the
+browser journey asserts the same against the real WASM model. Disabling the model write makes
+the browser journey fail at `fallen` - with `ctrl` retained and the gain unwritten, the robot
+simply keeps walking through a trial that claims its motors are off.
 
 ### Native / browser conformance
 

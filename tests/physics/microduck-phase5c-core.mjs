@@ -676,6 +676,73 @@ check('the physical MicroDuck workspace has its own chip, badge and summary', ()
   assert(/updateSimulationPresentation\(p, selectedMode\)/.test(app), 'the presentation no longer receives the selected mode');
 });
 
+check('the deployed standing threshold is inclusive, and the gain schedule is real physics', async () => {
+  const { MICRODUCK_NOMINAL_FIRMWARE_GAIN, MICRODUCK_SERVO_KP_NM_RAD, microDuckKpForFirmwareGain } =
+    await import('../../src/physics/microduck-model-package.js');
+
+  // duck-control/src/policy.rs compares `twist_magnitude <= standing_threshold`. A strict
+  // `<` walks on exactly 0.05, which is the one value a person is most likely to type.
+  const controller = new MicroDuckController({ availablePolicies: MICRODUCK_PHYSICAL_POLICIES });
+  assert(controller.willStand(0.05), 'a twist of exactly the standing threshold no longer stands');
+  assert(controller.willStand(0.049), 'a twist below the standing threshold no longer stands');
+  assert(!controller.willStand(0.051), 'a twist above the standing threshold now stands');
+
+  // microduck_rl's `chosen_actuator` carries `<!-- 200 kp -->` above kp 0.55 and, commented
+  // out, `<!-- 125 kp -->` above kp 0.35. The mapping is proportional through both points.
+  assert(MICRODUCK_NOMINAL_FIRMWARE_GAIN === 200, 'the nominal firmware gain moved off the source value');
+  close(microDuckKpForFirmwareGain(200), MICRODUCK_SERVO_KP_NM_RAD, 1e-12, 'the running gain must map to the identified stiffness');
+  close(microDuckKpForFirmwareGain(160), 0.44, 1e-12, 'the standing gain must map to 0.8 of the identified stiffness');
+  close(microDuckKpForFirmwareGain(125), 0.35, 0.01, 'the mapping must agree with the source second data point');
+  assert(microDuckKpForFirmwareGain(0) === 0, 'a zero gain must be a true torque-off');
+
+  // The schedule must be applied, not merely reported. The simulator sends the gain with the
+  // targets, and the worker writes it into the actuator rather than leaving kp constant.
+  const simulator = readFileSync(resolve(ROOT, 'src/physics/microduck-physical-simulator.js'), 'utf8');
+  assert(/firmwareGain: lastStep\.gain/.test(simulator), 'the controller gain no longer travels with the targets');
+  const worker = readFileSync(resolve(ROOT, 'src/physics/microduck-mujoco-worker.js'), 'utf8');
+  assert(/actuator_gainprm\[actuator\.id \* gainWidth\] = kp/.test(worker), 'the worker no longer writes the servo stiffness');
+  assert(/actuator_biasprm\[actuator\.id \* biasWidth \+ 1\] = -kp/.test(worker), 'the worker writes gainprm without the matching bias term');
+});
+
+check('a declared torque-off removes force, never the requested target', () => {
+  const worker = readFileSync(resolve(ROOT, 'src/physics/microduck-mujoco-worker.js'), 'utf8');
+  // These are position actuators: ctrl is a target angle, not a torque. Zeroing ctrl commands
+  // every joint to 0 rad at full strength, which is actuation toward a straight-legged pose.
+  // Measured on the real plant it left up to 0.289 N m running through a trial labelled "no
+  // actuation". A real torque-off zeroes the gain and leaves the request visible.
+  assert(!/data\.ctrl\[actuator\.id\] = actuationEnabled \? target : 0/.test(worker),
+    'the worker zeroes ctrl for torque-off again, which is a zero-radian command, not torque-off');
+  assert(/applyFirmwareGain\(enabled \? MICRODUCK_NOMINAL_FIRMWARE_GAIN : 0\)/.test(worker),
+    'the declared torque-off no longer zeroes the servo gain');
+  assert(/actuatorForceTotalNm/.test(worker), 'the worker stopped publishing actuator effort, so a torque-off is unfalsifiable');
+
+  const reference = readFileSync(resolve(ROOT, 'native/microduck_reference.py'), 'utf8');
+  assert(!/np\.zeros\(ACTION_LEN\)/.test(reference), 'the native reference zeroes ctrl for torque-off again');
+  assert(/set_actuator_kp\(kp_for_firmware_gain\(gain\) if actuation else 0\.0\)/.test(reference),
+    'the native reference no longer applies the gain schedule and the torque-off through the servo gain');
+  assert(/meanActuatorForceNm/.test(reference), 'the native evidence stopped recording actuator effort');
+});
+
+check('projected gravity is normalised, and there is only one implementation of it', () => {
+  // duck-control/src/imu.rs: normalise(rotate_inverse(quat, [0,0,-1])), because "the policy
+  // observes it directly and was trained on normalised input". A declared setup perturbation
+  // can supply a quaternion that is not quite unit; without this the policy sees a short
+  // gravity vector it has never been trained on.
+  const upright = projectedGravityFromQuaternion([1, 0, 0, 0]);
+  close(Math.hypot(...upright), 1, 1e-12, 'upright gravity must be a unit vector');
+  close(upright[2], -1, 1e-12, 'upright gravity must point down the trunk -z');
+  // A deliberately non-unit quaternion still yields a unit gravity vector.
+  const scaled = projectedGravityFromQuaternion([2, 0, 0, 0]);
+  close(Math.hypot(...scaled), 1, 1e-12, 'gravity is not normalised for a non-unit quaternion');
+  const tipped = projectedGravityFromQuaternion([Math.SQRT1_2, 0, -Math.SQRT1_2, 0]);
+  close(Math.hypot(...tipped), 1, 1e-12, 'tipped gravity must stay a unit vector');
+
+  const worker = readFileSync(resolve(ROOT, 'src/physics/microduck-mujoco-worker.js'), 'utf8');
+  assert(/import \{ projectedGravityFromQuaternion \} from '\.\/microduck-controller\.js'/.test(worker),
+    'the worker no longer shares the controller rotation');
+  assert(!/^function projectedGravity\(/m.test(worker), 'the worker carries its own copy of the rotation again');
+});
+
 await Promise.all(pending);
 console.log(`\nMicroDuck Phase 5C core: ${passed} passed, ${failures.length} failed`);
 if (failures.length) { console.error(`failed: ${failures.join(', ')}`); process.exit(1); }

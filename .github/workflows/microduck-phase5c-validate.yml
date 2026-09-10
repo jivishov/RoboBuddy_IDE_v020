@@ -143,12 +143,32 @@ jobs:
           assert c('walk')['rightAirFraction'] > 0.25, c('walk')
           assert m('walk-fast')['commandedAxisDistanceM'] > walk['commandedAxisDistanceM'], m('walk-fast')
 
+          # --- the servo gain schedule is real physics, not a reported number --------
+          # The deployed daemon writes a position-P-gain register every tick and does not hold
+          # one value: standing, kicks and rise run at 0.8 of the running gain. microduck_rl
+          # pins the correspondence (`<!-- 200 kp -->` above kp 0.55), so the softening has to
+          # show up as a different applied stiffness, not just a different label.
+          assert reports['walk']['controller']['firmwareGain'] == 200, reports['walk']['controller']
+          assert abs(reports['walk']['controller']['appliedKp'] - 0.55) < 1e-9, reports['walk']['controller']
+          assert reports['stand']['controller']['firmwareGain'] == 160, reports['stand']['controller']
+          assert abs(reports['stand']['controller']['appliedKp'] - 0.44) < 1e-9, reports['stand']['controller']
+          assert m('walk')['meanActuatorForceNm'] > 0.1, m('walk')
+
           # --- actuation disabled: the propulsion mechanism is gone ------------------
           off = m('walk-no-actuation')
           assert off['upstreamFallenGate'], off
           assert off['finalTrunkHeightM'] < 0.07, off
           assert off['finalTiltDeg'] > 40, off
           assert off['commandedAxisDistanceM'] < walk['commandedAxisDistanceM'] * 0.4, off
+          # A torque-off must produce NO actuator force. These are position actuators, so
+          # commanding zero radians would instead drive every joint to a straight-legged pose
+          # at full strength - measured at up to 0.289 N m through a trial labelled "no
+          # actuation". Zero here is what makes the negative control mean what it says.
+          for name in ('walk-no-actuation', 'recover-no-actuation'):
+              assert reports[name]['controller']['firmwareGain'] == 0, reports[name]['controller']
+              assert reports[name]['controller']['appliedKp'] == 0.0, reports[name]['controller']
+              assert m(name)['meanActuatorForceNm'] == 0.0, (name, m(name))
+              assert m(name)['peakActuatorForceNm'] == 0.0, (name, m(name))
 
           # --- traction reduced: commanded propulsion materially degrades ------------
           slip = m('walk-low-traction')
@@ -172,9 +192,18 @@ jobs:
               assert rec['finalTrunkHeightM'] > 0.10, (name, rec)
               setup = reports[name]['setupLog']
               assert any(item['event'] == 'setup_trunk_orientation' for item in setup), (name, setup)
-          for name in ('recover-no-actuation', 'recover-low-traction', 'recover-short-budget'):
+          # Recovery must be able to fail, and these two are the unambiguous ways: no torque,
+          # and not enough time. Reduced traction is NOT one of them. It was, while standing
+          # ran at the full running gain; applying the deployed 0.8 standing ratio made the
+          # rise gentler, and the robot now gets up on a 0.02-friction floor. That is a real
+          # consequence of correcting the gain, so it is recorded as a success here rather
+          # than kept as a negative control that no longer discriminates.
+          for name in ('recover-no-actuation', 'recover-short-budget'):
               fail = m(name)
               assert not fail['uprightRecovered'], (name, fail)
+          slippery_rise = m('recover-low-traction')
+          assert slippery_rise['uprightRecovered'], slippery_rise
+          assert slippery_rise['finalTrunkHeightM'] > 0.10, slippery_rise
 
           # --- sit descends and holds under contact ----------------------------------
           sit = m('sit')
@@ -188,7 +217,11 @@ jobs:
           print('native MicroDuck physical, negative and sensitivity gates: OK')
           print(f"  walk        {walk['commandedAxisDistanceM']:+.4f} m commanded-axis, "
                 f"{c('walk')['leftContactTransitions']}/{c('walk')['rightContactTransitions']} contact transitions")
-          print(f"  no actuation{off['commandedAxisDistanceM']:+.4f} m, trunk {off['finalTrunkHeightM']:.4f} m, tilt {off['finalTiltDeg']:.1f} deg")
+          print(f"  no actuation{off['commandedAxisDistanceM']:+.4f} m, trunk {off['finalTrunkHeightM']:.4f} m, tilt {off['finalTiltDeg']:.1f} deg, "
+                f"actuator force {off['peakActuatorForceNm']:.4f} N m peak")
+          print(f"  gain        walk {reports['walk']['controller']['firmwareGain']} (kp {reports['walk']['controller']['appliedKp']}), "
+                f"stand {reports['stand']['controller']['firmwareGain']} (kp {reports['stand']['controller']['appliedKp']}), "
+                f"walk effort {m('walk')['meanActuatorForceNm']:.4f} N m mean")
           print(f"  low traction{slip['commandedAxisDistanceM']:+.4f} m "
                 f"({100 * slip['commandedAxisDistanceM'] / walk['commandedAxisDistanceM']:.0f}% of nominal)")
           print(f"  kick        {reports['kick-right']['ball']['planarDistanceM']:.4f} m via "

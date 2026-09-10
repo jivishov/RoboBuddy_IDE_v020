@@ -13,7 +13,7 @@
 import { PhysicsSession } from '../../src/physics/session.js';
 import { BrowserMuJoCoBackend } from '../../src/physics/browser-mujoco-backend.js';
 import { PHYSICS_BACKEND_API_VERSION } from '../../src/physics/backend-contract.js';
-import { MICRODUCK_WALK_PACKAGE } from '../../src/physics/microduck-model-package.js';
+import { MICRODUCK_NOMINAL_FIRMWARE_GAIN, MICRODUCK_WALK_PACKAGE, microDuckKpForFirmwareGain } from '../../src/physics/microduck-model-package.js';
 import { MICRODUCK_WALK_SCENE } from '../../src/physics/microduck-scene.js';
 import {
   MICRODUCK_CONTROL_DECIMATION, MICRODUCK_HOME_POSITION_RAD, MICRODUCK_POLICY_JOINT_ORDER,
@@ -45,6 +45,7 @@ class ScriptedWorker {
     this.time = 0;
     this.paused = false;
     this.actuationEnabled = true;
+    this.firmwareGain = MICRODUCK_NOMINAL_FIRMWARE_GAIN;
     this.setupLog = [];
     this.ctrl = Object.fromEntries(MICRODUCK_POLICY_JOINT_ORDER.map((id, slot) => [id, MICRODUCK_HOME_POSITION_RAD[slot]]));
     this.trunk = { positionM: [0, 0, 0.12], quaternionWxyz: [1, 0, 0, 0] };
@@ -56,6 +57,10 @@ class ScriptedWorker {
       simulationTime: this.time,
       model: { id: MICRODUCK_WALK_PACKAGE.modelId, asset: MICRODUCK_WALK_PACKAGE.asset, sha256: MICRODUCK_WALK_PACKAGE.sha256 },
       engine: { version: '3.11.0', versionEvidence: 'scripted lifecycle stand-in', timestepSeconds: TIMESTEP },
+      firmwareGain: this.firmwareGain,
+      appliedServoKp: microDuckKpForFirmwareGain(this.firmwareGain),
+      // A zero gain produces no force however far the target is from the joint.
+      actuatorForceTotalNm: this.firmwareGain === 0 ? 0 : 1,
       joints: Object.fromEntries(MICRODUCK_POLICY_JOINT_ORDER.map((id, slot) => [id, {
         positionRad: MICRODUCK_HOME_POSITION_RAD[slot], velocityRadS: 0,
         targetRad: this.ctrl[id], effortNm: 0,
@@ -106,10 +111,14 @@ class ScriptedWorker {
         } else if (op === 'observe') result = this.observation();
         else if (op === 'command') {
           if (payload.type !== 'set_joint_targets') throw new Error(`unsupported command ${payload.type}`);
-          for (const [jointId, value] of Object.entries(payload.targetsRad)) this.ctrl[jointId] = this.actuationEnabled ? value : 0;
+          // Mirrors the real worker: the request is always latched, and it is the servo gain
+          // that a torque-off removes. Zeroing ctrl instead would be a full-strength command
+          // to a straight-legged pose, which is actuation rather than its absence.
+          if (payload.firmwareGain != null && this.actuationEnabled) this.firmwareGain = Number(payload.firmwareGain);
+          for (const [jointId, value] of Object.entries(payload.targetsRad)) this.ctrl[jointId] = value;
           result = this.observation();
         } else if (op === 'setup') {
-          if (payload.type === 'set_actuation_enabled') { this.actuationEnabled = payload.enabled !== false; this.setupLog.push({ event: 'setup_actuation', actuationEnabled: this.actuationEnabled, simulationTime: this.time }); }
+          if (payload.type === 'set_actuation_enabled') { this.actuationEnabled = payload.enabled !== false; this.firmwareGain = this.actuationEnabled ? MICRODUCK_NOMINAL_FIRMWARE_GAIN : 0; this.setupLog.push({ event: 'setup_actuation', actuationEnabled: this.actuationEnabled, firmwareGain: this.firmwareGain, simulationTime: this.time }); }
           else if (payload.type === 'set_trunk_orientation') { this.trunk.quaternionWxyz = [...payload.quaternionWxyz]; this.setupLog.push({ event: 'setup_trunk_orientation', label: payload.label, simulationTime: this.time }); }
           else throw new Error(`unsupported setup ${payload.type}`);
           result = this.observation();
@@ -165,7 +174,7 @@ async function runControlTicks(session, controller, command, ticks, { infer = ()
       command,
     });
     const step = controller.completeTick(pending, infer(tick), MICRODUCK_CONTROL_DECIMATION * TIMESTEP);
-    await session.sendCommand({ type: 'set_joint_targets', targetsRad: { ...step.targetsRad } }, { maxSteps: MICRODUCK_CONTROL_DECIMATION });
+    await session.sendCommand({ type: 'set_joint_targets', targetsRad: { ...step.targetsRad }, firmwareGain: step.gain }, { maxSteps: MICRODUCK_CONTROL_DECIMATION });
     await session.advanceSteps(MICRODUCK_CONTROL_DECIMATION);
     executed += 1;
     if (onTick) onTick(tick, step);
@@ -246,18 +255,52 @@ await check('a backend that declares no setup path refuses setup entirely', asyn
   session.dispose();
 });
 
-await check('a torque-off condition removes the actuator target the controller asked for', async () => {
-  const { session, worker } = await makeSession();
+await check('a torque-off condition removes the servo force, not the target', async () => {
+  const { session } = await makeSession();
   await session.loadScene(MICRODUCK_WALK_SCENE);
   const controller = new MicroDuckController({ availablePolicies: MICRODUCK_PHYSICAL_POLICIES });
   await session.applySetup({ type: 'set_actuation_enabled', enabled: false, label: 'declared torque-off condition' });
   await runControlTicks(session, controller, makeCommand({ twist: [0.3, 0, 0] }), 2, { infer: () => new Array(14).fill(0.4) });
   const observation = await session.getObservation();
-  // The controller still produced targets - a disabled actuator is not a disabled policy -
-  // but the authority produced no actuator command from them.
+
+  // The controller still produces targets - a disabled actuator is not a disabled policy.
   assert(controller.lastStep.targetsRad.left_knee !== MICRODUCK_HOME_POSITION_RAD[3], 'the controller stopped producing targets');
-  for (const id of MICRODUCK_POLICY_JOINT_ORDER) assert(observation.joints[id].targetRad === 0, `${id} still carries an actuator target under torque-off`);
+
+  // What a torque-off removes is the SERVO GAIN, so the actuator produces no force. It must
+  // not remove the target: these are position actuators, and commanding zero radians is a
+  // full-strength command to a straight-legged pose - actuation, not its absence. Measured
+  // on the real plant, that mistake left the servos working at up to 0.289 N m through a
+  // trial labelled "no actuation", and settled the robot at a different tilt than a real
+  // torque-off does.
+  assert(observation.firmwareGain === 0, `torque-off left the firmware gain at ${observation.firmwareGain}`);
+  assert(observation.appliedServoKp === 0, `torque-off left the servo stiffness at ${observation.appliedServoKp}`);
+  assert(observation.actuatorForceTotalNm === 0, `torque-off still produced ${observation.actuatorForceTotalNm} N m of actuator force`);
+  for (const id of MICRODUCK_POLICY_JOINT_ORDER) {
+    assert(observation.joints[id].targetRad === controller.lastStep.targetsRad[id], `${id} lost the target the controller asked for under torque-off`);
+  }
   assert(observation.actuationEnabled === false, 'the observation stopped reporting the torque-off condition');
+  session.dispose();
+});
+
+await check('the controller gain schedule reaches the servos', async () => {
+  const { session, worker } = await makeSession();
+  await session.loadScene(MICRODUCK_WALK_SCENE);
+  const controller = new MicroDuckController({ availablePolicies: MICRODUCK_PHYSICAL_POLICIES });
+
+  // Walking runs at the full running gain.
+  await runControlTicks(session, controller, makeCommand({ twist: [0.3, 0, 0] }), 1);
+  const walking = worker.lastPayload('command');
+  assert(walking.firmwareGain === MICRODUCK_NOMINAL_FIRMWARE_GAIN, `walking commanded gain ${walking.firmwareGain}`);
+
+  // Standing runs softer, at the deployed 0.8 ratio. Before this was wired through, the
+  // controller computed the softened gain, published it, and nothing acted on it: standing
+  // ran 25% stiffer than the deployed robot at every tick.
+  await runControlTicks(session, controller, makeCommand({ twist: [0, 0, 0] }), 1);
+  const standing = worker.lastPayload('command');
+  assert(standing.firmwareGain === 160, `standing commanded gain ${standing.firmwareGain}`);
+  const observation = await session.getObservation();
+  assert(Math.abs(observation.appliedServoKp - 0.44) < 1e-12, `standing applied kp ${observation.appliedServoKp}`);
+  assert(Math.abs(microDuckKpForFirmwareGain(MICRODUCK_NOMINAL_FIRMWARE_GAIN) - 0.55) < 1e-12, 'the running gain no longer maps to the identified stiffness');
   session.dispose();
 });
 

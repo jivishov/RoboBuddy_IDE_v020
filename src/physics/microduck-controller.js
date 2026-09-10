@@ -219,8 +219,18 @@ export function buildPolicyObservation({
 }
 
 /**
- * Rotate world -Z into the trunk body frame, exactly as the upstream reference runner's
- * `quat_rotate_inverse(trunk_quat, [0, 0, -1])` does.
+ * Rotate world -Z into the trunk body frame and normalise it, exactly as
+ * duck-control/src/imu.rs builds the observation's gravity block:
+ * `normalise(rotate_inverse(quat, [0, 0, -1]))`.
+ *
+ * The normalisation is not decoration. imu.rs states the reason outright: "in steady state
+ * gravity must be a unit vector at any orientation - the policy observes it directly and was
+ * trained on normalised input." For a unit quaternion it is a no-op, but a declared setup
+ * perturbation can hand us a quaternion that is not quite unit, and the policy would then
+ * see a short gravity vector it has never been trained on.
+ *
+ * This is the single implementation. The authoritative worker imports it rather than
+ * carrying its own copy, because two copies of a rotation are two chances to disagree.
  */
 export function projectedGravityFromQuaternion(quaternionWxyz) {
   const [w, x, y, z] = fixedVector(quaternionWxyz, 4, 'Quaternion');
@@ -230,11 +240,13 @@ export function projectedGravityFromQuaternion(quaternionWxyz) {
     2 * (z * v[0] - x * v[2]),
     2 * (x * v[1] - y * v[0]),
   ];
-  return [
+  const g = [
     v[0] - w * t[0] + (y * t[2] - z * t[1]),
     v[1] - w * t[1] + (z * t[0] - x * t[2]),
     v[2] - w * t[2] + (x * t[1] - y * t[0]),
   ];
+  const norm = Math.hypot(g[0], g[1], g[2]);
+  return norm > 0 ? [g[0] / norm, g[1] / norm, g[2] / norm] : g;
 }
 
 /**
@@ -274,7 +286,10 @@ export class MicroDuckController {
   get sitting() { return this.sit === 'sitting'; }
 
   willStand(magnitude) {
-    return this.hasPolicy('stand') && Number(magnitude) < this.tuning.standingThreshold;
+    // duck-control/src/policy.rs: `twist_magnitude <= self.standing_threshold`. The
+    // comparison is inclusive, so a twist of exactly 0.05 stands rather than walks. A strict
+    // `<` here would walk on the one command a person is most likely to type exactly.
+    return this.hasPolicy('stand') && Number(magnitude) <= this.tuning.standingThreshold;
   }
 
   /** Begin a skill window. Returns false when the physical package does not carry that policy. */

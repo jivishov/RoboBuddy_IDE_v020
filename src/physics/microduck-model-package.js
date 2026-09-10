@@ -21,6 +21,32 @@ export const MICRODUCK_SERVO_KP_NM_RAD = 0.55;
 export const MICRODUCK_SERVO_KV = 0;
 export const MICRODUCK_SERVO_FORCE_NM = 0.96;
 export const MICRODUCK_SERVO_CTRL_RAD = 10;
+
+// The firmware gain the identified stiffness corresponds to, and the mapping between them.
+//
+// This is not inferred. microduck_rl's `chosen_actuator` class - the one the robot's joints
+// actually use - carries `<!-- 200 kp -->` directly above `kp="0.55"`, and its commented-out
+// alternative carries `<!-- 125 kp -->` above `kp="0.35"`. Those two points are proportional
+// to within 2% (0.00275 vs 0.00280 per firmware unit), so a firmware gain maps onto the
+// identified stiffness by ratio, and the mapping is exact at the robot's own gain of 200.
+//
+// The same pair settles a question that guessing would get wrong: the torque limit does NOT
+// move with the gain. The 125 kp variant keeps `forcerange="-0.96 0.96"`.
+//
+// This matters because the deployed daemon does not hold one gain. duck-control/src/bus.rs
+// writes a position-P-gain register on every servo every tick, and robotd/src/control.rs
+// schedules it: standing, kicks and the sit/rise cycle run at 0.8 of the running gain.
+export const MICRODUCK_NOMINAL_FIRMWARE_GAIN = 200;
+
+/**
+ * The identified MuJoCo stiffness for a deployed firmware gain.
+ * Gain 0 is a true torque-off: the actuator produces no force at all.
+ */
+export function microDuckKpForFirmwareGain(gain) {
+  const value = Number(gain);
+  if (!Number.isFinite(value) || value < 0) throw new TypeError('Firmware gain must be a finite, non-negative number');
+  return MICRODUCK_SERVO_KP_NM_RAD * value / MICRODUCK_NOMINAL_FIRMWARE_GAIN;
+}
 export const MICRODUCK_JOINT_DAMPING = 0.053;
 export const MICRODUCK_JOINT_FRICTIONLOSS = 0.0048;
 export const MICRODUCK_JOINT_ARMATURE = 0.0018;

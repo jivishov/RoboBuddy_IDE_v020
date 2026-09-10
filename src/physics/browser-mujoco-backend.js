@@ -244,6 +244,11 @@ export class BrowserMuJoCoBackend {
       // are producing force at all, and the log of every declared setup intervention.
       footContacts: raw.footContacts ? structuredClone(raw.footContacts) : null,
       actuationEnabled: raw.actuationEnabled === undefined ? null : Boolean(raw.actuationEnabled),
+      // The servo gain the authority actually applied, and the force it produced. Published
+      // because "actuation disabled" is only believable if the force can be read as zero.
+      firmwareGain: raw.firmwareGain === undefined ? null : Number(raw.firmwareGain),
+      appliedServoKp: raw.appliedServoKp === undefined ? null : Number(raw.appliedServoKp),
+      actuatorForceTotalNm: raw.actuatorForceTotalNm === undefined ? null : Number(raw.actuatorForceTotalNm),
       setupLog: Array.isArray(raw.setupLog) ? structuredClone(raw.setupLog) : [] };
   }
 

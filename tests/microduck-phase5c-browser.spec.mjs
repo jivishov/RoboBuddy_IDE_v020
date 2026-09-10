@@ -92,6 +92,15 @@ test('MicroDuck physical workspace walks through contact and loses propulsion wi
   expect(walk.rigRootMm[2] / 1000).toBeCloseTo(-walk.state.actual.trunkPositionM[1], 3);
   const nominal = walk.verdict.report.commandedAxisDistanceM;
 
+  // The deployed servo gain reached the physics, and the servos were working. `controller`
+  // reports the gain that was asked for; `actual` reports what MuJoCo applied. If the model
+  // write were a silent no-op in the WASM build, these would disagree and the force below
+  // would be unchanged by any gain at all.
+  expect(walk.state.controller.firmwareGain).toBe(200);
+  expect(walk.state.actual.firmwareGain).toBe(200);
+  expect(walk.state.actual.appliedServoKp).toBeCloseTo(0.55, 10);
+  expect(walk.state.actual.actuatorForceTotalNm).toBeGreaterThan(0);
+
   // --- actuation disabled: the propulsion mechanism is gone ---------------------
   const noActuation = await page.evaluate(async () => {
     const sim = window.__robobuddyCi.app.sim.backend;
@@ -107,6 +116,17 @@ test('MicroDuck physical workspace walks through contact and loses propulsion wi
   expect(noActuation.report.fallen).toBe(true);
   expect(noActuation.report.finalTrunkHeightM).toBeLessThan(0.07);
   expect(Math.abs(noActuation.report.commandedAxisDistanceM)).toBeLessThan(nominal * 0.4);
+
+  // A torque-off must produce NO actuator force. These are position actuators, so zeroing
+  // ctrl instead would command every joint to 0 rad at full strength - actuation toward a
+  // straight-legged pose, not its absence. Zero here is what makes this a negative control
+  // rather than a differently-posed positive one, and it is the only assertion that proves
+  // the zeroed servo gain really took effect inside the WASM model.
+  expect(noActuation.state.actual.firmwareGain).toBe(0);
+  expect(noActuation.state.actual.appliedServoKp).toBe(0);
+  expect(noActuation.state.actual.actuatorForceTotalNm).toBe(0);
+  // The controller kept asking for targets throughout: a disabled servo is not a disabled policy.
+  expect(Object.values(noActuation.state.actual.jointTargetRad).some((value) => value !== 0)).toBe(true);
 
   await expect.poll(() => pageErrors.length, { timeout: 1_000 }).toBe(0);
 });

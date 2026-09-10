@@ -324,7 +324,10 @@ export class MicroDuckPhysicalSimulator {
       }
       lastStep = this.controller.completeTick(pending, rawAction, MICRODUCK_CONTROL_INTERVAL_SECONDS);
       await this.session.sendCommand(
-        { type: 'set_joint_targets', targetsRad: { ...lastStep.targetsRad } },
+        // The gain travels with the targets, exactly as the deployed daemon writes the servo
+        // P-gain register alongside each target frame. Standing, kicks and the sit/rise cycle
+        // run softer than walking, and that difference is physical, not cosmetic.
+        { type: 'set_joint_targets', targetsRad: { ...lastStep.targetsRad }, firmwareGain: lastStep.gain },
         { maxSteps: MICRODUCK_CONTROL_DECIMATION },
       );
       await this.session.advanceSteps(MICRODUCK_CONTROL_DECIMATION);
@@ -386,6 +389,12 @@ export class MicroDuckPhysicalSimulator {
           footContacts: observation.footContacts ? structuredClone(observation.footContacts) : null,
           ballPositionM: observation.bodies?.[MICRODUCK_BALL_BODY]?.positionM ?? null,
           actuationEnabled: observation.actuationEnabled,
+          // The servo gain the authority actually applied and the force it produced. The
+          // controller view above reports the gain it ASKED for; this is what physics used.
+          // Both are published because a torque-off is only believable if the force reads zero.
+          firmwareGain: observation.firmwareGain ?? null,
+          appliedServoKp: observation.appliedServoKp ?? null,
+          actuatorForceTotalNm: observation.actuatorForceTotalNm ?? null,
           setupLog: Array.isArray(observation.setupLog) ? observation.setupLog.map((item) => ({ ...item })) : [],
         }
         : null,

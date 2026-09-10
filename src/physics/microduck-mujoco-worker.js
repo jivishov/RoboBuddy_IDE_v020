@@ -1,5 +1,7 @@
 import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
 import { MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, sampledObservationCount } from './backend-contract.js';
+import { projectedGravityFromQuaternion } from './microduck-controller.js';
+import { MICRODUCK_NOMINAL_FIRMWARE_GAIN, MICRODUCK_SERVO_KP_NM_RAD, microDuckKpForFirmwareGain } from './microduck-model-package.js';
 
 // MicroDuck Phase 5C authoritative MuJoCo worker.
 //
@@ -41,6 +43,41 @@ let modelInfo = null;
 // nominal while the motors are off.
 let actuationEnabled = true;
 let setupLog = [];
+// The servo stiffness currently written to the model, and the firmware gain it represents.
+// The deployed daemon rewrites this register every tick, so it is per-tick state here too.
+let appliedFirmwareGain = MICRODUCK_NOMINAL_FIRMWARE_GAIN;
+
+/**
+ * Write the position-servo stiffness onto every actuator, as the daemon writes the register.
+ *
+ * A MuJoCo `position` actuator applies `gainprm[0] * ctrl + biasprm[1] * qpos`, so kp lives
+ * in both terms. `forcerange` is deliberately untouched: microduck_rl's own 125 kp variant
+ * keeps the same torque limit, so the gain moves and the limit does not.
+ *
+ * A gain of 0 is a true torque-off - the actuator produces no force whatever ctrl says.
+ * That is a different thing from commanding zero radians, which is a full-strength command
+ * to a straight-legged pose.
+ */
+function applyFirmwareGain(gain) {
+  if (!model) return;
+  const kp = microDuckKpForFirmwareGain(gain);
+  const gainWidth = Number(model.actuator_gainprm.length / Math.max(Number(model.nu || 1), 1));
+  const biasWidth = Number(model.actuator_biasprm.length / Math.max(Number(model.nu || 1), 1));
+  for (const actuator of actuatorState.values()) {
+    model.actuator_gainprm[actuator.id * gainWidth] = kp;
+    model.actuator_biasprm[actuator.id * biasWidth + 1] = -kp;
+  }
+  appliedFirmwareGain = Number(gain);
+}
+
+function actuatorForceTotalNm() {
+  let total = 0;
+  for (const actuator of actuatorState.values()) {
+    const value = Number(data?.actuator_force?.[actuator.id]);
+    if (Number.isFinite(value)) total += Math.abs(value);
+  }
+  return total;
+}
 
 function reply(id, ok, payload = null, error = null) { postMessage({ id, ok, payload, error }); }
 async function ensureMuJoCo() { if (mujoco) return mujoco; mujoco = await loadMujoco({ locateFile: (path) => new URL(path, MUJOCO_BASE_URL).href }); return mujoco; }
@@ -176,21 +213,10 @@ function actuatorForJoint(jointId) {
 }
 function actuatorEffortNm(actuator) { const value = Number(data?.actuator_force?.[actuator?.id]); return Number.isFinite(value) ? value : null; }
 
-// world -Z rotated into the trunk body frame, matching the upstream reference runner.
-function projectedGravity(quaternionWxyz) {
-  const [w, x, y, z] = quaternionWxyz;
-  const v = [0, 0, -1];
-  const t = [2 * (y * v[2] - z * v[1]), 2 * (z * v[0] - x * v[2]), 2 * (x * v[1] - y * v[0])];
-  return [
-    v[0] - w * t[0] + (y * t[2] - z * t[1]),
-    v[1] - w * t[1] + (z * t[0] - x * t[2]),
-    v[2] - w * t[2] + (x * t[1] - y * t[0]),
-  ];
-}
 
 function observation() {
   if (!model || !data || !descriptor || !modelInfo) {
-    return { simulationTime: 0, model: null, engine: null, joints: {}, bodies: {}, imu: null, contactCount: 0, contactsReadable: false, contacts: [], footContacts: null, actuationEnabled: true, setupLog: [] };
+    return { simulationTime: 0, model: null, engine: null, joints: {}, bodies: {}, imu: null, contactCount: 0, contactsReadable: false, contacts: [], footContacts: null, actuationEnabled: true, firmwareGain: MICRODUCK_NOMINAL_FIRMWARE_GAIN, appliedServoKp: MICRODUCK_SERVO_KP_NM_RAD, actuatorForceTotalNm: 0, setupLog: [] };
   }
   const joints = {};
   for (const [name, joint] of jointState) {
@@ -227,7 +253,7 @@ function observation() {
   const imu = {
     site: 'imu',
     gyroRadS: [Number(data.sensordata[gyroAddress]), Number(data.sensordata[gyroAddress + 1]), Number(data.sensordata[gyroAddress + 2])],
-    projectedGravity: projectedGravity(trunkQuat),
+    projectedGravity: projectedGravityFromQuaternion(trunkQuat),
     source: 'MuJoCo gyro sensor at the source-named imu site; projected gravity from the trunk body quaternion',
   };
   const contactState = readContacts();
@@ -241,6 +267,11 @@ function observation() {
     contacts: contactState.contacts,
     footContacts: { floor: contactState.footFloor, ball: contactState.footBall },
     actuationEnabled,
+    firmwareGain: appliedFirmwareGain,
+    appliedServoKp: microDuckKpForFirmwareGain(appliedFirmwareGain),
+    // Summed |actuator_force|. A declared torque-off must read exactly zero here, which is
+    // what tells a real torque-off apart from a zero-radian command.
+    actuatorForceTotalNm: actuatorForceTotalNm(),
     setupLog: [...setupLog],
   };
 }
@@ -263,6 +294,7 @@ function applyDeclaredInitialState({ keepSetupLog = false } = {}) {
   }
   actuationEnabled = true;
   paused = false;
+  applyFirmwareGain(MICRODUCK_NOMINAL_FIRMWARE_GAIN);
   mujoco.mj_forward(model, data);
   logSetup({ event: 'reset', detail: 'declared initial state: source home pose, trunk at the source spawn height' });
   return observation();
@@ -274,6 +306,7 @@ function disposeModel() {
   data = null; model = null; descriptor = null;
   jointState = new Map(); actuatorState = new Map(); bodyState = new Map(); geomIds = new Map();
   modelInfo = null; paused = false; actuationEnabled = true; setupLog = [];
+  appliedFirmwareGain = MICRODUCK_NOMINAL_FIRMWARE_GAIN;
 }
 
 async function load(modelPackage) {
@@ -335,10 +368,15 @@ function command(payload = {}) {
   const targets = payload.targetsRad;
   if (!targets || typeof targets !== 'object' || Array.isArray(targets) || !Object.keys(targets).length) throw new Error('set_joint_targets requires a non-empty targetsRad object');
   const applied = Object.entries(targets).map(([jointId, value]) => validatedTarget(jointId, value));
+  // The deployed daemon sends a gain with every target frame, so accept one here. Absent, the
+  // running gain stands. A torque-off holds the gain at zero regardless of what is asked.
+  if (payload.firmwareGain != null && actuationEnabled) applyFirmwareGain(payload.firmwareGain);
   for (const { actuator, target } of applied) {
     // A torque-off condition still latches the requested target, so the observation keeps
-    // reporting what was asked for while no actuator force is produced.
-    data.ctrl[actuator.id] = actuationEnabled ? target : 0;
+    // reporting what was asked for while no actuator force is produced. The absence of force
+    // comes from the zeroed servo gain, not from overwriting the request: commanding zero
+    // radians would be a full-strength command to a straight-legged pose, which is actuation.
+    data.ctrl[actuator.id] = target;
   }
   return observation();
 }
@@ -376,8 +414,14 @@ function setup(payload = {}) {
   } else if (payload.type === 'set_actuation_enabled') {
     const enabled = payload.enabled !== false;
     actuationEnabled = enabled;
-    if (!enabled) for (const actuator of actuatorState.values()) data.ctrl[actuator.id] = 0;
-    logSetup({ event: 'setup_actuation', label: String(payload.label || (enabled ? 'actuators enabled' : 'declared torque-off condition')), actuationEnabled: enabled });
+    applyFirmwareGain(enabled ? MICRODUCK_NOMINAL_FIRMWARE_GAIN : 0);
+    mujoco.mj_forward(model, data);
+    logSetup({
+      event: 'setup_actuation',
+      label: String(payload.label || (enabled ? 'actuators enabled' : 'declared torque-off condition')),
+      actuationEnabled: enabled,
+      firmwareGain: appliedFirmwareGain,
+    });
   } else {
     throw new Error(`Unsupported setup operation: ${payload.type}`);
   }
