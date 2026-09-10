@@ -88,15 +88,21 @@
     ]
   },
   "excludedSources": [
-    "pollen-robotics/microduck_rl mesh/MJCF bytes",
     "Hugging Face Space implementation/assets",
     "pollen-robotics/microduck sounds/scores/outer_wilds.mid"
   ],
+  "externalPhysicalPlant": {
+    "path": "models/microduck/",
+    "repository": "pollen-robotics/microduck_rl",
+    "revision": "519142b1f5bf59fdfd44d06c205119e7fff8e3cb",
+    "license": "Creative Commons BY-SA-NC for upstream 3D model files; version not specified upstream",
+    "scope": "task-specific physical collision meshes and pinned source MJCF"
+  },
   "entries": [
     {
       "path": "fixtures/controller-conformance.json",
-      "bytes": 27936,
-      "sha256": "f439b024a4892d4c55d3cdb5ab7808be821d2a6904611719b997f4cf3c112253",
+      "bytes": 33777,
+      "sha256": "26ad620d37316b5b0dd6480db529760455acc9e2ac7a674ae0f59d9f57f24514",
       "license": "PolyForm-Noncommercial-1.0.0",
       "repository": "local",
       "revision": "phase5c",
