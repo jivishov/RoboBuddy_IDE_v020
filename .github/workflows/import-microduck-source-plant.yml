@@ -37,20 +37,6 @@ jobs:
           doc['model']['sha256'] = hashlib.sha256(Path('models/microduck/walk.xml').read_bytes()).hexdigest()
           fixture.write_text(json.dumps(doc, indent=2) + '\n')
           PY
-      - name: Upgrade Phase 5C workflow from position-servo to BAM evidence
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          p = Path('.github/workflows/microduck-phase5c-validate.yml')
-          s = p.read_text()
-          s = s.replace('          python -m py_compile native/microduck_reference.py\n', '          python -m py_compile native/microduck_reference.py\n          python -m py_compile native/microduck_bam_physical_reference.py\n          python -m py_compile tests/validate_microduck_bam_evidence.py\n')
-          s = s.replace('          python native/microduck_reference.py --trial all --json /tmp/microduck-all.json\n          python native/microduck_reference.py --trial walk --timestep 0.001 --json /tmp/microduck-walk-tight.json\n          python native/microduck_reference.py --trial stand --timestep 0.001 --json /tmp/microduck-stand-tight.json\n', '          python native/microduck_bam_physical_reference.py --trial all --json /tmp/microduck-all.json\n          python native/microduck_bam_physical_reference.py --trial walk --timestep 0.001 --json /tmp/microduck-walk-tight.json\n          python native/microduck_bam_physical_reference.py --trial stand --timestep 0.001 --json /tmp/microduck-stand-tight.json\n')
-          start = s.index('      - name: Validate native MicroDuck physical, negative and sensitivity gates')
-          end = s.index('      - name: Fleet regressions must not be weakened by Phase 5C', start)
-          replacement = '''      - name: Validate source-pinned BAM physical, negative and sensitivity gates\n        run: python tests/validate_microduck_bam_evidence.py /tmp/microduck-all.json /tmp/microduck-walk-tight.json /tmp/microduck-stand-tight.json\n\n'''
-          s = s[:start] + replacement + s[end:]
-          p.write_text(s)
-          PY
       - name: Verify imported mesh byte identities and deterministic generation
         run: |
           python - <<'PY'
@@ -58,20 +44,24 @@ jobs:
           from pathlib import Path
           pin_dir = Path('/tmp/microduck_rl/src/mjlab_microduck/robot/microduck/assets')
           dst = Path('models/microduck/assets')
+          sums = Path('models/microduck/source/GIT_BLOB_SHA1SUMS').read_text()
           for src in sorted(pin_dir.glob('*.stl')):
               copied = dst / src.name
               assert copied.read_bytes() == src.read_bytes(), src.name
               data = copied.read_bytes()
               blob = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
-              assert f'{blob}  assets/{src.name}' in Path('models/microduck/source/GIT_BLOB_SHA1SUMS').read_text(), src.name
+              assert f'{blob}  assets/{src.name}' in sums, src.name
           print('all imported STL bytes match pinned upstream source')
           PY
           python scripts/generate_microduck_models.py --check
-      - name: Self-remove importer and commit materialized plant
+      - name: Commit materialized plant without workflow mutation
         run: |
-          rm .github/workflows/import-microduck-source-plant.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "feat(microduck): use pinned source collision meshes and BAM gates"
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git commit -m "feat(microduck): materialize pinned collision plants"
           git push origin HEAD:fix/microduck-full-plant-fidelity
