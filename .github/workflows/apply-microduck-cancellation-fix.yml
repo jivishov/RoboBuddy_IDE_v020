@@ -1,0 +1,229 @@
+name: Apply MicroDuck cancellation fix
+
+on:
+  push:
+    branches: [fix/microduck-full-plant-fidelity]
+    paths: [.github/workflows/apply-microduck-cancellation-fix.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Prove the regression fails against the unpatched dispatcher
+        run: |
+          if node tests/physics/microduck-cancellation-core.mjs > /tmp/microduck-cancellation-before.log 2>&1; then
+            echo 'Expected the unpatched cancellation regression to fail'; exit 1
+          fi
+          cat /tmp/microduck-cancellation-before.log
+          grep -q 'Missing expected rejection' /tmp/microduck-cancellation-before.log
+      - name: Apply narrowly scoped source guards and browser regressions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(text, old, new, count=1):
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f'Expected {count} patch sites, found {actual}: {old[:100]}')
+              return text.replace(old, new)
+
+          p = Path('src/physics/microduck-physical-simulator.js')
+          s = p.read_text()
+          s = replace(s, '  async settle(seconds) {\n    this.#assertLoaded();', '''  async settle(seconds, { assertActive = null } = {}) {
+              this.#assertLoaded();
+              if (assertActive !== null && typeof assertActive !== 'function') throw new TypeError('assertActive must be a synchronous guard function');
+              assertActive?.();''')
+          s = replace(s, '''    await this.session.sendCommand({ type: 'set_joint_targets', targetsRad }, { maxSteps: steps });
+              await this.session.advanceSteps(steps);
+              this.controller.reset();''', '''    const session = this.session;
+              await session.sendCommand({ type: 'set_joint_targets', targetsRad }, { maxSteps: steps });
+              assertActive?.();
+              // A worker batch already submitted cannot be retracted. Guarded callers submit
+              // at most one controller interval (20 ms) at a time, never the whole settle budget.
+              // The target frame and every physics step are unchanged; no policy runs here.
+              const batchSize = assertActive ? MICRODUCK_CONTROL_DECIMATION : steps;
+              for (let remaining = steps; remaining > 0;) {
+                assertActive?.();
+                const batch = Math.min(batchSize, remaining);
+                await session.advanceSteps(batch);
+                remaining -= batch;
+                assertActive?.();
+              }
+              this.controller.reset();''')
+          s = replace(s, '''  async advanceSeconds(seconds, { bodyActive = false, onTick = null } = {}) {
+              this.#assertLoaded();''', '''  async advanceSeconds(seconds, { bodyActive = false, onTick = null, assertActive = null } = {}) {
+              this.#assertLoaded();
+              // Optional synchronous ownership/cancellation guard. It must run on BOTH sides
+              // of awaited work, especially inference, before committing controller feedback
+              // or submitting more commands. A rejected call does not poison the next one.
+              if (assertActive !== null && typeof assertActive !== 'function') throw new TypeError('assertActive must be a synchronous guard function');
+              assertActive?.();''')
+          s = replace(s, '''    for (let tick = 0; tick < ticks; tick += 1) {
+                if (this.cancelled || epoch !== this.runEpoch) break;
+                const observation = this.lastObservation || await this.session.getObservation();
+                const pending = this.controller.beginTick({''', '''    for (let tick = 0; tick < ticks; tick += 1) {
+                assertActive?.();
+                if (this.cancelled || epoch !== this.runEpoch) break;
+                const observation = this.lastObservation || await this.session.getObservation();
+                assertActive?.();
+                if (this.cancelled || epoch !== this.runEpoch) break;
+                const pending = this.controller.beginTick({''')
+          s = replace(s, '''      const rawAction = await this.policyRuntime.infer(pending.policyId, pending.observation);
+                // A run that was cancelled''', '''      const rawAction = await this.policyRuntime.infer(pending.policyId, pending.observation);
+                assertActive?.();
+                // A run that was cancelled''')
+          s = replace(s, '''      await this.session.advanceSteps(MICRODUCK_CONTROL_DECIMATION);
+                executedTicks += 1;
+                if (typeof onTick === 'function') onTick({ tick, step: lastStep, observation: this.lastObservation });''', '''      assertActive?.();
+                if (this.cancelled || epoch !== this.runEpoch) break;
+                await this.session.advanceSteps(MICRODUCK_CONTROL_DECIMATION);
+                executedTicks += 1;
+                if (typeof onTick === 'function') onTick({ tick, step: lastStep, observation: this.lastObservation });
+                assertActive?.();''')
+          p.write_text(s)
+
+          p = Path('src/webmcp/microduck-physical-control.js')
+          s = p.read_text()
+          s = replace(s, '''  const simulator = facade.app.sim.backend;
+            const base = {''', '''  const simulator = facade.app.sim.backend;
+            // Check the original registration, workspace, physics authority and call signal
+            // inside advancement, not just after the entire requested budget has executed.
+            const advancementOptions = { assertActive: () => assertCurrent(facade, baseline, expectedEpoch, signal) };
+            const base = {''')
+          s = replace(s, 'simulator.advanceSeconds(parsed.advanceSeconds)', 'simulator.advanceSeconds(parsed.advanceSeconds, advancementOptions)', count=3)
+          s = replace(s, 'simulator.settle(parsed.settleSeconds)', 'simulator.settle(parsed.settleSeconds, advancementOptions)')
+          p.write_text(s)
+
+          p = Path('tests/microduck-interfaces-browser.spec.mjs')
+          s = p.read_text()
+          assert 'in-flight inference after' not in s
+          s += r'''
+          for (const mode of ['abort', 'access-off']) {
+            test(`MicroDuck discards in-flight inference after ${mode}`, async ({ page }) => {
+              test.setTimeout(240_000);
+              const errors = [];
+              page.on('pageerror', (error) => errors.push(String(error)));
+              await openPhysical(page);
+              await page.locator('[data-agent-access="assist"]').click();
+              await expect.poll(() => page.evaluate(() => window.__interfaceRegistrations.some(({ tool, signal }) => tool.name === 'control_microduck_physical_simulation' && !signal?.aborted))).toBe(true);
+              await page.evaluate(() => {
+                const sim = window.__robobuddyCi.app.sim.backend;
+                const entry = window.__interfaceRegistrations.findLast(({ tool, signal }) => tool.name === 'control_microduck_physical_simulation' && !signal?.aborted);
+                const probe = { inferences: 0, commands: 0, steps: 0, pending: false, abort: new AbortController() };
+                const infer = sim.policyRuntime.infer.bind(sim.policyRuntime);
+                const send = sim.session.sendCommand.bind(sim.session);
+                const advanceSteps = sim.session.advanceSteps.bind(sim.session);
+                const advance = sim.advanceSeconds.bind(sim);
+                // Real ONNX inference and MuJoCo still execute. Delay only the return of the
+                // second inference so opt-out happens at a deterministic await boundary.
+                sim.policyRuntime.infer = async (...args) => {
+                  const action = await infer(...args);
+                  probe.inferences += 1;
+                  if (probe.inferences === 2) {
+                    probe.before = sim.lastObservation.simulationTimeSeconds;
+                    probe.pending = true;
+                    await new Promise((resolve) => { probe.release = resolve; });
+                  }
+                  return action;
+                };
+                sim.session.sendCommand = (...args) => { probe.commands += 1; return send(...args); };
+                sim.session.advanceSteps = (...args) => { probe.steps += args[0]; return advanceSteps(...args); };
+                sim.advanceSeconds = (...args) => {
+                  const run = advance(...args);
+                  probe.backendDone = run.then(() => null, (error) => error.code);
+                  return run;
+                };
+                probe.restore = () => {
+                  sim.policyRuntime.infer = infer;
+                  sim.session.sendCommand = send;
+                  sim.session.advanceSteps = advanceSteps;
+                  sim.advanceSeconds = advance;
+                };
+                window.__cancellationProbe = probe;
+                probe.result = entry.tool.execute({ schema_version: 'robobuddy.microduck.physical.v1', command: 'set_command', request: { vx: 0.35 }, advance_seconds: 2 }, { signal: probe.abort.signal });
+              });
+              await expect.poll(() => page.evaluate(() => window.__cancellationProbe.pending)).toBe(true);
+              if (mode === 'abort') await page.evaluate(() => window.__cancellationProbe.abort.abort());
+              else {
+                await page.locator('[data-agent-access="off"]').click();
+                await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-access', 'off');
+              }
+              const result = await page.evaluate(async () => {
+                const probe = window.__cancellationProbe;
+                probe.release();
+                try {
+                  const response = await probe.result;
+                  const backendError = await probe.backendDone;
+                  return { response, backendError, inferences: probe.inferences, commands: probe.commands, steps: probe.steps,
+                    before: probe.before, after: window.__robobuddyCi.app.sim.backend.lastObservation.simulationTimeSeconds };
+                } finally { probe.restore(); }
+              });
+              expect(result.response).toMatchObject({ ok: false, error: { code: 'OPERATION_CANCELLED' } });
+              expect(result.backendError).toBe('OPERATION_CANCELLED');
+              expect(result.inferences).toBe(2);
+              expect(result.commands).toBe(1);
+              expect(result.steps).toBe(4);
+              expect(result.before).toBeCloseTo(0.02, 8);
+              expect(result.after).toBe(result.before);
+              // Cancellation is scoped to the tool call, not a permanent simulator latch.
+              await page.locator('[data-agent-access="assist"]').click();
+              const resumed = await invoke(page, { command: 'advance', advance_seconds: 0.02 });
+              expect(resumed.ok, JSON.stringify(resumed)).toBe(true);
+              expect(resumed.actual.simulationTimeSeconds).toBeCloseTo(0.04, 8);
+              expect(errors).toEqual([]);
+            });
+          }
+          '''
+          # Keep appended top-level test declarations at the file's original indentation.
+          import textwrap
+          original = p.read_text()
+          p.write_text(original + textwrap.dedent(s[len(original):]))
+          PY
+      - name: Run cancellation and existing source contracts
+        run: |
+          node --check src/physics/microduck-physical-simulator.js
+          node --check src/webmcp/microduck-physical-control.js
+          node --check tests/microduck-interfaces-browser.spec.mjs
+          node tests/physics/microduck-cancellation-core.mjs
+          node tests/physics/microduck-interfaces-core.mjs
+          node tests/physics/microduck-phase5c-core.mjs
+          node tests/physics/microduck-lifecycle-core.mjs
+          node tests/physics/microduck-bam-plant-core.mjs
+          node tests/webmcp-core.mjs
+          node tests/validate_microduck_assets.mjs
+          node tests/validate.mjs
+          python3 scripts/generate_microduck_models.py --check
+      - name: Verify actual Chromium opt-out and existing public journeys
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+          npx playwright test tests/microduck-interfaces-browser.spec.mjs --reporter=line
+      - name: Retain cancellation test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: microduck-cancellation-repair-${{ github.sha }}
+          path: |
+            /tmp/microduck-cancellation-before.log
+            test-results
+          if-no-files-found: ignore
+      - name: Commit tested changes and remove this one-time workflow
+        run: |
+          git diff --exit-code -- models assets native
+          rm .github/workflows/apply-microduck-cancellation-fix.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/physics/microduck-physical-simulator.js src/webmcp/microduck-physical-control.js tests/microduck-interfaces-browser.spec.mjs .github/workflows/apply-microduck-cancellation-fix.yml
+          git diff --cached --check
+          git commit -m 'fix(microduck): stop revoked calls at controller await boundaries'
+          git push origin HEAD:fix/microduck-full-plant-fidelity
