@@ -105,8 +105,10 @@ class BamPlant(LegacyPlant):
         m.actuator_forcerange[:, 0] = -FORCE_CEILING
         m.actuator_forcerange[:, 1] = FORCE_CEILING
         m.dof_armature[self.vadr:self.vadr + ref.ACTION_LEN] = ARMATURE
-        m.dof_frictionloss[self.vadr:self.vadr + ref.ACTION_LEN] = FRICTION_BASE
-        m.dof_damping[self.vadr:self.vadr + ref.ACTION_LEN] = FRICTION_VISCOUS
+        # bam.mjlab.BamActuator.edit_spec zeros XML damping/friction. Dynamic BAM
+        # friction is written immediately before every mj_step below.
+        m.dof_frictionloss[self.vadr:self.vadr + ref.ACTION_LEN] = 0.0
+        m.dof_damping[self.vadr:self.vadr + ref.ACTION_LEN] = 0.0
         mujoco.mj_setConst(m, self.data)
 
         self._bam_ready = True
@@ -133,7 +135,9 @@ class BamPlant(LegacyPlant):
         if not getattr(self, "_bam_ready", False):
             return LegacyPlant.set_actuator_kp(self, kp)
         kp = float(kp)
-        self.applied_kp = kp
+        # Compatibility adapter for the independent legacy controller harness. `kp` is
+        # converted back to the firmware register value; MuJoCo stiffness is never mutated.
+        self.applied_kp = None
         self.firmware_gain = max(0.0, kp / ref.IDENTIFIED_KP * ref.NOMINAL_FIRMWARE_GAIN)
         self.actuation_enabled = kp > 0.0
         if not self.actuation_enabled:

@@ -355,7 +355,9 @@ check('every MicroDuck model package declares a free base and fourteen policy jo
     }
     for (const actuator of modelPackage.actuators) {
       assert(actuator.command === 'position-rad', `${actuator.id} is not a position actuator`);
-      assert(Math.abs(actuator.forceRangeNm[1] - MICRODUCK_SERVO_FORCE_NM) < 1e-12, `${actuator.id} force range is not the identified servo envelope`);
+      assert(Math.abs(actuator.sourceForceRangeNm[1] - MICRODUCK_SERVO_FORCE_NM) < 1e-12, `${actuator.id} lost the source XML fallback envelope`);
+      assert(actuator.forceRangeNm[1] > MICRODUCK_SERVO_FORCE_NM, `${actuator.id} was not converted to the BAM voltage-domain torque ceiling`);
+      assert(/BAM XL330 M6/.test(actuator.actuatorModel), `${actuator.id} does not declare the BAM plant`);
       assert(actuator.forceRangeNm.every(Number.isFinite), `${actuator.id} has an unbounded force range`);
       assert(actuator.controlRangeRad.every(Number.isFinite), `${actuator.id} has an unbounded control range`);
     }
@@ -374,26 +376,28 @@ check('the committed model assets carry their registered hashes and the named co
     assert(xml.includes('name="left_foot_collision"'), `${modelPackage.asset} has no named left foot collider`);
     assert(xml.includes('name="right_foot_collision"'), `${modelPackage.asset} has no named right foot collider`);
     assert(xml.includes('name="microduck_floor"'), `${modelPackage.asset} has no named floor`);
-    assert(xml.includes('<freejoint name="trunk_base_freejoint"'), `${modelPackage.asset} has no free trunk joint`);
-    assert(xml.includes('<gyro name="imu_ang_vel" site="imu"/>'), `${modelPackage.asset} has no source-named imu gyro`);
-    assert(!/<equality>/.test(xml), `${modelPackage.asset} declares an equality constraint`);
+    assert(xml.includes('name="trunk_base_freejoint"'), `${modelPackage.asset} has no free trunk joint`);
+    assert(xml.includes('name="imu_ang_vel"'), `${modelPackage.asset} has no source-named imu gyro`);
+    assert(!/<equality>/.test(xml), `${modelPackage.asset} declares an active equality block`);
     assert(!/\bweld\b/.test(xml), `${modelPackage.asset} declares a weld`);
-    // Fifteen source colliders plus the floor; the kick package adds the ball. Counted by
-    // name so the class defaults in <default> are not mistaken for scene geometry.
-    const geomCount = (xml.match(/<geom name="/g) || []).length;
-    const expected = modelPackage.id.includes('kick') ? 17 : 16;
-    assert(geomCount === expected, `${modelPackage.asset} declares ${geomCount} named geoms, expected ${expected}`);
-    for (const collider of ['trunk_shell_left', 'trunk_shell_right', 'battery_pack', 'power_support',
-      'head_shell_lower', 'head_shell_upper', 'jaw', 'left_hip', 'right_hip',
-      'left_thigh', 'right_thigh', 'left_shank', 'right_shank']) {
-      assert(xml.includes(`name="${collider}"`), `${modelPackage.asset} is missing the ${collider} collider`);
-    }
-    assert(/mass="0\.264385"/.test(xml), `${modelPackage.asset} lost the source trunk inertial`);
+    assert(/type="mesh"/.test(xml), `${modelPackage.asset} no longer uses source mesh geometry`);
+    assert(/mesh="sole_left"/.test(xml) && /mesh="sole_right"/.test(xml), `${modelPackage.asset} lost exact source sole meshes`);
+    assert(/mass="0.264385"/.test(xml), `${modelPackage.asset} lost the source trunk inertial`);
   }
+  const walk = readFileSync(resolve(ROOT, MICRODUCK_WALK_PACKAGE.asset), 'utf8');
+  // Pinned robot_walk: soles collide with the world; leg and power_support are self-collision-only.
+  assert(/name="left_foot_collision"[^>]*mesh="sole_left"/.test(walk), 'walk plant lost the source left-sole collision');
+  assert(/name="right_foot_collision"[^>]*mesh="sole_right"/.test(walk), 'walk plant lost the source right-sole collision');
+  assert(/class="self_collision_only"[^>]*mesh="leg"/.test(walk), 'walk plant lost source leg self-collision');
+  assert(/class="self_collision_only"[^>]*mesh="power_support"/.test(walk), 'walk plant lost source power-support self-collision');
   const lowTraction = readFileSync(resolve(ROOT, MICRODUCK_LOW_TRACTION_PACKAGE.asset), 'utf8');
   assert(lowTraction.includes('friction="0.02 0.005 0.0001"'), 'the reduced-traction fixture does not declare its degraded friction');
   const kick = readFileSync(resolve(ROOT, MICRODUCK_KICK_PACKAGE.asset), 'utf8');
   assert(kick.includes('name="microduck_ball_geom"') && kick.includes('mass="0.015"'), 'the kick package lost the source ball');
+  assert((kick.match(/class="collision"/g) || []).length > (walk.match(/class="collision"/g) || []).length,
+    'kick/recovery plant is not using the broader source all-collision geometry');
+  const notice = readFileSync(resolve(ROOT, 'THIRD_PARTY_NOTICES.md'), 'utf8');
+  assert(notice.includes('Creative Commons BY-SA-NC') && notice.includes('version'), 'collision asset license/version scope is not disclosed');
 });
 
 check('the scenes validate against the shared physical-scene contract', () => {
@@ -585,12 +589,15 @@ check('the physical path contains no synthetic root, ball, boundary or recovery 
     const inInitial = index >= initialStart && index <= initialEnd;
     assert(inSetup || inInitial, `worker writes ${match[0]} outside the declared setup/reset path (offset ${index})`);
   }
-  // Ordinary control writes actuator targets only.
+  // Ordinary control writes the dedicated position-target buffer only. BAM is the sole
+  // writer of MuJoCo ctrl, where ctrl is motor torque after runtime conversion.
   const commandStart = worker.indexOf('function command(');
   const commandEnd = worker.indexOf('function setup(');
   const commandBody = worker.slice(commandStart, commandEnd);
-  assert(/data\.ctrl\[actuator\.id\]/.test(commandBody), 'the command path does not write actuator targets');
+  assert(/requestedTargets\[actuator\.id\] = target/.test(commandBody), 'the command path does not preserve actuator target intent');
+  assert(!/data\.ctrl/.test(commandBody), 'the high-level command path bypasses BAM and writes MuJoCo torque directly');
   assert(!/qpos|qvel/.test(commandBody), 'the command path touches physical state directly');
+  assert(/data\.ctrl\[index\] = clamp\(motorTorque/.test(worker), 'BAM is no longer the sole MuJoCo torque writer');
 });
 
 check('the live-Python surface exposes commands and skills, never joint or state writes', () => {
@@ -676,51 +683,31 @@ check('the physical MicroDuck workspace has its own chip, badge and summary', ()
   assert(/updateSimulationPresentation\(p, selectedMode\)/.test(app), 'the presentation no longer receives the selected mode');
 });
 
-check('the deployed standing threshold is inclusive, and the gain schedule is real physics', async () => {
-  const { MICRODUCK_NOMINAL_FIRMWARE_GAIN, MICRODUCK_SERVO_KP_NM_RAD, microDuckKpForFirmwareGain } =
-    await import('../../src/physics/microduck-model-package.js');
-
-  // duck-control/src/policy.rs compares `twist_magnitude <= standing_threshold`. A strict
-  // `<` walks on exactly 0.05, which is the one value a person is most likely to type.
+check('the deployed standing threshold is inclusive, and the gain schedule is real BAM physics', async () => {
+  const { MICRODUCK_NOMINAL_FIRMWARE_GAIN } = await import('../../src/physics/microduck-model-package.js');
   const controller = new MicroDuckController({ availablePolicies: MICRODUCK_PHYSICAL_POLICIES });
   assert(controller.willStand(0.05), 'a twist of exactly the standing threshold no longer stands');
   assert(controller.willStand(0.049), 'a twist below the standing threshold no longer stands');
   assert(!controller.willStand(0.051), 'a twist above the standing threshold now stands');
-
-  // microduck_rl's `chosen_actuator` carries `<!-- 200 kp -->` above kp 0.55 and, commented
-  // out, `<!-- 125 kp -->` above kp 0.35. The mapping is proportional through both points.
   assert(MICRODUCK_NOMINAL_FIRMWARE_GAIN === 200, 'the nominal firmware gain moved off the source value');
-  close(microDuckKpForFirmwareGain(200), MICRODUCK_SERVO_KP_NM_RAD, 1e-12, 'the running gain must map to the identified stiffness');
-  close(microDuckKpForFirmwareGain(160), 0.44, 1e-12, 'the standing gain must map to 0.8 of the identified stiffness');
-  close(microDuckKpForFirmwareGain(125), 0.35, 0.01, 'the mapping must agree with the source second data point');
-  assert(microDuckKpForFirmwareGain(0) === 0, 'a zero gain must be a true torque-off');
-
-  // The schedule must be applied, not merely reported. The simulator sends the gain with the
-  // targets, and the worker writes it into the actuator rather than leaving kp constant.
   const simulator = readFileSync(resolve(ROOT, 'src/physics/microduck-physical-simulator.js'), 'utf8');
-  assert(/firmwareGain: lastStep\.gain/.test(simulator), 'the controller gain no longer travels with the targets');
+  assert(/firmwareGain: lastStep\.gain/.test(simulator), 'the deployed firmware gain no longer travels with the controller targets');
   const worker = readFileSync(resolve(ROOT, 'src/physics/microduck-mujoco-worker.js'), 'utf8');
-  assert(/actuator_gainprm\[actuator\.id \* gainWidth\] = kp/.test(worker), 'the worker no longer writes the servo stiffness');
-  assert(/actuator_biasprm\[actuator\.id \* biasWidth \+ 1\] = -kp/.test(worker), 'the worker writes gainprm without the matching bias term');
+  assert(/firmwareGain: appliedFirmwareGain/.test(worker), 'BAM no longer receives the deployed firmware gain');
+  assert(/microDuckBamMotorTorqueNm/.test(worker), 'the worker no longer computes BAM motor torque');
+  assert(!/actuator_gainprm\[actuator\.id \* gainWidth\] = kp/.test(worker), 'firmware gain has regressed into synthetic MuJoCo stiffness mutation');
 });
 
-check('a declared torque-off removes force, never the requested target', () => {
+check('a declared torque-off removes electromagnetic torque, never the requested target', () => {
   const worker = readFileSync(resolve(ROOT, 'src/physics/microduck-mujoco-worker.js'), 'utf8');
-  // These are position actuators: ctrl is a target angle, not a torque. Zeroing ctrl commands
-  // every joint to 0 rad at full strength, which is actuation toward a straight-legged pose.
-  // Measured on the real plant it left up to 0.289 N m running through a trial labelled "no
-  // actuation". A real torque-off zeroes the gain and leaves the request visible.
-  assert(!/data\.ctrl\[actuator\.id\] = actuationEnabled \? target : 0/.test(worker),
-    'the worker zeroes ctrl for torque-off again, which is a zero-radian command, not torque-off');
-  assert(/applyFirmwareGain\(enabled \? MICRODUCK_NOMINAL_FIRMWARE_GAIN : 0\)/.test(worker),
-    'the declared torque-off no longer zeroes the servo gain');
-  assert(/actuatorForceTotalNm/.test(worker), 'the worker stopped publishing actuator effort, so a torque-off is unfalsifiable');
-
-  const reference = readFileSync(resolve(ROOT, 'native/microduck_reference.py'), 'utf8');
-  assert(!/np\.zeros\(ACTION_LEN\)/.test(reference), 'the native reference zeroes ctrl for torque-off again');
-  assert(/set_actuator_kp\(kp_for_firmware_gain\(gain\) if actuation else 0\.0\)/.test(reference),
-    'the native reference no longer applies the gain schedule and the torque-off through the servo gain');
-  assert(/meanActuatorForceNm/.test(reference), 'the native evidence stopped recording actuator effort');
+  assert(/enabled: actuationEnabled/.test(worker), 'BAM no longer receives the actuation-enabled state');
+  assert(/data\.ctrl\[index\] = clamp\(motorTorque/.test(worker), 'MuJoCo ctrl is no longer BAM motor torque');
+  assert(/requestedTargets\[actuator\.id\] = target/.test(worker), 'torque-off can no longer preserve the requested joint target');
+  assert(/actuatorForceTotalNm/.test(worker), 'the worker stopped publishing actuator effort, so torque-off is unfalsifiable');
+  const bam = readFileSync(resolve(ROOT, 'src/physics/microduck-bam-plant.js'), 'utf8');
+  assert(/if \(!enabled\) return 0/.test(bam), 'the BAM motor model no longer guarantees zero electromagnetic torque when disabled');
+  // Passive BAM drivetrain friction remains physically present when motor torque is off.
+  assert(/microDuckBamFrictionLossNm/.test(worker), 'motor-off incorrectly removes passive BAM drivetrain friction');
 });
 
 check('projected gravity is normalised, and there is only one implementation of it', () => {

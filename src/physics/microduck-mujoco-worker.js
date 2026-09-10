@@ -160,8 +160,11 @@ function configureBamMotorPlant() {
     model.actuator_forcerange[actuator.id * 2] = -forceCeiling;
     model.actuator_forcerange[actuator.id * 2 + 1] = forceCeiling;
     model.dof_armature[actuator.joint.dof] = MICRODUCK_BAM_M6.armatureKgM2 * MICRODUCK_DEPLOYMENT_PLANT_PROFILE.armatureScale;
-    model.dof_frictionloss[actuator.joint.dof] = MICRODUCK_BAM_M6.frictionBaseNm;
-    model.dof_damping[actuator.joint.dof] = MICRODUCK_BAM_M6.frictionViscousNmPerRadS;
+    // BAM edit_spec replaces the XML joint friction/damping. The dynamic BAM values are
+    // written immediately before each mj_step; start from zero so the fallback servo plant
+    // can never be double-counted during model setup.
+    model.dof_frictionloss[actuator.joint.dof] = 0;
+    model.dof_damping[actuator.joint.dof] = 0;
     actuator.forceRange = [-forceCeiling, forceCeiling];
   }
   if (typeof mujoco.mj_setConst === 'function') mujoco.mj_setConst(model, data);
@@ -371,8 +374,11 @@ function applyDeclaredInitialState({ keepSetupLog = false } = {}) {
   targetDelay.reset(requestedTargets);
   actuationEnabled = true; paused = false;
   for (const actuator of actuatorState.values()) {
-    model.dof_frictionloss[actuator.joint.dof] = MICRODUCK_BAM_M6.frictionBaseNm;
-    model.dof_damping[actuator.joint.dof] = MICRODUCK_BAM_M6.frictionViscousNmPerRadS;
+    // BAM edit_spec replaces the XML joint friction/damping. The dynamic BAM values are
+    // written immediately before each mj_step; start from zero so the fallback servo plant
+    // can never be double-counted during model setup.
+    model.dof_frictionloss[actuator.joint.dof] = 0;
+    model.dof_damping[actuator.joint.dof] = 0;
   }
   mujoco.mj_forward(model, data);
   imuFilter.reset(); sampleDeploymentImu();

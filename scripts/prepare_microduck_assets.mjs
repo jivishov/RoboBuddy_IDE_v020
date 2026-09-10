@@ -153,7 +153,8 @@ const manifest = {
   visualContract,
   jointMapping: rig.jointContract,
   scoreContract: { inputs: ['scores/wistful.duckscore', 'scores/duck_strut.mid'], outputAudio: 'none in Cycle 01; Cycle 03 will synthesize locally in the browser', excluded: ['sounds/scores/outer_wilds.mid (upstream explicitly marks it copyrighted/test-only/not for release)'] },
-  excludedSources: ['pollen-robotics/microduck_rl mesh/MJCF bytes', 'Hugging Face Space implementation/assets', 'pollen-robotics/microduck sounds/scores/outer_wilds.mid'],
+  excludedSources: ['Hugging Face Space implementation/assets', 'pollen-robotics/microduck sounds/scores/outer_wilds.mid'],
+  externalPhysicalPlant: { path: 'models/microduck/', repository: 'pollen-robotics/microduck_rl', revision: '519142b1f5bf59fdfd44d06c205119e7fff8e3cb', license: 'Creative Commons BY-SA-NC for upstream 3D model files; version not specified upstream', scope: 'task-specific physical collision meshes and pinned source MJCF' },
   entries,
 };
 await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
