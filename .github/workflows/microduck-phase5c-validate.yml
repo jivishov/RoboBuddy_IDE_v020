@@ -64,6 +64,12 @@ jobs:
       - name: MicroDuck exact-mesh browser VFS loading contract
         run: node tests/physics/microduck-browser-mesh-vfs-core.mjs
 
+      - name: MicroDuck public command, bridge and starter regressions
+        run: |
+          node tests/physics/microduck-interfaces-core.mjs /tmp/microduck-interfaces.json
+          python -m pip install --disable-pip-version-check 'jsonschema==4.23.0'
+          python tests/validate_microduck_interfaces.py /tmp/microduck-interfaces.json
+
       - name: MicroDuck pinned asset gate
         run: node tests/validate_microduck_assets.mjs
 
@@ -114,7 +120,7 @@ jobs:
         run: |
           npm install --ignore-scripts --no-audit --no-fund
           npx playwright install --with-deps chromium
-          npx playwright test tests/microduck-phase5c-browser.spec.mjs --reporter=line
+          npx playwright test tests/microduck-phase5c-browser.spec.mjs tests/microduck-interfaces-browser.spec.mjs --reporter=line
 
       - name: Retain browser journey output
         if: always()
