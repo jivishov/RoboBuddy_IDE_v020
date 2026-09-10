@@ -1,24 +1,21 @@
 // MicroDuck BAM M6 actuator and deployed-IMU reference primitives.
 //
-// This is a clean-room JavaScript implementation of the public equations and constants in:
+// Clean-room JavaScript implementation of the public equations/constants in:
 //   Rhoban/bam v1.0.1 (Apache-2.0), commit ab81512c44f1f709b99ef332addb5e51568cd51c
 //   pollen-robotics/microduck_rl@519142b1f5bf59fdfd44d06c205119e7fff8e3cb
 //   pollen-robotics/microduck@590b986 (deployed controller / IMU path)
 //
-// It deliberately keeps TRAINING and DEPLOYMENT reference semantics separate. The policy
-// training plant randomises voltage, voltage sag, command latency and friction/inertia. The
-// deployed controller instead changes firmware P gain by skill and median-filters its real
-// IMU stream. Collapsing those into one invented "perfect" plant would be less faithful.
+// TRAINING and DEPLOYMENT are deliberately separate. The training plant randomises voltage,
+// sag, actuator latency, friction and inertia. The deployed controller changes firmware gain
+// by skill and median-filters its real IMU stream. A single hybrid profile would be less true.
 
 export const MICRODUCK_BAM_VERSION = '1.0.1';
 export const MICRODUCK_BAM_REVISION = 'ab81512c44f1f709b99ef332addb5e51568cd51c';
 export const MICRODUCK_RL_REVISION = '519142b1f5bf59fdfd44d06c205119e7fff8e3cb';
 export const MICRODUCK_DEPLOYED_REVISION = '590b986';
 
-// Rhoban/bam bam/params/xl330/m6.json at v1.0.1.
 export const MICRODUCK_BAM_M6 = Object.freeze({
-  motor: 'xl330',
-  model: 'm6',
+  motor: 'xl330', model: 'm6',
   ktNmPerA: 0.36601349688984386,
   resistanceOhm: 2.8113923539223227,
   armatureKgM2: 0.0018077432831600838,
@@ -36,20 +33,11 @@ export const MICRODUCK_BAM_M6 = Object.freeze({
   frictionViscousNmPerRadS: 0.005359668274599504,
 });
 
-// Rhoban/bam bam/dynamixel/actuator.py, XL330Actuator.
-export const MICRODUCK_XL330 = Object.freeze({
-  encoderCountsPerRev: 4096,
-  kpDivisor: 256,
-  pwmLimit: 885,
-  maxPwm: 1.0,
-});
-
+export const MICRODUCK_XL330 = Object.freeze({ encoderCountsPerRev: 4096, kpDivisor: 256, pwmLimit: 885, maxPwm: 1.0 });
 export const MICRODUCK_XL330_ERROR_GAIN =
   (MICRODUCK_XL330.encoderCountsPerRev / (2 * Math.PI)) /
   (MICRODUCK_XL330.kpDivisor * MICRODUCK_XL330.pwmLimit);
 
-// microduck_rl@519142b microduck_constants.py. These are startup distributions, not values
-// to resample on reset. Delay is in PHYSICS timesteps (mjlab 1.3.0 DelayBuffer semantics).
 export const MICRODUCK_TRAINING_PLANT_PROFILE = Object.freeze({
   id: 'training-reference',
   firmwareGain: 200,
@@ -62,14 +50,11 @@ export const MICRODUCK_TRAINING_PLANT_PROFILE = Object.freeze({
   massInertiaScaleRange: Object.freeze([0.95, 1.05]),
   encoderBiasRangeRad: Object.freeze([-0.015, 0.015]),
   imuMountRandomizationDeg: 6.0,
-  quadraticSignGate: false, // bam.mjlab.BamActuator v1.0.1 training implementation.
+  quadraticSignGate: false,
   frictionApplication: 'explicit-static-friction-clipping',
   imuPipeline: 'training-observation-pipeline',
 });
 
-// Deterministic source-backed CPU/deployment rehearsal condition. 7.4 V and a 0.1 V/Nm
-// sag gain are the values used by microduck_rl's BAM CPU regression fixture. They are a
-// repeatable reference condition, NOT a measurement of an individual robot or battery.
 export const MICRODUCK_DEPLOYMENT_PLANT_PROFILE = Object.freeze({
   id: 'deployment-reference',
   nominalVinV: 7.4,
@@ -78,7 +63,7 @@ export const MICRODUCK_DEPLOYMENT_PLANT_PROFILE = Object.freeze({
   targetDelayPhysicsSteps: Object.freeze([0, 0]),
   frictionScale: 1.0,
   armatureScale: 1.0,
-  quadraticSignGate: true, // bam.Model.compute_frictions / CPU MujocoController.
+  quadraticSignGate: true,
   frictionApplication: 'mujoco-friction-constraint',
   imuPipeline: 'deployed-median3',
 });
@@ -87,35 +72,28 @@ export function microDuckBamForceCeilingNm(vinV = MICRODUCK_TRAINING_PLANT_PROFI
   return Number(vinV) * MICRODUCK_BAM_M6.ktNmPerA / MICRODUCK_BAM_M6.resistanceOhm;
 }
 
-// Useful only as a diagnostic linearisation around an unsaturated position error. The BAM
-// plant is voltage/back-EMF/friction based; this number is not the actuator implementation.
 export function microDuckBamSmallSignalKpNmRad(firmwareGain, vinV) {
   return Number(firmwareGain) * MICRODUCK_XL330_ERROR_GAIN * Number(vinV)
     * MICRODUCK_BAM_M6.ktNmPerA / MICRODUCK_BAM_M6.resistanceOhm;
 }
 
-export function clamp(value, minimum, maximum) {
-  return Math.min(maximum, Math.max(minimum, value));
-}
+export function clamp(value, minimum, maximum) { return Math.min(maximum, Math.max(minimum, value)); }
 
 export function normaliseProjectedGravity(vector) {
-  const v = [Number(vector?.[0] || 0), Number(vector?.[1] || 0), Number(vector?.[2] || 0)];
+  const v = [Number(vector?.[0]), Number(vector?.[1]), Number(vector?.[2])];
   const mag = Math.hypot(...v);
-  return mag > 0.1 ? v.map((x) => x / mag) : [0, 0, -1];
+  return Number.isFinite(mag) && mag > 0.1 ? v.map((x) => x / mag) : [0, 0, -1];
 }
 
 function median3(a, b, c) {
-  return Math.max(a, b, Math.min(c, Math.max(Math.min(a, b), c)));
+  // Rust source: a.max(b).min(c).max(a.min(b)). Algebraically this is the middle value.
+  return Math.max(Math.min(Math.max(a, b), c), Math.min(a, b));
 }
 
 export function median3Vector(previous2, previous1, current) {
   return [0, 1, 2].map((i) => median3(Number(previous2[i]), Number(previous1[i]), Number(current[i])));
 }
 
-// pollen-robotics/microduck@590b986 duck-control/src/imu.rs: normalise projected gravity
-// BEFORE a component-wise median; do not renormalise the median result. Gyro history starts
-// at zero and gravity history starts upright. SFLP bias estimation happens on the IMU chip,
-// not here.
 export class MicroDuckDeploymentImuFilter {
   constructor() { this.reset(); }
   reset() {
@@ -124,7 +102,7 @@ export class MicroDuckDeploymentImuFilter {
     this.last = { gyroRadS: [0, 0, 0], projectedGravity: [0, 0, -1] };
   }
   sample(gyroRadS, projectedGravity) {
-    const gyro = [0, 1, 2].map((i) => Number(gyroRadS?.[i] || 0));
+    const gyro = [0, 1, 2].map((i) => Number(gyroRadS?.[i]));
     const gravity = normaliseProjectedGravity(projectedGravity);
     const filtered = {
       gyroRadS: median3Vector(this.gyroHistory[0], this.gyroHistory[1], gyro),
@@ -137,8 +115,6 @@ export class MicroDuckDeploymentImuFilter {
   }
 }
 
-// Small deterministic RNG used only for reproducible training-reference fixtures. It matches
-// the upstream distributions, not PyTorch's bit sequence; conformance tests record the seed.
 export class MicroDuckDeterministicRng {
   constructor(seed = 0x4d445543) { this.state = (Number(seed) >>> 0) || 1; }
   next() {
@@ -159,8 +135,7 @@ export class MicroDuckTargetDelay {
   reset(initialTarget) { this.history = [Array.from(initialTarget, Number)]; }
   push(target) {
     const frame = Array.from(target, Number);
-    if (!this.history.length) this.reset(frame);
-    else this.history.push(frame);
+    if (!this.history.length) this.reset(frame); else this.history.push(frame);
     const limit = this.maxLag + 1;
     if (this.history.length > limit) this.history.splice(0, this.history.length - limit);
     const lag = this.maxLag > 0 ? this.rng.integer(this.minLag, this.maxLag) : 0;
@@ -180,31 +155,23 @@ export function microDuckBamMotorTorqueNm({ targetRad, positionRad, velocityRadS
 
 export function microDuckBamFrictionLossNm({ motorTorqueNm, externalTorqueNm, velocityRadS, frictionScale = 1, quadraticSignGate = true }) {
   const p = MICRODUCK_BAM_M6;
-  const motor = Number(motorTorqueNm);
-  const external = Number(externalTorqueNm);
-  const absVelocity = Math.abs(Number(velocityRadS));
+  const motor = Number(motorTorqueNm); const external = Number(externalTorqueNm); const absVelocity = Math.abs(Number(velocityRadS));
   const stribeck = Math.exp(-((absVelocity / p.dthetaStribeckRadS) ** p.stribeckAlpha));
   const gearbox = Math.abs(external * p.loadFrictionExternal - motor * p.loadFrictionMotor);
   const gearboxStribeck = Math.abs(external * p.loadFrictionExternalStribeck - motor * p.loadFrictionMotorStribeck);
   let loss = p.frictionBaseNm + gearbox + stribeck * (p.frictionStribeckNm + gearboxStribeck);
   const driveSide = Math.abs(external) < Math.abs(motor);
-  const quad = driveSide
-    ? p.loadFrictionExternalQuad * Math.abs(external) ** 2
-    : p.loadFrictionMotorQuad * Math.abs(motor) ** 2;
-  const signsOppose = Math.sign(external) !== Math.sign(motor);
-  if (!quadraticSignGate || signsOppose) loss += stribeck * quad;
+  const quad = driveSide ? p.loadFrictionExternalQuad * Math.abs(external) ** 2 : p.loadFrictionMotorQuad * Math.abs(motor) ** 2;
+  if (!quadraticSignGate || Math.sign(external) !== Math.sign(motor)) loss += stribeck * quad;
   return Math.max(0, loss * Number(frictionScale));
 }
 
-// bam.mjlab.BamActuator v1.0.1 static-friction clipping (training plant). Viscous friction
-// is intentionally outside frictionScale, matching FrictionDRBamActuator.
 export function microDuckTrainingOutputTorqueNm({ motorTorqueNm, externalTorqueNm, velocityRadS, effectiveInertiaKgM2, timestepSeconds, frictionScale = 1 }) {
   const frictionLoss = microDuckBamFrictionLossNm({ motorTorqueNm, externalTorqueNm, velocityRadS, frictionScale, quadraticSignGate: false });
   const budget = frictionLoss + MICRODUCK_BAM_M6.frictionViscousNmPerRadS * Math.abs(Number(velocityRadS));
   const netNoFriction = Number(motorTorqueNm) - Number(externalTorqueNm);
   const tauStop = (Number(effectiveInertiaKgM2) / Number(timestepSeconds)) * Number(velocityRadS) + netNoFriction;
-  const frictionMagnitude = Math.min(Math.abs(tauStop), budget);
-  return Number(motorTorqueNm) - Math.sign(tauStop) * frictionMagnitude;
+  return Number(motorTorqueNm) - Math.sign(tauStop) * Math.min(Math.abs(tauStop), budget);
 }
 
 export function sampleMicroDuckTrainingPlant(seed = 0x4d445543) {
