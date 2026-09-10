@@ -392,12 +392,57 @@ function disposeModel() {
   paused = false; actuationEnabled = true; setupLog = []; resetBamState();
 }
 
+function meshDependenciesFromXml(xml) {
+  const compiler = xml.match(/<compiler\b[^>]*\bmeshdir="([^"]+)"/i);
+  const meshDir = compiler?.[1] || '';
+  if (meshDir !== 'assets') throw new Error(`MicroDuck source model must declare compiler meshdir="assets", got ${meshDir || '<none>'}`);
+  const files = [...xml.matchAll(/<mesh\b[^>]*\bfile="([^"]+)"/gi)].map((match) => match[1]);
+  if (!files.length) throw new Error('MicroDuck source model declares no external mesh files');
+  const unique = [...new Set(files)];
+  for (const file of unique) {
+    if (!/^[A-Za-z0-9._-]+\.stl$/i.test(file) || file.includes('..') || file.includes('/') || file.includes('\\')) {
+      throw new Error(`Worker rejected unsafe MicroDuck mesh dependency: ${file}`);
+    }
+  }
+  return unique;
+}
+
+async function buildModelVfs(mj, xml, modelUrl) {
+  if (typeof mj?.MjVFS !== 'function') throw new Error('Bundled MuJoCo runtime does not expose MjVFS');
+  const files = meshDependenciesFromXml(xml);
+  const modelDirectory = new URL('./', modelUrl);
+  const assetDirectory = new URL('assets/', modelDirectory);
+  if (assetDirectory.origin !== self.location.origin) throw new Error('MicroDuck mesh directory must be same-origin');
+  const vfs = new mj.MjVFS();
+  try {
+    await Promise.all(files.map(async (file) => {
+      const url = new URL(file, assetDirectory);
+      if (url.origin !== self.location.origin || !url.pathname.startsWith(assetDirectory.pathname)) {
+        throw new Error(`Worker rejected cross-origin or escaping MicroDuck mesh dependency: ${file}`);
+      }
+      const response = await fetch(url.href, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`MicroDuck mesh ${file} returned HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (!bytes.byteLength) throw new Error(`MicroDuck mesh ${file} is empty`);
+      // The source MJCF declares meshdir="assets". This is the exact VFS key
+      // resolved by MuJoCo; no path rewriting or primitive substitution occurs.
+      vfs.addBuffer(`assets/${file}`, bytes);
+    }));
+    return vfs;
+  } catch (error) {
+    try { vfs.delete?.(); } catch {}
+    throw error;
+  }
+}
+
 async function load(modelPackage) {
   if (!modelPackage?.id || !modelPackage?.asset || !modelPackage?.sha256 || !Array.isArray(modelPackage.joints) || !Array.isArray(modelPackage.actuators)) throw new Error('Worker requires a validated registered model package descriptor');
   const modelUrl = validatedModelUrl(modelPackage.asset); const mj = await ensureMuJoCo(); disposeModel();
   const xml = await fetch(modelUrl, { cache: 'no-store' }).then((response) => { if (!response.ok) throw new Error(`MuJoCo model returned HTTP ${response.status}`); return response.text(); });
   const modelSha256 = await sha256Text(xml); if (modelSha256 !== modelPackage.sha256) throw new Error(`Model SHA-256 mismatch for ${modelPackage.id}`);
-  model = mj.from_xml_string(xml); if (!model) throw new Error(`MuJoCo failed to compile ${modelPackage.id}`);
+  const vfs = await buildModelVfs(mj, xml, modelUrl);
+  try { model = mj.MjModel.from_xml_string(xml, vfs); } finally { try { vfs.delete?.(); } catch {} }
+  if (!model) throw new Error(`MuJoCo failed to compile ${modelPackage.id}`);
   data = new mj.MjData(model); if (!data) throw new Error(`MuJoCo failed to allocate data for ${modelPackage.id}`);
   descriptor = structuredClone(modelPackage); resolveModelAddresses(modelSha256); configureBamMotorPlant();
   return applyDeclaredInitialState();
