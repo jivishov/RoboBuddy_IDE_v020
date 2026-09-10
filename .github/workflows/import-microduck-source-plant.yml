@@ -83,6 +83,14 @@ jobs:
           if text.count(old) != 1:
               raise SystemExit('BAM license assertion migration target drifted')
           bam.write_text(text.replace(old, new, 1))
+
+          lifecycle = Path('tests/physics/microduck-lifecycle-core.mjs')
+          text = lifecycle.read_text()
+          old = "  assert(worker.counts('command') === before, 'a refused capability still reached the authority');\n  assert(sim.requestSkill('kick_right').accepted === true, 'a supported capability was refused');\n  sim.dispose();"
+          new = "  assert(worker.counts('command') === before, 'a refused capability still reached the authority');\n  const wrongPlant = sim.requestSkill('kick_right');\n  assert(wrongPlant.accepted === false && wrongPlant.status === 'wrong-plant', 'kick was not rejected on the walking collision plant');\n  assert(wrongPlant.requiredPackageKeys?.includes('kick'), 'wrong-plant response did not identify the required kick plant');\n  sim.dispose();\n\n  const kickSeams = headlessSimulator();\n  const kickSim = await MicroDuckPhysicalSimulator.create({ packageKey: 'kick', ...kickSeams });\n  assert(kickSim.requestSkill('kick_right').accepted === true, 'kick was refused on its required collision plant');\n  kickSim.dispose();"
+          if text.count(old) != 1:
+              raise SystemExit('lifecycle wrong-plant migration target drifted')
+          lifecycle.write_text(text.replace(old, new, 1))
           PY
       - name: Refresh integrity metadata and validate static routing
         run: |
