@@ -1,4 +1,4 @@
-name: Import pinned MicroDuck source plant
+name: Verify and refresh pinned MicroDuck source plant
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  import:
+  verify-refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -26,10 +26,33 @@ jobs:
           git clone --filter=blob:none https://github.com/pollen-robotics/microduck_rl.git /tmp/microduck_rl
           git -C /tmp/microduck_rl checkout --detach 519142b1f5bf59fdfd44d06c205119e7fff8e3cb
           test "$(git -C /tmp/microduck_rl rev-parse HEAD)" = "519142b1f5bf59fdfd44d06c205119e7fff8e3cb"
-      - name: Materialize exact task-specific source geometry and licensing
+      - name: Verify committed source bytes against pinned upstream
         run: |
-          python scripts/finalize_microduck_full_plant.py --source-checkout /tmp/microduck_rl
-          python scripts/finalize_microduck_collision_routing.py
+          python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          pin = Path('/tmp/microduck_rl/src/mjlab_microduck/robot/microduck')
+          source = Path('models/microduck/source')
+          meshes = Path('models/microduck/assets')
+          for name in ('robot_walk.xml', 'robot_allcollisions.xml', 'ball.xml', 'config_mjcf_walk.json'):
+              upstream = pin / name
+              committed = source / name
+              if upstream.exists():
+                  assert committed.read_bytes() == upstream.read_bytes(), f'{name}: committed source byte mismatch'
+          sums = (source / 'GIT_BLOB_SHA1SUMS').read_text()
+          upstream_meshes = sorted((pin / 'assets').glob('*.stl'))
+          assert upstream_meshes, 'pinned upstream has no STL assets'
+          assert {p.name for p in upstream_meshes} == {p.name for p in meshes.glob('*.stl')}, 'STL asset set mismatch'
+          for src in upstream_meshes:
+              copied = meshes / src.name
+              data = copied.read_bytes()
+              assert data == src.read_bytes(), f'{src.name}: committed STL byte mismatch'
+              blob = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
+              assert f'{blob}  assets/{src.name}' in sums, f'{src.name}: Git blob provenance mismatch'
+          print('committed MicroDuck source XML/STL bytes match pinned upstream')
+          PY
+      - name: Refresh conformance and asset integrity metadata
+        run: |
           python - <<'PY'
           import json, hashlib
           from pathlib import Path
@@ -39,32 +62,18 @@ jobs:
           fixture.write_text(json.dumps(doc, indent=2) + '\n')
           PY
           node scripts/prepare_microduck_assets.mjs
-      - name: Verify imported mesh byte identities and deterministic generation
+      - name: Verify deterministic plant and refreshed manifest
         run: |
-          python - <<'PY'
-          import hashlib
-          from pathlib import Path
-          pin_dir = Path('/tmp/microduck_rl/src/mjlab_microduck/robot/microduck/assets')
-          dst = Path('models/microduck/assets')
-          sums = Path('models/microduck/source/GIT_BLOB_SHA1SUMS').read_text()
-          for src in sorted(pin_dir.glob('*.stl')):
-              copied = dst / src.name
-              assert copied.read_bytes() == src.read_bytes(), src.name
-              data = copied.read_bytes()
-              blob = hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest()
-              assert f'{blob}  assets/{src.name}' in sums, src.name
-          print('all imported STL bytes match pinned upstream source')
-          PY
           python scripts/generate_microduck_models.py --check
           node tests/validate_microduck_assets.mjs
-      - name: Commit materialized plant and collision routing
+      - name: Commit refreshed integrity metadata
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add assets/microduck/fixtures/controller-conformance.json assets/microduck/generated/procedural-rig.json assets/microduck/manifest.json
           if git diff --cached --quiet; then
-            echo "No generated changes"
+            echo "MicroDuck source plant and asset integrity metadata already converged"
             exit 0
           fi
-          git commit -m "fix(microduck): refresh physical plant asset integrity"
+          git commit -m "fix(microduck): refresh source-plant asset integrity"
           git push origin HEAD:fix/microduck-full-plant-fidelity
