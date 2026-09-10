@@ -35,46 +35,43 @@ const S = MICRODUCK_CAPABILITY_STATUS;
 export const MICRODUCK_CAPABILITY_AUDIT = Object.freeze([
   Object.freeze({
     id: 'stand', label: 'Standing', status: S.PHYSICAL_VERIFIED, physicalPolicy: 'stand',
-    evidence: 'Native reference, 6 s: trunk holds 0.1161 m at 0.22 deg tilt with both soles in contact for 99.6% of physics steps, and 0.0024 m of drift.',
+    evidence: 'Independent BAM/MuJoCo evidence requires a stable stance on the broad source collision plant with real sole contacts and finite actuator force; no root-state write is used to hold the pose.',
   }),
   Object.freeze({
     id: 'walk', label: 'Walking / velocity control', status: S.PHYSICAL_VERIFIED, physicalPolicy: 'walking',
-    evidence: 'Native reference, 6 s at vx 0.30 m/s: 0.694 m along the commanded axis (0.119 m/s) with 32/33 foot-contact transitions and a 0.45 air fraction per foot. '
-      + 'Disabling actuation removes propulsion and the robot falls (tilt 67.8 deg); reducing sole/floor friction to 0.02 cuts commanded-axis distance by 77%.',
+    evidence: 'Independent BAM/MuJoCo evidence requires commanded-axis locomotion with real foot-contact transitions. Torque-off must remove propulsion and the reduced-traction fixture must materially degrade locomotion; timestep sensitivity is checked separately.',
   }),
   Object.freeze({
     id: 'sit_stand', label: 'Sit / stand', status: S.PHYSICAL_VERIFIED, physicalPolicy: 'sitstand',
-    evidence: 'Native reference, 4 s with the posture flag set: the trunk descends from 0.1161 m to 0.062 m and holds there under contact; the rise returns it to standing.',
+    evidence: 'Independent BAM/MuJoCo evidence runs this policy only on the broad source collision plant and verifies the posture transition from simulated state/contact rather than a scripted root pose.',
   }),
   Object.freeze({
     id: 'ground_pick', label: 'Ground pick', status: S.PHYSICAL_EXPERIMENTAL, physicalPolicy: 'ground_pick',
-    evidence: 'Native reference, one 3 s phase cycle: a real crouch to 0.084 m and a return to 0.116 m, driven by contact. '
-      + 'Classified experimental because the physical scene carries no object to pick up and the pinned sources define no pick-success criterion, so the motion is verified while the task is not.',
+    evidence: 'The policy runs on the broad source collision plant and its physical crouch/return is contact-driven. The scene carries no object to pick up and the pinned sources provide no pick-success criterion, so the motion is physical while the task remains experimental.',
   }),
   Object.freeze({
     id: 'kick_left', label: 'Left-leg ball kick', status: S.PHYSICAL_VERIFIED, physicalPolicy: 'kick_left',
-    evidence: 'Native reference on the kick package: 7 named left-sole/ball contacts move the source 15 g ball 2.283 m. With the ball outside reach the same policy produces 0 contacts and exactly 0.000 m of ball motion.',
+    evidence: 'Independent BAM/MuJoCo evidence requires named left-foot/ball contact before ball motion can count as a kick. An out-of-reach miss control must produce no qualifying contact and no credited kick.',
   }),
   Object.freeze({
     id: 'kick_right', label: 'Right-leg ball kick', status: S.PHYSICAL_VERIFIED, physicalPolicy: 'kick_right',
-    evidence: 'Native reference on the kick package: 5 named right-sole/ball contacts with a 2.66 N peak normal force move the source 15 g ball 2.514 m. The miss control produces 0 contacts and 0.000 m.',
+    evidence: 'Independent BAM/MuJoCo evidence requires named right-foot/ball contact before ball motion can count as a kick. An out-of-reach miss control must produce no qualifying contact and no credited kick.',
   }),
   Object.freeze({
     id: 'recovery', label: 'Fall recovery', status: S.PHYSICAL_VERIFIED, physicalPolicy: 'stand',
-    evidence: 'Runs only on the source all-collision ground-contact plant. Positive and negative BAM/MuJoCo recovery controls are validated from declared setup orientations, actuator force, trunk pose and contact; reset is never counted as recovery.',
+    evidence: 'Runs only on the source all-collision ground-contact plant. Positive and negative BAM/MuJoCo recovery controls start from declared setup orientations and are judged from actuator force, trunk pose and contact; reset is never counted as recovery.',
   }),
   Object.freeze({
     id: 'roulade', label: 'Roulade (forward roll)', status: S.PHYSICAL_EXPERIMENTAL, physicalPolicy: 'roulade',
-    evidence: 'The deployed runtime includes roulade.onnx. It is routed to the broad source all-collision plant so trunk/head contact is represented by exact source meshes. The pinned microduck_rl revision does not contain the roulade task configuration, so this remains experimental rather than an exact task-training-plant claim.',
+    evidence: 'The deployed runtime includes roulade.onnx and it is conservatively routed to the broad exact-mesh source collision plant. The pinned microduck_rl revision does not contain the roulade task configuration, so no exact pinned training-task collision-match claim is made.',
   }),
   Object.freeze({
     id: 'roller', label: 'Roller-mode locomotion', status: S.UNSUPPORTED, physicalPolicy: null,
-    evidence: 'No matched physical roller plant exists at the pinned RL revision: it carries no roller model. The roller environment upstream is a different plant with wheel bodies and passive wheel hinges, '
-      + 'and no revision was found that carries both the deployed robot model and a roller plant whose correspondence to these policy bytes could be shown. Running a roller policy on the walking model would be a policy/model mismatch.',
+    evidence: 'No matched physical roller plant exists at the pinned RL revision. Running the roller policy on the walking or broad ground-contact plant would be a policy/model mismatch, so it has no physical route.',
   }),
   Object.freeze({
     id: 'roller_crouch', label: 'Roller crouch', status: S.UNSUPPORTED, physicalPolicy: null,
-    evidence: 'Same missing roller plant as roller-mode locomotion.',
+    evidence: 'Same missing matched roller plant as roller-mode locomotion; it has no physical route.',
   }),
 ]);
 

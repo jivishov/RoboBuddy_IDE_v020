@@ -10,8 +10,9 @@ import { PARAMETER_EVIDENCE } from './model-registry.js';
 //     the command encoding, the skill priority chain, the action scaling, the filters and the
 //     50 Hz control cadence.
 //   * MICRODUCK_RL_SOURCE is the physical/RL environment authority. It supplies the collision
-//     set, the identified servo model, the physics timestep, the control decimation, the
-//     reset pose and the ball prop - none of which exist in the deployed runtime source.
+//     task-specific collision plants, the BAM training-plant configuration, the source XML
+//     fallback actuator, the physics timestep, reset pose and ball prop - none of which exist
+//     in the deployed runtime source.
 //
 // The reconciliation between them is not assumed from names or joint counts. It is
 // established below and asserted by tests/physics/microduck-phase5c-core.mjs.
@@ -38,6 +39,7 @@ export const MICRODUCK_RL_SOURCE = Object.freeze({
   paths: Object.freeze([
     'src/mjlab_microduck/robot/microduck/robot_walk.xml',
     'src/mjlab_microduck/robot/microduck/robot_allcollisions.xml',
+    'src/mjlab_microduck/robot/microduck/config_mjcf_walk.json',
     'src/mjlab_microduck/robot/microduck/joints_properties.xml',
     'src/mjlab_microduck/robot/microduck/scene.xml',
     'src/mjlab_microduck/robot/microduck/ball.xml',
@@ -155,37 +157,29 @@ export const MICRODUCK_RECONCILIATION = Object.freeze([
     'Velocity-command magnitude below which the standing network takes over.'),
   row('skill priority chain', 'roulade > kick > ground pick > sit/rise > stand-by-magnitude > walk', PARAMETER_EVIDENCE.SOURCE_DERIVED,
     'robotd/src/control.rs Controller::step', null),
-  row('firmware position gain', 200, PARAMETER_EVIDENCE.SOURCE_DERIVED, 'robotd/src/control.rs Tuning::gain, microduck_constants.py kp_fw',
-    'The deployed daemon and the RL actuator configuration agree on the XL330 firmware position gain, which is what makes the identified '
-    + 'servo model below the matching one.'),
-  row('servo model', 'MuJoCo position actuator kp 0.55 N m/rad, kv 0, force range +/-0.96 N m, control range +/-10 rad',
-    PARAMETER_EVIDENCE.SOURCE_DERIVED, 'microduck_rl joints_properties.xml class "chosen_actuator"',
-    'An identified XL330 model at firmware kp 200, not a generic PD guess. Audited divergence: PPO training used the BAM M6 voltage-domain '
-    + 'actuator with 3-6 tick action delay and voltage/friction randomisation; this identified position model is the one the upstream CPU '
-    + 'reference runner executes, and it is what a browser MuJoCo build can run. The BAM voltage model, its delay buffer and its domain '
-    + 'randomisation are not reproduced, and that is the largest declared actuator-fidelity gap in this package.'),
-  row('joint damping / frictionloss / armature', [0.053, 0.0048, 0.0018], PARAMETER_EVIDENCE.SOURCE_DERIVED,
-    'microduck_rl joints_properties.xml class "chosen_actuator"', 'Identified alongside the servo gain, from the same test-bench fit.'),
-  row('collision set', '15 colliders: 2 soles, 2 hips, 2 thighs, 2 shanks, 2 trunk shells, battery, power support (self-collision only), 3 head shells',
-    PARAMETER_EVIDENCE.SOURCE_DERIVED, 'microduck_rl robot_allcollisions.xml',
-    'The identity, parent body, placement and contact mask of every collider are source-derived. Their shape is not: see the next row.'),
-  row('collider primitive fit', 'repository-authored boxes fitted to the compiled source mesh envelopes', PARAMETER_EVIDENCE.ESTIMATED,
-    'measured from the compiled upstream model',
-    'The upstream colliders are CC BY-SA-NC meshes that this repository does not redistribute. Each is replaced by a box fitted to the '
-    + 'source mesh envelope in the same body frame. Most parts are boxier than they are round (over half of their vertices lie outside the '
-    + 'inscribed ellipsoid of their own bounding box), so a box is the closer primitive.'),
-  row('sole contact face', 'box 45.6 x 34.0 mm, 6 mm thick, rolled 4.75 deg about the ankle x axis', PARAMETER_EVIDENCE.ESTIMATED,
-    'measured from the compiled upstream sole mesh',
-    'The only load-bearing walking contact, so it is fitted to the measured sole contact face - the vertices within 1 mm of the sole plane - '
-    + 'rather than to the mesh bounding box (54.0 x 41.2 mm). Fitting the bounding box would have silently enlarged the support polygon by 45%. '
-    + 'The left and right fits agree to 6 micrometres.'),
-  row('contact parameters', 'condim 3, friction (1.0, 0.005, 0.0001), solref (0.02, 1), default solimp', PARAMETER_EVIDENCE.SOURCE_DERIVED,
-    'microduck_rl scene.xml as compiled by the upstream CPU reference runner',
-    'Audited divergence: PPO training additionally applies mjlab FULL_COLLISION, which sets condim 1 on the non-foot colliders and gives the '
-    + 'feet contact priority. The reference runner - the path that actually executes a deployed ONNX policy - compiles the raw scene, so that '
-    + 'is what this package reproduces.'),
-  row('floor', 'infinite plane at z = 0, same friction and solref as the robot colliders', PARAMETER_EVIDENCE.SOURCE_DERIVED,
-    'microduck_rl scene.xml', 'A declared flat indoor floor. Not a measured surface.'),
+  row('firmware gain schedule', '200 running; 160 standing / stand-tuned skills', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'robotd/src/control.rs Tuning::gain / standing_gain_ratio',
+    'The physical worker passes the scheduled firmware gain into the BAM voltage-domain torque law. It does not emulate the register by mutating a MuJoCo position-actuator stiffness.'),
+  row('BAM actuator model', 'Rhoban/bam v1.0.1 XL330/M6 voltage-domain torque motor', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'Rhoban/bam@ab81512c44f1f709b99ef332addb5e51568cd51c + microduck_rl actuator configuration',
+    'Browser equations are independently cross-checked against better-actuator-models==1.0.1. Motor torque depends on target error, firmware gain, available voltage and back-EMF; MuJoCo ctrl is motor torque, not a position target.'),
+  row('BAM armature and friction', 'identified armature 0.0018077432831600838 kg m^2 plus BAM directional/Stribeck/load/viscous friction', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'Rhoban/bam v1.0.1 M6 parameters',
+    'BAM replaces source joint damping/frictionloss for the physical plant and supplies its own dynamic friction and identified armature. Training-reference friction scaling applies to the velocity-independent BAM friction budget; viscous friction remains nominal.'),
+  row('source XML fallback actuator', 'position kp 0.55 N m/rad, kv 0, force range +/-0.96 N m, control range +/-10 rad', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'microduck_rl joints_properties.xml class chosen_actuator',
+    'Retained only as source-XML/fallback evidence and pre-conversion validation. It is not the browser or native Phase 5C physical actuator authority.'),
+  row('collision plant routing', 'walk/lowTraction -> robot_walk.xml; stand/recovery/sit_stand/ground_pick/roulade -> robot_allcollisions.xml; kick -> robot_allcollisions.xml + ball.xml', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'microduck_rl robot_walk.xml, robot_allcollisions.xml and pinned task configs',
+    'Walking deliberately uses the reduced source collision plant. Body-on-ground skills and kick use the broad all-collision source plant. The pinned revision does not contain the roulade task configuration, so roulade uses the broad plant conservatively and remains physical/experimental.'),
+  row('collision mesh bytes', 'exact pinned upstream STL bytes, no fitted primitive replacement', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'microduck_rl@519142b1f5bf59fdfd44d06c205119e7fff8e3cb assets + models/microduck/source/GIT_BLOB_SHA1SUMS',
+    'The committed STL files are byte-compared against the pinned checkout and their Git blob identities are recorded. Generated task wrappers preserve source mesh geometry.'),
+  row('contact parameters', 'task-specific source masks/priority/friction with explicit low-traction negative fixture', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'microduck_rl config_mjcf_walk.json / robot XML / ball.xml',
+    'The normal task plants preserve source contact semantics. The low-traction package is the separately declared adverse fixture; it is not presented as a measured material.'),
+  row('floor', 'flat plane at z = 0', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'microduck_rl scene/reference environment', 'A declared flat indoor-floor reference, not a measurement of a particular physical surface.'),
   row('reduced-traction surface', 0.02, PARAMETER_EVIDENCE.ESTIMATED, 'repository-authored adverse-condition fixture',
     'A deliberately degraded surface for the traction gate, matching the value the LeKiwi package already uses for the same purpose. Not a modelled real material.'),
   row('reset state', 'trunk at z = 0.12, identity orientation, joints at the home pose, actuator targets at the home pose',
@@ -201,9 +195,18 @@ export const MICRODUCK_RECONCILIATION = Object.freeze([
     'microduck_rl sensors.xml, scripts/infer_policy.py', 'The imu site carries identity rotation relative to the trunk, so this is the trunk-frame angular velocity the deployed controller reads.'),
   row('projected gravity source', 'world -Z rotated into the trunk body frame', PARAMETER_EVIDENCE.SOURCE_DERIVED,
     'scripts/infer_policy.py get_projected_gravity', 'Taken from the trunk body quaternion, not from a simulated accelerometer.'),
-  row('observation noise and delay', 'none applied', PARAMETER_EVIDENCE.ESTIMATED, 'repository-authored',
-    'Training randomised IMU delay, encoder bias and observation noise. The physical workspace publishes clean simulator ground truth, so '
-    + 'measured robustness margins are not claimed.'),
+  row('deployment IMU preprocessing', 'normalised projected gravity plus per-axis median-of-three on gyro and projected gravity', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'pollen-robotics/microduck@590b986 duck-control/src/imu.rs',
+    'The deployment-reference workspace reproduces the deployed median-of-three pipeline; its history resets to two zero gyro samples and two upright gravity samples.'),
+  row('deployment target delay', 'no synthetic target delay injected', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'deployed runtime control path',
+    'The deterministic deployment-reference keeps the deployed controller path separate from training-only domain randomisation.'),
+  row('training-reference randomisation', 'Vin 6.5..8.2 V; sag 0..0.2 V/Nm; 3..6 physics-step target delay; friction/armature 0.9..1.1; mass/inertia 0.95..1.05; encoder bias +/-0.015 rad; IMU mount +/-6 deg', PARAMETER_EVIDENCE.SOURCE_DERIVED,
+    'microduck_rl training configuration and BAM integration',
+    'These values are retained as a separate training-reference profile. They are not silently injected into the interactive deployment-reference workspace.'),
+  row('deployment electrical reference', '7.4 V nominal, 0.1 V/Nm sag coefficient, 6.0 V minimum', PARAMETER_EVIDENCE.CALIBRATION_REQUIRED,
+    'source CPU regression/reference condition',
+    'A deterministic source-backed rehearsal condition, not a battery/internal-resistance measurement from a particular assembled MicroDuck.'),
   row('hardware alignment', 'none', PARAMETER_EVIDENCE.CALIBRATION_REQUIRED, '-',
     'No measurement of an assembled MicroDuck was used anywhere in Phase 5C. Walking speed, traction, stability margin, kick distance, '
     + 'recovery probability and actuator dynamics are all unvalidated against hardware.'),
@@ -218,9 +221,10 @@ export function assertReconciliationCoverage() {
   const required = [
     'robot variant', 'articulated hierarchy', 'home pose', 'joint wire order', 'observation layout',
     'command block', 'previous action semantics', 'observation history', 'controller cadence',
-    'physics timestep', 'action scaling (walk)', 'target low-pass filters', 'servo model',
-    'joint damping / frictionloss / armature', 'collision set', 'collider primitive fit',
-    'sole contact face', 'contact parameters', 'reset state', 'hardware alignment',
+    'physics timestep', 'action scaling (walk)', 'target low-pass filters', 'firmware gain schedule',
+    'BAM actuator model', 'BAM armature and friction', 'source XML fallback actuator',
+    'collision plant routing', 'collision mesh bytes', 'contact parameters', 'reset state',
+    'deployment IMU preprocessing', 'training-reference randomisation', 'deployment electrical reference', 'hardware alignment',
   ];
   const missing = required.filter((name) => !seen.has(name));
   if (missing.length) throw new Error(`MicroDuck reconciliation table is missing: ${missing.join(', ')}`);
