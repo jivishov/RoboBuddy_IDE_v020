@@ -1,0 +1,27 @@
+name: Capture G1 independent review source
+on:
+  push:
+    branches: [fix/unitree-g1-independent-review]
+    paths: [.github/workflows/unitree-g1-review-capture.yml]
+permissions:
+  contents: read
+jobs:
+  capture:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive exact source without credentials or runtime files
+        run: |
+          mkdir -p /tmp/g1-review
+          git rev-parse HEAD > /tmp/g1-review/COMMIT.txt
+          git archive --format=tar.gz HEAD > /tmp/g1-review/source.tar.gz
+          sha256sum /tmp/g1-review/source.tar.gz > /tmp/g1-review/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unitree-g1-independent-source-${{ github.sha }}
+          path: /tmp/g1-review/
+          retention-days: 7
