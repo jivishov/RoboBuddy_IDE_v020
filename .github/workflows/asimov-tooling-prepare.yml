@@ -1,0 +1,30 @@
+name: Prepare Asimov validation tools
+on:
+  push:
+    branches: [integration/asimov-physics-20260911]
+    paths: [.github/workflows/asimov-tooling-prepare.yml]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Download pinned tools
+        run: |
+          mkdir -p tools/wheels node-tools
+          python -m pip download --only-binary=:all: mujoco==3.11.0 -d tools/wheels
+          cd node-tools
+          npm init -y
+          npm install --ignore-scripts --no-audit --no-fund three@0.180.0 @playwright/test@1.55.0 pyodide@0.29.4
+          tar -czf ../tools/node-tools.tar.gz node_modules package.json package-lock.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: asimov-validation-tools
+          path: tools
+          retention-days: 7
