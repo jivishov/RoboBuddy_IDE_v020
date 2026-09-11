@@ -1,0 +1,106 @@
+name: Verify published G1 physical workspace
+on:
+  push:
+    branches: [audit/g1-pages-36da0b8]
+    paths: [.github/workflows/g1-pages-review.yml]
+permissions:
+  contents: read
+jobs:
+  verify-public-pages:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pinned browser test harness
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Verify deployed commit, changed public assets and physical browser journey
+        run: |
+          mkdir -p /tmp/g1-pages-evidence
+          cat > .g1-pages-review.mjs <<'JS'
+          import assert from 'node:assert/strict';
+          import fs from 'node:fs';
+          import { createHash } from 'node:crypto';
+          import { chromium, expect } from '@playwright/test';
+          const site = 'https://jivishov.github.io/RoboBuddy_IDE_v020/';
+          const expected = '36da0b8163ef7b4d95544593c7aeb55babdbdff2';
+          const out = '/tmp/g1-pages-evidence';
+          let build;
+          for (let attempt = 0; attempt < 60; attempt++) {
+            const res = await fetch(site + 'physics-build.json?review=' + expected + '&attempt=' + attempt);
+            if (res.ok) {
+              build = await res.json();
+              if (build.commit === expected) break;
+            }
+            await new Promise(resolve => setTimeout(resolve, 5000));
+          }
+          assert.equal(build?.repository, 'jivishov/RoboBuddy_IDE_v020');
+          assert.equal(build?.commit, expected, 'public Pages must serve the reviewed exact commit');
+          const assets = {
+            'src/physics/session.js': '63a936928ede6c502c00d9ded1181c8eb7af9f7f501b306c28faa0b2a873c327',
+            'src/physics/unitree-g1-mujoco-worker.js': '8256be7a81bfebe48dec5426714c7438b7dcf7a9945a8328296f748e23270b4f',
+            'src/physics/unitree-g1-scene.js': 'ae8fe5f7aad80e9473d825a3e0602fad5e588732827eaa023c0eaaace3eb0d3c',
+            'src/physics/unitree-g1-frames.js': '3187ab358fa2b0c5a9537f27275f6b58efc580256725d5f9f89ca54407011e4f',
+            'src/physics/unitree-g1-model-package.js': 'd00a008f5a83230f4294e18509a4b5975da46fcbdbe11ba4712cbdc7b3787304',
+            'src/physics/unitree-g1-physical-simulator.js': 'a5e004fa0e03038dab48c44f591e0d2a9b919f503560eac941f56a2c4d0e8018'
+          };
+          for (const [path, sha] of Object.entries(assets)) {
+            const res = await fetch(site + path + '?review=' + expected);
+            assert.equal(res.status, 200, path);
+            assert.equal(createHash('sha256').update(Buffer.from(await res.arrayBuffer())).digest('hex'), sha, path);
+          }
+          const browser = await chromium.launch();
+          try {
+            const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });
+            const errors = [];
+            page.on('pageerror', error => errors.push(String(error)));
+            const response = await page.goto(site + '?ci=unitree-g1-pages-review', { waitUntil: 'domcontentloaded' });
+            assert.equal(response.status(), 200);
+            await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 120000 });
+            await page.locator('#robotSelect').selectOption('unitree');
+            await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 120000 });
+            await expect(page.locator('#taskSelect')).toHaveValue('unitree-g1-physical-dynamics');
+            await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulator-backend', 'browser-mujoco');
+            const physical = await page.evaluate(async () => {
+              const sim = window.__robobuddyCi.app.sim.backend;
+              await sim.engageStand({ holdSeconds: 0 });
+              await sim.advanceTime(2);
+              for (let i = 0; i < 4; i++) await sim.advanceTime(1.6);
+              sim.renderFrame();
+              return { state: sim.getState(), evaluation: sim.getTaskEvaluation(), alignment: sim.getPresentationAlignment() };
+            });
+            assert.equal(physical.evaluation.standing, true);
+            assert.equal(physical.evaluation.checks.completePhysicalObservations, true);
+            assert.equal(physical.evaluation.checks.continuousEvaluationEvidence, true);
+            assert.equal(physical.state.walking, 'unsupported');
+            assert.ok(physical.alignment.maxBodyErrorMm < 0.01);
+            await page.screenshot({ path: out + '/published-g1-physical.png' });
+            await page.locator('#taskSelect').selectOption('unitree-g1-kinematic-pose-inspection');
+            await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 120000 });
+            await expect(page.locator('#simCanvas')).toHaveAttribute('data-simulator-backend', 'source-robot');
+            const pose = await page.evaluate(() => ({ rootFixed: window.__robobuddyCi.app.isKinematicPoseWorkspace(), physicalSession: Boolean(window.__robobuddyCi.app.sim.getPhysicalSession()), badge: document.getElementById('capabilityBadge')?.textContent }));
+            assert.equal(pose.rootFixed, true);
+            assert.equal(pose.physicalSession, false);
+            await page.screenshot({ path: out + '/published-g1-pose.png' });
+            assert.deepEqual(errors, []);
+            const result = { site, build, assets, physical, pose, pageErrors: errors };
+            fs.writeFileSync(out + '/published-verification.json', JSON.stringify(result, null, 2) + '\n');
+            console.log(JSON.stringify({ site, commit: build.commit, publicAssetHashesVerified: Object.keys(assets).length, standing: physical.evaluation.standing, posePreserved: pose.rootFixed, pageErrors: errors }));
+          } finally {
+            await browser.close();
+          }
+          JS
+          node .g1-pages-review.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: published-g1-pages-36da0b8
+          path: /tmp/g1-pages-evidence/
+          retention-days: 14
