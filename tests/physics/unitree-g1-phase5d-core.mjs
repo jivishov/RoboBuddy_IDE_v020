@@ -8,11 +8,12 @@ import {
   G1_EFFORT_LIMIT_NM, G1_FOOT_CONTACT_GEOMS, G1_JOINT_AXIS, G1_JOINT_ORDER, G1_JOINT_RANGE_RAD,
   G1_SELF_CONTACT_EXCLUSIONS, G1_TOTAL_MASS_KG, G1_VELOCITY_LIMIT_RAD_S, MENAGERIE_G1_REFERENCE,
   G1_URDF_JOINT_RANGE_RAD, G1_URDF_MJCF_MAX_RANGE_DELTA_RAD, G1_URDF_MJCF_RANGE_DISCREPANCIES,
-  UNITREE_MUJOCO_SOURCE, UNITREE_RL_MJLAB_SOURCE, UNITREE_ROS_SOURCE, assertReconciliationCoverage,
-  reconciliationByEvidence,
+  UNITREE_G1_RECONCILIATION, UNITREE_MUJOCO_SOURCE, UNITREE_RL_MJLAB_SOURCE, UNITREE_ROS_SOURCE,
+  assertReconciliationCoverage, reconciliationByEvidence,
 } from '../../src/physics/unitree-g1-source-audit.js';
 import {
   G1_ANKLE_STABILITY_REQUIREMENT_NM_PER_RAD, G1_CONTROLLERS, G1_JOINT_HOLD_PROFILE, G1_MAX_KD, G1_MAX_KP,
+  G1_ROBOBUDDY_ANKLE_KD, G1_ROBOBUDDY_ANKLE_KP,
   G1_LOWLEVEL_CONTROL_INTERVAL_SECONDS, G1_PHYSICS_TIMESTEP_SECONDS, G1_STAND_CONTROLLER_PROFILES,
   G1_STAND_POSE_RAD, ROBOBUDDY_STAND_KD, ROBOBUDDY_STAND_KP, UNITREE_FIXSTAND_KD, UNITREE_FIXSTAND_KP,
   UNITREE_FIXSTAND_RAMP_SECONDS, ankleStiffnessAudit, assertControllerTables, boundLowLevelCommand,
@@ -28,6 +29,7 @@ import { UNITREE_G1_CAPABILITY_AUDIT, assertCapabilityAudit, unitreeG1Capability
 import { UNITREE_G1_CONTROL_LIMITS, createUnitreeG1ControlSchema } from '../../src/webmcp/unitree-g1-physical-control.js';
 import { tasksForProfile } from '../../src/task-catalog.js';
 import { physicsCapabilityFor } from '../../src/physics/capabilities.js';
+import { PARAMETER_EVIDENCE } from '../../src/physics/model-registry.js';
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (path) => readFileSync(resolve(REPO, path), 'utf8');
@@ -156,6 +158,15 @@ assert.deepEqual([...G1_STAND_POSE_RAD.slice(0, 6)], [-0.1, 0, 0, 0.3, -0.2, 0],
   for (const command of commands) assert.equal(command.feedforwardTorqueNm, 0, 'FixStand commands tau_ff = 0');
 }
 assert.equal(G1_JOINT_HOLD_PROFILE.kp, UNITREE_FIXSTAND_KP, 'the default joint-hold gains are the unchanged Unitree source gains');
+{
+  // The provenance record must state the gains that actually ship, or it is a false record of the
+  // one deviation this workspace declares.
+  const row = UNITREE_G1_RECONCILIATION.find((item) => item.parameter === 'standing controller ankle gains');
+  assert.ok(row, 'the reconciliation table must record the ankle gain deviation');
+  assert.deepEqual([...row.value], [G1_ROBOBUDDY_ANKLE_KP, G1_ROBOBUDDY_ANKLE_KD],
+    'the recorded ankle gains must equal the shipped ankle gains');
+  assert.equal(row.evidence, PARAMETER_EVIDENCE.ESTIMATED, 'a repository-authored gain is never source-derived');
+}
 
 // --- 3. model packages and generated models -----------------------------------------------------
 assert.equal(UNITREE_G1_MODEL_PACKAGES.length, 4);

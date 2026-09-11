@@ -661,7 +661,11 @@ check('the physical MicroDuck workspace has its own chip, badge and summary', ()
   // MicroDuck with the demonstrator's driver and mode.
   assert(/const selectedMode = taskDescriptor\(id, this\.taskId\)\?\.simulationMode \|\| p\.simulationMode;/.test(app),
     'the workspace labels no longer follow the selected task');
-  assert(/\(id === 'lekiwi' \|\| id === 'microduck'\) && selectedMode === 'physical_mujoco'/.test(app),
+  // Other profiles may join the dual-workspace list, so this reads the expression rather than a
+  // fixed profile list: what must hold is that MicroDuck is in it and that it is gated on the
+  // selected workspace being physical.
+  const migratedPhysical = /const migratedPhysical = ([\s\S]*?);\n/.exec(app)?.[1] || '';
+  assert(/id === 'microduck'/.test(migratedPhysical) && /selectedMode === 'physical_mujoco'/.test(migratedPhysical),
     'the physical MicroDuck workspace no longer reports the physical driver');
   assert(/updateSimulationPresentation\(p, selectedMode\)/.test(app), 'the presentation no longer receives the selected mode');
 });

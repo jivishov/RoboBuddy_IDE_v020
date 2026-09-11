@@ -208,8 +208,11 @@ export const UNITREE_G1_RECONCILIATION = Object.freeze([
   row('standing controller structure', 'interpolate measured q to the standing posture, per-joint PD, dq* = 0, tau_ff = 0', PARAMETER_EVIDENCE.SOURCE_DERIVED, UNITREE_RL_MJLAB_SOURCE.fixStandPath,
     'Exactly Unitree\'s State_FixStand: it latches the measured joint vector on entry, linearly interpolates to the standing posture over 2 s, and holds it with per-joint kp/kd.'),
   row('standing controller waist and arm gains', 'source FixStand kp/kd', PARAMETER_EVIDENCE.SOURCE_DERIVED, `${UNITREE_RL_MJLAB_SOURCE.configPath} FSM.FixStand.kp/kd`, 'Used unchanged.'),
-  row('standing controller ankle gains', [250, 30], PARAMETER_EVIDENCE.ESTIMATED, 'repository-authored',
-    `Unitree's FixStand ankle gains of kp 40 / kd 2 give a total ankle-pitch stiffness of 80 N m/rad, against the m g h of ${(G1_TOTAL_MASS_KG * 9.81 * G1_STAND_COM_HEIGHT_ABOVE_ANKLE_M).toFixed(1)} N m/rad this model needs to be a stable free-base inverted pendulum. Measured: source FixStand topples in about 1.5 s at only 12 N m of peak torque. The repository gains are chosen from that criterion with a margin and are repository-authored simulator gains, never Unitree hardware settings.`),
+  // These must stay equal to the shipped G1_ROBOBUDDY_ANKLE_KP/KD. The controller module imports
+  // this one, so the values cannot be imported back without a cycle; the core contract test
+  // asserts the two agree instead.
+  row('standing controller ankle gains', [250, 10], PARAMETER_EVIDENCE.ESTIMATED, 'repository-authored',
+    `Unitree's FixStand ankle gains of kp 40 / kd 2 give a total ankle-pitch stiffness of 80 N m/rad, against the m g h of ${(G1_TOTAL_MASS_KG * 9.81 * G1_STAND_COM_HEIGHT_ABOVE_ANKLE_M).toFixed(1)} N m/rad this model needs to be a stable free-base inverted pendulum. Measured: source FixStand topples in about 1.5 s at only 12 N m of peak torque. kp 250 is chosen from that criterion with a margin. kd is bounded from above by explicit-integration stability on the unloaded foot, kd * dt < 2 I: measured, kd 30 limit-cycles a free foot at 4 rad/s while kd 10 tracks it to 0.9 mrad and holds the stand identically. Both are repository-authored simulator gains, never Unitree hardware settings.`),
   row('hardware alignment', 'none', PARAMETER_EVIDENCE.CALIBRATION_REQUIRED, '-',
     'No measurement of an assembled Unitree G1 was used or is claimed. Motor bandwidth, gearbox friction, joint compliance, backlash, contact material, sensor latency, control-network timing and stability margin are all unmeasured.'),
 ]);

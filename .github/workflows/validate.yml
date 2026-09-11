@@ -90,6 +90,18 @@ jobs:
           node --check tests/physics/lekiwi-phase5b-core.mjs
           node --check tests/lekiwi-phase5b-browser.spec.mjs
           node --check tests/lekiwi-conformance-browser.spec.mjs
+          node --check src/physics/unitree-g1-source-audit.js
+          node --check src/physics/unitree-g1-controller.js
+          node --check src/physics/unitree-g1-model-package.js
+          node --check src/physics/unitree-g1-capabilities.js
+          node --check src/physics/unitree-g1-scene.js
+          node --check src/physics/unitree-g1-mujoco-worker.js
+          node --check src/physics/unitree-g1-physical-simulator.js
+          node --check src/webmcp/unitree-g1-physical-control.js
+          node --check tests/physics/unitree-g1-phase5d-core.mjs
+          node --check tests/unitree-g1-conformance-browser.spec.mjs
+          node --check tests/unitree-g1-phase5d-browser.spec.mjs
+          node --check tests/unitree-g1-presentation-browser.spec.mjs
           node --check playwright.config.mjs
       - name: Static fidelity checks
         run: node tests/validate.mjs
@@ -110,6 +122,12 @@ jobs:
           node tests/physics/so101-task-evaluator-core.mjs
       - name: LeKiwi Phase 5B source-audit, mapping and evaluator contract checks
         run: node tests/physics/lekiwi-phase5b-core.mjs
+
+      - name: Unitree G1 Phase 5D source-audit, controller, package and capability contract checks
+        run: |
+          node tests/physics/unitree-g1-phase5d-core.mjs
+          python scripts/prepare_unitree_g1_assets.py
+          python scripts/generate_unitree_g1_models.py --check
       - name: MicroDuck asset and policy contracts
         run: |
           node tests/validate_microduck_assets.mjs

@@ -140,7 +140,13 @@ test('Unitree G1 loads the source-pinned 29-joint mesh as a truthful kinematic p
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   await page.locator('#robotSelect').selectOption('unitree');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
-  await expect(page.locator('#taskSelect')).toHaveValue('unitree-g1-kinematic-pose-inspection');
+  // The Unitree profile carries two workspaces. The physical one is the default; the kinematic
+  // pose workspace this test covers is retained beside it and is selected explicitly.
+  await expect(page.locator('#taskSelect')).toHaveValue('unitree-g1-physical-dynamics');
+  expect(await page.locator('#taskSelect option').evaluateAll((nodes) => nodes.map((node) => node.value)))
+    .toEqual(['unitree-g1-physical-dynamics', 'unitree-g1-kinematic-pose-inspection']);
+  await page.locator('#taskSelect').selectOption('unitree-g1-kinematic-pose-inspection');
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   await expect(page.locator('#taskPanel')).toContainText('Unitree G1 29-DoF Kinematic Pose Inspection');
   await expect(page.locator('#modeChip')).toContainText('KINEMATIC POSE RIG');
   await expect(page.locator('#simBadge')).toContainText('NO CONTACT PLANT');
@@ -190,6 +196,10 @@ test('Unitree keeps its main-thread compile/replay Run and Run-to-Cursor paths',
   });
 
   await page.selectOption('#robotSelect', 'unitree');
+  await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
+  // The compile/replay Run path belongs to the retained kinematic pose workspace. The physical
+  // workspace is the profile default and runs live async Python instead, so select the pose one.
+  await page.selectOption('#taskSelect', 'unitree-g1-kinematic-pose-inspection');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 45_000 });
   await page.click('#runBtn');
   await expect(page.locator('#statusMessage')).toHaveText('Run complete', { timeout: SOURCE_REPLAY_TIMEOUT });
