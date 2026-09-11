@@ -164,9 +164,14 @@ export class LivePythonBridge {
   async getObservation({ view = 'ground_truth' } = {}) {
     await this.#assertOwner();
     if (view === 'hardware_like' && this.owner.robotId === 'asimov_1_23dof_physical') {
-      const observation=await this.#withTimeout(this.session.getObservation({view:'ground_truth'}));
+      const owner = this.owner;
+      const observation = await this.#withTimeout(this.session.getObservation({ view:'ground_truth' }));
+      await this.#assertOwner();
+      if (this.owner !== owner || observation.sessionId !== owner.sessionId || observation.epoch !== owner.epoch) {
+        throw liveError('STALE_LIVE_SESSION', 'The sensor read crossed a session reset or reconnect');
+      }
       if (!observation.sensorObservation) throw liveError('UNSUPPORTED_OBSERVATION_PROFILE','This Asimov reference scene has no declared hardware-like sensitivity profile');
-      return {...structuredClone(observation.sensorObservation),sessionId:this.owner.sessionId,epoch:this.owner.epoch};
+      return { ...structuredClone(observation.sensorObservation), sessionId:owner.sessionId, epoch:owner.epoch };
     }
     if (view !== 'ground_truth') {
       throw liveError('UNSUPPORTED_OBSERVATION_PROFILE', `Observation view ${view} is not calibrated or supported for this physical preview`);
