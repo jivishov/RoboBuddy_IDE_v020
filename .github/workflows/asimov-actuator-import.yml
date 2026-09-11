@@ -20,7 +20,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Check transfer and apply reviewed changes
+      - name: Check transfer and apply reviewed non-workflow changes
         shell: python
         run: |
           import base64,hashlib,lzma,pathlib,subprocess
@@ -28,8 +28,8 @@ jobs:
           assert len(data)==24568
           assert hashlib.sha256(data).hexdigest()=='9204fa2544bb04b6426af1edd903b899270f9d22786e52ebbe12585c6d8c8856'
           patch=pathlib.Path('/tmp/asimov-actuator.patch');patch.write_bytes(lzma.decompress(data))
-          subprocess.run(['git','apply','--unidiff-zero','--check',str(patch)],check=True)
-          subprocess.run(['git','apply','--unidiff-zero',str(patch)],check=True)
+          subprocess.run(['git','apply','--exclude=.github/workflows/*','--unidiff-zero','--check',str(patch)],check=True)
+          subprocess.run(['git','apply','--exclude=.github/workflows/*','--unidiff-zero',str(patch)],check=True)
       - name: Generate and check source
         run: |
           python scripts/generate_asimov_actuator_models.py
@@ -39,10 +39,9 @@ jobs:
           node tests/physics/asimov-actuator-worker.mjs
           node tests/webmcp-core.mjs
           git diff --check
-      - name: Commit reviewed source and remove import scaffolding
+      - name: Commit reviewed application source
         run: |
           rm -rf .asimov-actuator-transfer
-          rm .github/workflows/asimov-actuator-import.yml
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
