@@ -1,5 +1,5 @@
-import * as THREE from 'http://127.0.0.1:4180/npm/three@0.180.0/build/three.module.js';
-import { OrbitControls } from 'http://127.0.0.1:4180/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
+import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
 import { CanonicalRobotRig, canonicalVisualProvenance } from '../canonical-rig.js';
 import { BrowserMuJoCoBackend } from './browser-mujoco-backend.js';
 import { PhysicsSession } from './session.js';
@@ -418,10 +418,21 @@ export class UnitreeG1PhysicalSimulator {
     return true;
   }
 
+  // Every dataset key this simulator publishes, so switching away from the physical workspace
+  // cannot leave a stale "free-base" or "standing" attribute describing a workspace that has
+  // neither.
+  static DATASET_KEYS = Object.freeze([
+    'unitreeG1RootMode', 'unitreeG1Walking', 'unitreeG1Hands', 'unitreeG1PelvisZM', 'unitreeG1PelvisTiltRad',
+    'unitreeG1UprightZ', 'unitreeG1LeftFootContacts', 'unitreeG1RightFootContacts', 'unitreeG1NonFootGroundContacts',
+    'unitreeG1SelfContacts', 'unitreeG1ExternalObjectContacts', 'unitreeG1ControllerId', 'unitreeG1ActuationEnabled',
+    'unitreeG1Standing', 'unitreeG1Fell', 'physicalSceneRevision',
+  ]);
+
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
     this.ready = false;
+    for (const key of UnitreeG1PhysicalSimulator.DATASET_KEYS) delete this.canvas.dataset[key];
     this.unsubscribeSession?.();
     this.unsubscribeSession = null;
     this.session?.dispose?.();

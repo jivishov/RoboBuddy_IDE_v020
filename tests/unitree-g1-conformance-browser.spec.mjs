@@ -350,7 +350,16 @@ test('Unitree G1 Phase 5D browser MuJoCo reproduces the native physical gates', 
   expect(nominal.standing, `nominal standing failed: ${JSON.stringify(nominal.checks)}`).toBe(true);
   expect(nominal.engagedControllerId).toBe('robobuddy_g1_stand_v1');
   expect(nominal.actuationEnabled).toBe(true);
-  expect(nominal.setupLog, 'nominal standing runs with no declared setup at all').toEqual([]);
+  // Nominal standing performs no setup operation at all. The only logged entry is the disclosure
+  // of the model package's declared initial command, which is itself a bounded low-level joint
+  // hold, not a state write: no qpos/qvel assignment, no weld, no band, no upright correction.
+  expect(nominal.setupLog).toEqual([{
+    simulationTimeSeconds: 0,
+    event: 'initialCommand',
+    initialCommand: 'joint-hold',
+    detail: 'bounded joint hold at the declared initial joint positions, at the Unitree source hold gains',
+  }]);
+  expect(JSON.stringify(nominal.setupLog)).not.toContain('set_actuation');
   expect(nominal.measured.maxNonFootGroundContacts).toBe(0);
   expect(nominal.measured.maxExternalOrFixtureContacts, 'no external object or fixture may support the stand').toBe(0);
   expect(nominal.footContacts.left).toBeGreaterThan(0);

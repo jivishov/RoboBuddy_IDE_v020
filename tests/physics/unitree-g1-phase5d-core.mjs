@@ -178,6 +178,14 @@ for (const modelPackage of UNITREE_G1_MODEL_PACKAGES) {
   assert.equal(modelPackage.evidence.standingControllerAnkleGains, 'estimated');
   assert.equal(modelPackage.evidence.hardwareAlignment, 'calibration-required');
 }
+// The declared initial command is a command, and each scene declares the one it needs.
+assert.equal(UNITREE_G1_MOUNTED_PACKAGE.initialCommand, 'joint-hold');
+assert.equal(UNITREE_G1_MOUNTED_BLOCKED_PACKAGE.initialCommand, 'joint-hold');
+assert.equal(UNITREE_G1_FREEBASE_PACKAGE.initialCommand, 'joint-hold');
+assert.equal(UNITREE_G1_FREEBASE_DROP_PACKAGE.initialCommand, 'passive', 'the gravity-release fixture must hold nothing up');
+for (const modelPackage of UNITREE_G1_MODEL_PACKAGES) assert.ok(['joint-hold', 'passive'].includes(modelPackage.initialCommand));
+assert.ok(UNITREE_G1_FREEBASE_PACKAGE.limitations.some((line) => /source gains lose the posture within about half a second/.test(line)),
+  'the free-base package must state that its default hold is not a standing controller');
 assert.equal(UNITREE_G1_MOUNTED_PACKAGE.rootMode, 'fixed-mounted');
 assert.equal(UNITREE_G1_MOUNTED_BLOCKED_PACKAGE.rootMode, 'fixed-mounted');
 assert.equal(UNITREE_G1_FREEBASE_PACKAGE.rootMode, 'free-base');
@@ -254,6 +262,7 @@ assert.equal(UNITREE_G1_MOUNTED_PACKAGE.bodies.find((body) => body.id === 'pelvi
   assert.deepEqual([...new Set(assignments)], ['ctrl'], `the G1 worker may only ever write d.ctrl, found writes to ${[...new Set(assignments)].join(', ')}`);
   assert.ok(worker.includes('data.ctrl[actuator.id] = actuationEnabled ? lowLevelTorqueNm('), 'the only influence on the plant is a bounded actuator torque');
   assert.ok(worker.includes('mj_resetDataKeyframe'), 'the declared initial condition comes from the model keyframe');
+  assert.ok(worker.includes("descriptor.initialCommand === 'passive'"), 'the worker honours the declared initial command');
   assert.ok(/if \(equalityCount !== 0\)/.test(worker), 'the worker rejects any equality constraint');
   assert.ok(/gravity\[2\] < -9/.test(worker), 'the worker rejects a scene without real gravity');
   assert.ok(worker.includes("payload.type !== 'set_actuation'"), 'the declared setup allowlist is exactly one operation');
@@ -305,6 +314,34 @@ assert.equal(UNITREE_G1_STAND_GATE.forbidExternalSupport, true);
   for (let t = 0; t <= 2.5; t += 0.02) short.observe(sample(Number(t.toFixed(4))));
   assert.equal(short.snapshot().checks.evaluationWindowReached, false);
   assert.equal(short.snapshot().standing, false);
+
+  // The evaluated interval opens one ramp after the controller was engaged, not one ramp after
+  // the clock started, so settling first cannot let the ramp tail count as held posture.
+  {
+    const engaged = 1.5;
+    const withEngagement = (seconds) => {
+      const record = sample(seconds);
+      record.controller = { id: G1_CONTROLLERS.STAND, engagedAtSeconds: engaged };
+      return record;
+    };
+    const late = new UnitreeG1StandEvaluator();
+    for (let t = 0; t <= 6.0001; t += 0.02) late.observe(withEngagement(Number(t.toFixed(4))));
+    const lateSnapshot = late.snapshot();
+    assert.equal(lateSnapshot.measured.controllerEngagedAtSeconds, engaged);
+    assert.equal(lateSnapshot.measured.evaluationOpensAtSeconds, engaged + UNITREE_G1_STAND_GATE.evaluationStartSeconds);
+    assert.equal(lateSnapshot.checks.evaluationWindowReached, false, 'six evaluated seconds are not yet available');
+    assert.equal(lateSnapshot.standing, false);
+    const full = new UnitreeG1StandEvaluator();
+    for (let t = 0; t <= 9.6001; t += 0.02) full.observe(withEngagement(Number(t.toFixed(4))));
+    assert.equal(full.snapshot().standing, true, 'the same run does pass once the full evaluated interval elapses');
+    // Re-engaging a controller restarts the window rather than carrying the old one over.
+    const restarted = new UnitreeG1StandEvaluator();
+    for (let t = 0; t <= 9.6001; t += 0.02) restarted.observe(withEngagement(Number(t.toFixed(4))));
+    const switched = sample(9.62);
+    switched.controller = { id: G1_CONTROLLERS.SOURCE_FIXSTAND, engagedAtSeconds: 9.62 };
+    restarted.observe(switched);
+    assert.equal(restarted.snapshot().standing, false, 'switching controllers must restart the evaluated interval');
+  }
 }
 
 // --- 6. capability labels ------------------------------------------------------------------------
@@ -356,6 +393,31 @@ assert.notEqual(physicsCapabilityFor('unitree').capability, physicsCapabilityFor
   const control = read('src/webmcp/unitree-g1-physical-control.js');
   assert.ok(!control.includes(`'${G1_CONTROLLERS.SOURCE_FIXSTAND}'`) || control.includes('deliberately not agent-reachable'),
     'the measured-to-fail source controller must not be silently agent-reachable');
+
+  // The retained kinematic pose workspace keeps its own pose-write tool. The two tools must never
+  // share a name, or an agent holding the pose tool's name would silently reach a physical plant
+  // (or, worse, reach a pose write while a physical badge is displayed).
+  const physicalToolName = /name: '([^']+)'/.exec(control.slice(control.indexOf('getUnitreeG1PhysicalControlDefinition')))[1];
+  const legacy = read('src/webmcp/robot-controls.js');
+  const poseToolName = /unitree: Object\.freeze\(\{\s*\n\s*name: '([^']+)'/.exec(legacy)[1];
+  assert.equal(physicalToolName, 'control_unitree_g1_physical_simulation');
+  assert.equal(poseToolName, 'control_unitree_g1_simulation');
+  assert.notEqual(physicalToolName, poseToolName, 'the physical and pose tools must not share a name');
+  assert.match(legacy, /profileId === 'unitree' && context\.simulationMode === 'physical_mujoco'\) return null/,
+    'the kinematic pose tool must be withdrawn while the physical workspace is displayed');
+}
+
+// --- 8b. the physical simulator withdraws its own presentation claims on dispose ------------------
+{
+  const simulator = read('src/physics/unitree-g1-physical-simulator.js');
+  const declared = [...simulator.matchAll(/this\.canvas\.dataset\.(\w+)\s*=/g)].map((match) => match[1]);
+  const cleared = /static DATASET_KEYS = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(simulator)[1].match(/'(\w+)'/g).map((token) => token.slice(1, -1));
+  // Anything the simulator claims while it owns the canvas must be withdrawn when it stops owning
+  // it, or the pose workspace could inherit a stale "free-base" or "standing" attribute. Keys the
+  // shared host resets on every scenario switch are excluded by name.
+  const hostOwned = new Set(['simulatorBackend', 'simulationAuthority', 'physicalSceneId', 'modelPackageId', 'presentationGroundColor', 'simulationClockS', 'renderedFrames']);
+  const leaked = declared.filter((key) => !cleared.includes(key) && !hostOwned.has(key));
+  assert.deepEqual(leaked, [], `these dataset keys are set but never withdrawn: ${leaked.join(', ')}`);
 }
 
 // --- 9. the live Python surface exposes no walk and no state assignment ---------------------------

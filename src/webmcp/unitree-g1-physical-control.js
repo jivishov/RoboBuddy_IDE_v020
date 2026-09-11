@@ -92,7 +92,7 @@ export function getUnitreeG1PhysicalControlDefinition(facade) {
   const context = facade.getRegistrationContext();
   if (context.workspaceStatus !== 'ready' || !context.simulationReady || context.profileId !== 'unitree' || context.simulationMode !== 'physical_mujoco') return null;
   return {
-    name: 'control_unitree_g1_simulation',
+    name: 'control_unitree_g1_physical_simulation',
     title: 'Control the Unitree G1 physical MuJoCo simulation',
     description: `Control the active Unitree G1 29-DoF free-base physical workspace through ${WEBMCP_UNITREE_G1_SCHEMA_VERSION}. A joint target is a bounded request: it is clamped to the source joint range, turned into a bounded actuator torque by the Unitree low-level motor law, and MuJoCo decides the resulting motion, so requested, accepted and measured joint values are reported separately. stand() engages the one verified posture controller; it is a posture hold, not dynamic balance or perturbation recovery, and it can fail. Walking is unsupported and no walk command exists. There is no root-pose write, no root-velocity write, no upright correction, no external force, no object placement, and no hardware transport.`,
     inputSchema: createUnitreeG1ControlSchema(),

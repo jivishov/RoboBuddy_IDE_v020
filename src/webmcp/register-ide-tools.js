@@ -98,8 +98,9 @@ function createTools(facade, epoch) {
   if (openarmControl) tools.push({ ...openarmControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeOpenArmPhysicalControl(facade, input, signal, epoch)) });
   const lekiwiControl = getLeKiwiPhysicalControlDefinition(facade);
   if (lekiwiControl) tools.push({ ...lekiwiControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeLeKiwiPhysicalControl(facade, input, signal, epoch)) });
-  // Present only for the ready MicroDuck PHYSICAL workspace. The legacy demonstrator keeps
-  // its own separate tool, so a physical badge can never sit on a synthetic command path.
+  // Present only for the ready Unitree G1 PHYSICAL workspace. The retained kinematic pose
+  // workspace keeps its own separately named tool and is suppressed here, so the two never share
+  // a name and a physical badge can never sit on a synthetic pose-write command path.
   const unitreeG1Control = getUnitreeG1PhysicalControlDefinition(facade);
   if (unitreeG1Control) tools.push({ ...unitreeG1Control, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeUnitreeG1PhysicalControl(facade, input, signal, epoch)) });
   const microduckPhysicalControl = getMicroDuckPhysicalControlDefinition(facade);

@@ -317,8 +317,19 @@ function applyDeclaredInitialState() {
   controller = null;
   actuationEnabled = true;
   setupLog = [];
+  if (!['joint-hold', 'passive'].includes(descriptor.initialCommand)) {
+    throw new Error(`Model ${descriptor.id} declares an unknown initialCommand ${descriptor.initialCommand}`);
+  }
   mujoco.mj_forward(model, data);
-  accepted = neutralCommands();
+  // The declared initial command. 'passive' is Unitree's own Passive behaviour - zero torque, so
+  // gravity acts on an unheld plant. 'joint-hold' issues a bounded hold at the pose the model
+  // itself declares, through the Unitree source hold gains. Either way this is a command: no
+  // joint or root state is written here or anywhere else.
+  const initialCommand = descriptor.initialCommand === 'passive' ? 'passive' : 'joint-hold';
+  accepted = initialCommand === 'passive'
+    ? neutralCommands()
+    : holdCommandsAt(G1_JOINT_ORDER.map((_, index) => measured(index).positionRad));
+  logSetup({ event: 'initialCommand', initialCommand, detail: initialCommand === 'passive' ? 'every actuator commanded to zero torque' : 'bounded joint hold at the declared initial joint positions, at the Unitree source hold gains' });
   for (const actuator of actuatorState.values()) data.ctrl[actuator.id] = 0;
   mujoco.mj_forward(model, data);
   return observation();

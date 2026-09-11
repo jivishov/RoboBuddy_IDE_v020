@@ -6,9 +6,11 @@ import {
   WEBMCP_DIRECT_CONTROL_PROFILES,
   WEBMCP_SO101_PHYSICAL_SCHEMA_VERSION,
 } from '../src/webmcp/robot-controls.js';
+import { getUnitreeG1PhysicalControlDefinition } from '../src/webmcp/unitree-g1-physical-control.js';
 
-function makeFacade(profileId) {
+function makeFacade(profileId, { simulationMode = '' } = {}) {
   const calls = [];
+  const mode = simulationMode || (profileId === 'so101' ? 'physical_mujoco' : profileId === 'unitree' ? 'kinematic_pose' : 'source_plant');
   const state = {
     epoch: 7,
     workspaceGeneration: 3,
@@ -65,7 +67,7 @@ function makeFacade(profileId) {
     getAgentSnapshot: () => ({
       workspaceStatus: 'ready', workspaceGeneration: state.workspaceGeneration, profileId,
       taskId: profileId === 'so101' ? 'so101-physical-block-transfer' : 'mock-task', simulatorEpoch: state.simulatorEpoch,
-      simulationMode: profileId === 'so101' ? 'physical_mujoco' : profileId === 'unitree' ? 'kinematic_pose' : 'source_plant',
+      simulationMode: mode,
       simulation: {
         executionState: state.executionState, status: state.status, telemetry: { ...state.telemetry },
         contacts: {}, problems: [], preparedActionCount: 0,
@@ -79,7 +81,7 @@ function makeFacade(profileId) {
     assertActive: (expectedEpoch) => { if (expectedEpoch !== state.epoch) throw new Error('stale epoch'); },
     getRegistrationContext: () => ({
       workspaceStatus: 'ready', simulationReady: true, profileId,
-      simulationMode: profileId === 'so101' ? 'physical_mujoco' : profileId === 'unitree' ? 'kinematic_pose' : 'source_plant',
+      simulationMode: mode,
       workspaceGeneration: state.workspaceGeneration, simulatorEpoch: state.simulatorEpoch,
     }),
     inspectSimulation: (snapshot) => ({
@@ -98,6 +100,17 @@ test('direct WebMCP control is limited to SO-101, LeKiwi, and Unitree G1', () =>
   expect(getProfileControlDefinition(makeFacade('microduck').facade)).toBeNull();
   expect(getProfileControlDefinition(makeFacade('so101').facade)?.name).toBe('control_so101_simulation');
   expect(getProfileControlDefinition(makeFacade('lekiwi').facade)?.name).toBe('control_lekiwi_simulation');
+  expect(getProfileControlDefinition(makeFacade('unitree').facade)?.name).toBe('control_unitree_g1_simulation');
+});
+
+test('a physical workspace suppresses the same profile\'s non-physical direct-control tool', () => {
+  // A physical workspace has its own separately named, versioned tool. The source-plant and
+  // kinematic pose tools write straight into their own non-physical plants, so neither may be
+  // offered while a physical badge is displayed, and neither may share a name with a physical tool.
+  expect(getProfileControlDefinition(makeFacade('lekiwi', { simulationMode: 'physical_mujoco' }).facade)).toBeNull();
+  expect(getProfileControlDefinition(makeFacade('unitree', { simulationMode: 'physical_mujoco' }).facade)).toBeNull();
+  expect(getUnitreeG1PhysicalControlDefinition(makeFacade('unitree', { simulationMode: 'physical_mujoco' }).facade)?.name).toBe('control_unitree_g1_physical_simulation');
+  expect(getUnitreeG1PhysicalControlDefinition(makeFacade('unitree').facade)).toBeNull();
   expect(getProfileControlDefinition(makeFacade('unitree').facade)?.name).toBe('control_unitree_g1_simulation');
 });
 

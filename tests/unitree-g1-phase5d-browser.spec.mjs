@@ -7,9 +7,19 @@ import { expect, test } from '@playwright/test';
 // PhysicsSession that the renderer and the evaluator observe.
 
 test('The Unitree profile exposes a physical workspace beside the source pose workspace', async ({ page }) => {
-  test.setTimeout(300_000);
+  test.setTimeout(600_000);
   const pageErrors = [];
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
+  // Agent Assist is only offerable when a WebMCP interface exists, so the spec provides one and
+  // then grants access exactly the way a person does: by clicking the opt-in control.
+  await page.addInitScript(() => {
+    const registrations = [];
+    Object.defineProperty(document, 'modelContext', {
+      configurable: true,
+      value: { registerTool(tool, options = {}) { registrations.push({ tool, signal: options.signal || null }); return Promise.resolve(); } },
+    });
+    window.__webMcpRegistrations = registrations;
+  });
   await page.goto('/?ci=unitree-g1-phase5d', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
   await page.locator('#robotSelect').selectOption('unitree');
@@ -46,9 +56,11 @@ test('The Unitree profile exposes a physical workspace beside the source pose wo
     const sim = window.__robobuddyCi.app.sim.backend;
     await sim.advanceTime(0.2);
     const settled = sim.getState();
+    // Engage the controller and then run the whole declared evaluation window: two seconds of
+    // source ramp followed by six evaluated seconds, so the gate is really satisfied rather than
+    // sampled early.
     await sim.engageStand({ holdSeconds: 2 });
-    await sim.advanceTime(2);
-    await sim.advanceTime(2);
+    for (let index = 0; index < 4; index += 1) await sim.advanceTime(1.6);
     const standing = sim.getState();
     const evaluation = sim.getTaskEvaluation();
     // Commanding a joint releases the standing controller. That is stated in the starter and it
@@ -94,8 +106,8 @@ test('The Unitree profile exposes a physical workspace beside the source pose wo
     'try:',
     '    await robot.wait_sim(0.2)',
     '    await robot.stand()',
-    '    await robot.wait_sim(2.0)',
-    '    await robot.wait_sim(2.0)',
+    '    for _ in range(4):',
+    '        await robot.wait_sim(1.6)',
     '    state = await robot.get_state()',
     '    print("MODE", state["controller_mode"])',
     '    print("PELVIS_Z", round(state["root"]["position_m"][2], 4))',
@@ -135,10 +147,22 @@ test('The Unitree profile exposes a physical workspace beside the source pose wo
   expect(Number(/NON_FOOT (\d+)/.exec(output)?.[1])).toBe(0);
 
   // --- bounded WebMCP over the same session -------------------------------------------------------
+  // Agent Assist stays opt-in and is granted here the way a person grants it: by clicking.
+  await page.locator('#agentAccessControl button[data-agent-access="assist"]').click();
+  await expect(page.locator('#agentAccessControl button[data-agent-access="assist"]')).toHaveAttribute('aria-pressed', 'true');
+
+  // The tool must actually be registered with the browser interface, not merely definable.
+  const registered = await page.evaluate(() => window.__webMcpRegistrations.filter(({ signal }) => !signal?.aborted).map(({ tool }) => tool.name));
+  expect(registered).toContain('control_unitree_g1_physical_simulation');
+  // The two workspaces must never share a tool name: the kinematic pose tool writes joint angles
+  // straight into the rig, so it must not be reachable while the physical plant is displayed.
+  expect(registered).not.toContain('control_unitree_g1_simulation');
+  expect(registered.filter((name) => name === 'control_unitree_g1_physical_simulation')).toHaveLength(1);
+
   const webmcp = await page.evaluate(async () => {
     const { executeUnitreeG1PhysicalControl, getUnitreeG1PhysicalControlDefinition, WEBMCP_UNITREE_G1_SCHEMA_VERSION } = await import('/src/webmcp/unitree-g1-physical-control.js');
     const facade = window.__robobuddyCi.agentFacade;
-    const epoch = facade.getRegistrationContext().epoch;
+    const epoch = facade.registrationEpoch;
     const definition = getUnitreeG1PhysicalControlDefinition(facade);
     const call = async (input) => {
       try { return { ok: true, result: await executeUnitreeG1PhysicalControl(facade, { schema_version: WEBMCP_UNITREE_G1_SCHEMA_VERSION, ...input }, null, epoch) }; }
@@ -146,25 +170,25 @@ test('The Unitree profile exposes a physical workspace beside the source pose wo
     };
     const inspect = await call({ command: 'inspect_capability' });
     const reset = await call({ command: 'reset' });
-    const nextEpoch = facade.getRegistrationContext().epoch;
+    const nextEpoch = facade.registrationEpoch;
     const call2 = async (input) => {
       try { return { ok: true, result: await executeUnitreeG1PhysicalControl(facade, { schema_version: WEBMCP_UNITREE_G1_SCHEMA_VERSION, ...input }, null, nextEpoch) }; }
       catch (error) { return { ok: false, code: error?.code ?? null, message: String(error?.message || error) }; }
     };
     const advance = await call2({ command: 'advance', advance_seconds: 0.2 });
     const stand = await call2({ command: 'stand', hold_seconds: 2 });
-    const hold = await call2({ command: 'advance', advance_seconds: 2 });
-    const hold2 = await call2({ command: 'advance', advance_seconds: 2 });
+    let hold2 = null;
+    for (let index = 0; index < 4; index += 1) hold2 = await call2({ command: 'advance', advance_seconds: 1.6 });
     const read = await call2({ command: 'read_state' });
     const targets = await call2({ command: 'set_joint_targets', targets_rad: { waist_yaw_joint: 0.3 }, advance_seconds: 0.5 });
     const badWalk = await call2({ command: 'walk', velocity: 0.5 });
     const badRoot = await call2({ command: 'set_root_pose', position_m: [0, 0, 1] });
     const outOfRange = await call2({ command: 'set_joint_targets', targets_rad: { left_knee_joint: 6 } });
     const badActuation = await call2({ command: 'set_actuation', enabled: false });
-    return { definition, inspect, reset, advance, stand, hold, hold2, read, targets, badWalk, badRoot, outOfRange, badActuation };
+    return { definition, inspect, reset, advance, stand, hold2, read, targets, badWalk, badRoot, outOfRange, badActuation };
   });
 
-  expect(webmcp.definition.name).toBe('control_unitree_g1_simulation');
+  expect(webmcp.definition.name).toBe('control_unitree_g1_physical_simulation');
   expect(webmcp.definition.description).toContain('Walking is unsupported');
   expect(webmcp.inspect.ok).toBe(true);
   expect(webmcp.inspect.result.rootMode).toBe('free-base');
@@ -206,11 +230,19 @@ test('The Unitree profile exposes a physical workspace beside the source pose wo
   expect(kinematic.rootMode, 'the pose workspace must not advertise a free base').not.toBe('free-base');
 
   // The physical WebMCP tool must not be offered while the pose workspace is selected.
-  const toolGone = await page.evaluate(async () => {
+  const definitionGone = await page.evaluate(async () => {
     const { getUnitreeG1PhysicalControlDefinition } = await import('/src/webmcp/unitree-g1-physical-control.js');
     return getUnitreeG1PhysicalControlDefinition(window.__robobuddyCi.agentFacade);
   });
-  expect(toolGone).toBeNull();
+  expect(definitionGone).toBeNull();
+  // Re-registration is asynchronous, so poll for the withdrawal rather than sampling once.
+  const activeTools = () => page.evaluate(() => window.__webMcpRegistrations.filter(({ signal }) => !signal?.aborted).map(({ tool }) => tool.name));
+  await expect.poll(
+    activeTools,
+    { message: 'the physical tool must be withdrawn when the pose workspace is selected', timeout: 30_000 },
+  ).not.toContain('control_unitree_g1_physical_simulation');
+  // The retained pose workspace keeps its own preserved P6 tool, under its own separate name.
+  expect(await activeTools()).toContain('control_unitree_g1_simulation');
 
   expect(pageErrors, `page errors: ${pageErrors.join('\n')}`).toEqual([]);
 });

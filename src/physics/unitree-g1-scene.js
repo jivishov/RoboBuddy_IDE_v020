@@ -99,6 +99,17 @@ export class UnitreeG1StandEvaluator {
     this.terminal = null;
     this.actuationDisabledSeen = false;
     this.controllerId = null;
+    this.controllerEngagedAtSeconds = null;
+  }
+
+  /**
+   * The evaluated interval opens one controller ramp after the standing controller was engaged,
+   * not one ramp after the simulation clock started. Anchoring it to absolute time would let the
+   * tail of the ramp count as held posture whenever a caller settled the robot first.
+   */
+  evaluationOpensAtSeconds() {
+    const engaged = this.controllerEngagedAtSeconds;
+    return (engaged == null ? 0 : engaged) + this.gate.evaluationStartSeconds;
   }
 
   observe(observation) {
@@ -107,6 +118,13 @@ export class UnitreeG1StandEvaluator {
     const classes = observation.contactClasses || {};
     this.samples += 1;
     this.lastSeconds = seconds;
+    const engagedAt = observation.controller?.engagedAtSeconds;
+    if (observation.controller?.id !== this.controllerId || (engagedAt != null && engagedAt !== this.controllerEngagedAtSeconds)) {
+      // A controller change restarts the evaluated interval: the previous window described a
+      // different controller and may not be carried over.
+      if (this.controllerId != null) this.#resetWindow();
+      this.controllerEngagedAtSeconds = engagedAt ?? null;
+    }
     this.controllerId = observation.controller?.id ?? this.controllerId;
     if (observation.actuationEnabled === false) this.actuationDisabledSeen = true;
     if ((classes.robotSelf?.length || 0) > 0) this.selfContactSeen = true;
@@ -138,7 +156,7 @@ export class UnitreeG1StandEvaluator {
     };
     if (tilt > this.gate.maxPelvisTiltRad) this.everLeftUprightBand = true;
 
-    if (seconds + 1e-9 < this.gate.evaluationStartSeconds) return;
+    if (seconds + 1e-9 < this.evaluationOpensAtSeconds()) return;
     if (this.startedSeconds == null) this.startedSeconds = seconds;
     this.windowSamples += 1;
     this.pelvisHeightMinM = Math.min(this.pelvisHeightMinM, Number(position[2]));
@@ -148,6 +166,18 @@ export class UnitreeG1StandEvaluator {
     this.maxNonFootGroundContacts = Math.max(this.maxNonFootGroundContacts, this.terminal.nonFootGroundContacts);
     this.maxExternalSupportContacts = Math.max(this.maxExternalSupportContacts, this.terminal.externalObjectContacts + this.terminal.fixtureContacts);
     if (!(this.terminal.leftFootContacts > 0 && this.terminal.rightFootContacts > 0)) this.bothFeetSupportedThroughout = false;
+  }
+
+  #resetWindow() {
+    this.windowSamples = 0;
+    this.startedSeconds = null;
+    this.pelvisHeightMinM = Infinity;
+    this.pelvisHeightMaxM = -Infinity;
+    this.maxTiltRad = 0;
+    this.maxHorizontalDriftM = 0;
+    this.maxNonFootGroundContacts = 0;
+    this.maxExternalSupportContacts = 0;
+    this.bothFeetSupportedThroughout = true;
   }
 
   snapshot() {
@@ -177,6 +207,8 @@ export class UnitreeG1StandEvaluator {
       measured: Object.freeze({
         samples: this.samples,
         evaluatedSamples: this.windowSamples,
+        controllerEngagedAtSeconds: this.controllerEngagedAtSeconds,
+        evaluationOpensAtSeconds: this.evaluationOpensAtSeconds(),
         evaluationStartSeconds: this.startedSeconds,
         evaluationEndSeconds: this.lastSeconds,
         evaluatedSeconds: elapsed,

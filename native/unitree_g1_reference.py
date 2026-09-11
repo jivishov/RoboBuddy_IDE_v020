@@ -90,6 +90,14 @@ FOOT_GEOMS = {
 }
 EXTERNAL_OBJECT = "contact_probe_block"
 
+# The declared initial command per scene, mirroring src/physics/unitree-g1-model-package.js.
+INITIAL_COMMAND = {
+    "mounted": "joint-hold",
+    "mounted_blocked": "joint-hold",
+    "freebase": "joint-hold",
+    "freebase_drop": "passive",
+}
+
 
 def _with_ankles(base, value):
     out = list(base)
@@ -213,7 +221,14 @@ class Plant:
     # --- state ----------------------------------------------------------------------------------
     def reset(self):
         mujoco.mj_resetDataKeyframe(self.model, self.data, 0)
-        self.accepted = [bound_command(i, float(self.data.qpos[self.qadr[i]])) for i in range(29)]
+        mujoco.mj_forward(self.model, self.data)
+        pose = [float(self.data.qpos[address]) for address in self.qadr]
+        if INITIAL_COMMAND[self.variant] == "passive":
+            self.accepted = [bound_command(i, pose[i]) for i in range(29)]
+        else:
+            self.accepted = hold_commands(PROFILES["unitree_g1_joint_hold_v1"], pose)
+        self.declare_setup("initial command", initialCommand=INITIAL_COMMAND[self.variant],
+                           note="a command, not a state write; 'passive' is zero torque and 'joint-hold' is a bounded hold at the declared initial joint positions")
         mujoco.mj_forward(self.model, self.data)
 
     def q(self):

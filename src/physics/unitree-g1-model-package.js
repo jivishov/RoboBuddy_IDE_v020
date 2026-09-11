@@ -70,7 +70,7 @@ const BASE_LIMITATIONS = Object.freeze([
   'Nothing in this package writes root position, root orientation, root velocity, joint position or joint velocity during ordinary execution. Every motion comes from a bounded actuator torque acting through MuJoCo dynamics.',
 ]);
 
-function g1Package({ id, modelId, asset, sha256, variant, rootMode, controllers, extraFixtures = [], objects = [], initialJointPositionsRad = null, limitations = [] }) {
+function g1Package({ id, modelId, asset, sha256, variant, rootMode, controllers, initialCommand, extraFixtures = [], objects = [], initialJointPositionsRad = null, limitations = [] }) {
   const freeRoot = rootMode === 'free-base';
   return {
     id, modelId, asset, sha256,
@@ -99,6 +99,12 @@ function g1Package({ id, modelId, asset, sha256, variant, rootMode, controllers,
       ...objects.map((objectId) => ({ id: objectId, freeJointId: `${objectId}_free` })),
     ],
     rootMode,
+    // What the actuators are commanded to do at load and after reset, before any caller says
+    // anything. 'joint-hold' issues a bounded hold at the model's own declared initial joint
+    // positions through the Unitree source hold gains; 'passive' issues zero torque, which is
+    // Unitree's own Passive-state behaviour and is what the gravity-release fixture needs. Both
+    // are commands: neither writes joint or root state.
+    initialCommand,
     footContactGeoms: { left: [...G1_FOOT_CONTACT_GEOMS.left], right: [...G1_FOOT_CONTACT_GEOMS.right] },
     selfContactExclusions: G1_SELF_CONTACT_EXCLUSIONS.map((item) => [...item.bodies]),
     sceneConstraints: { fixtures: ['floor', ...extraFixtures], objects: [...objects] },
@@ -117,6 +123,7 @@ export const UNITREE_G1_MOUNTED_PACKAGE = registerModelPackage(g1Package({
   sha256: '78b99a41889c15f677b723349f4f6f478725bc39a4efa5d7dcf37730d50d0a01',
   variant: 'Unitree G1 29-DoF on a declared root-fixed mount, legs clear of the floor',
   rootMode: 'fixed-mounted',
+  initialCommand: 'joint-hold',
   controllers: [G1_CONTROLLERS.LOWLEVEL, G1_CONTROLLERS.JOINT_HOLD],
   extraFixtures: ['robobuddy_g1_mount'],
   limitations: [
@@ -132,6 +139,7 @@ export const UNITREE_G1_MOUNTED_BLOCKED_PACKAGE = registerModelPackage(g1Package
   sha256: '5f0af3108fc496fae98a4d1eb2c59d752423668363939a0eb020519d9cc31065',
   variant: 'Unitree G1 29-DoF on the declared root-fixed mount, with a declared rigid wall obstructing left hip abduction',
   rootMode: 'fixed-mounted',
+  initialCommand: 'joint-hold',
   controllers: [G1_CONTROLLERS.LOWLEVEL, G1_CONTROLLERS.JOINT_HOLD],
   extraFixtures: ['robobuddy_g1_mount', 'robobuddy_g1_joint_stop'],
   limitations: [
@@ -148,6 +156,7 @@ export const UNITREE_G1_FREEBASE_PACKAGE = registerModelPackage(g1Package({
   sha256: '3aad0869bf2a83d1f9acd84f5c627745a9a56dc1ab426be8a1f82463a6a76bf3',
   variant: 'Unitree G1 29-DoF free-base scene: free pelvis, gravity, floor, source foot contacts, self-contact, and one declared free external object',
   rootMode: 'free-base',
+  initialCommand: 'joint-hold',
   controllers: [G1_CONTROLLERS.LOWLEVEL, G1_CONTROLLERS.JOINT_HOLD, G1_CONTROLLERS.STAND, G1_CONTROLLERS.SOURCE_FIXSTAND],
   objects: [UNITREE_G1_EXTERNAL_OBJECT],
   initialJointPositionsRad: STAND_POSE_MAP,
@@ -155,6 +164,7 @@ export const UNITREE_G1_FREEBASE_PACKAGE = registerModelPackage(g1Package({
     `The pelvis is a free MuJoCo body and the model starts in the source standing posture at ${UNITREE_G1_STAND_PELVIS_Z_M} m, the height at which the source foot contact spheres just reach the floor. There is no support fixture, elastic band, weld, equality constraint or external force in this scene at any time.`,
     'The declared free contact-probe block is a 100 mm, 0.4 kg cube resting on the floor. Its mass and friction are repository estimates; it exists to prove the plant handles robot-to-environment contact beyond the floor, and it is not a manipulation task.',
     'Standing is a posture hold produced by a bounded joint-space controller. It is not dynamic balance, not perturbation recovery and not locomotion-ready. Walking is unsupported in this workspace and no walk operation exists.',
+    'The declared initial command is a bounded joint hold at the source standing posture using Unitree\'s own source hold gains. It is a command, not a state write, and it is deliberately not a standing controller: left holding, the source gains lose the posture within about half a second, which is the same 80 against 231 N m/rad ankle-stiffness shortfall that makes source FixStand fail the free-base gate.',
   ],
 }));
 
@@ -165,9 +175,11 @@ export const UNITREE_G1_FREEBASE_DROP_PACKAGE = registerModelPackage(g1Package({
   sha256: 'e222c0b8bf12f51352373f31965752893f5cbb987dc28a172300fcaa25165ab5',
   variant: 'Unitree G1 29-DoF free-base gravity release: neutral pose released above the floor',
   rootMode: 'free-base',
+  initialCommand: 'passive',
   controllers: [G1_CONTROLLERS.LOWLEVEL, G1_CONTROLLERS.JOINT_HOLD],
   limitations: [
     `Deterministic gravity and fall fixture. The neutral pose is released at ${UNITREE_G1_DROP_PELVIS_Z_M} m with no external object, so root height, root orientation and non-foot ground contact can be read without any other influence.`,
+    'The declared initial command is passive: every actuator is commanded to zero torque, exactly Unitree\'s own Passive state. Nothing holds the robot up, so the fall is gravity acting on the plant.',
     'The fallen state persists: nothing in this package resets the robot upright, and reset is a new initial condition rather than a recovery.',
   ],
 }));

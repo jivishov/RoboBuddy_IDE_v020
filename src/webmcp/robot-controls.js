@@ -149,6 +149,11 @@ export function getProfileControlDefinition(facade) {
   // lekiwi-physical-control.js under a versioned physical schema; the legacy source-plant tool
   // must never shadow it with the same name.
   if (profileId === 'lekiwi' && context.simulationMode === 'physical_mujoco') return null;
+  // The Unitree G1 physical workspace is a separate workspace with its own model package, its own
+  // controller identity and its own versioned tool. This pose tool writes joint angles straight
+  // into the canonical rig, so it must never be reachable while a physical plant is displayed:
+  // a pose write is not a physical command and must never be offered as one.
+  if (profileId === 'unitree' && context.simulationMode === 'physical_mujoco') return null;
   return { profileId, ...TOOL_META[profileId], inputSchema: createProfileControlSchema(profileId) };
 }
 
