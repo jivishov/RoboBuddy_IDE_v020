@@ -1,0 +1,100 @@
+name: Materialize independently reviewed G1 candidate
+on:
+  push:
+    branches: [fix/unitree-g1-independent-review]
+    paths: [.github/workflows/unitree-g1-review-apply.yml]
+permissions:
+  contents: write
+jobs:
+  materialize:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify exact independently reviewed patch and baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import base64, hashlib, json, lzma, os, pathlib, subprocess, urllib.request
+          assert os.environ['GITHUB_REPOSITORY'] == 'jivishov/RoboBuddy_IDE_v020'
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD^'], text=True).strip() == '29803e5eef6599f327afe8480100abf3fc0357e4'
+          # Immutable transfer of the exact locally executed patch; not generated code or a remote script.
+          url = 'https://api.github.com/repos/jivishov/RoboBuddy_IDE_v020/git/blobs/07dd71770cb40155866df5866a4aa7faa8763026'
+          request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+          with urllib.request.urlopen(request, timeout=60) as response:
+              blob = json.load(response)
+          patch = lzma.decompress(base64.b64decode(blob['content']))
+          assert hashlib.sha256(patch).hexdigest() == 'cd44c82da67ef8689d82abf6211396ef6ce64b9d5c2ee9ff60d172fa0f2baee9'
+          pathlib.Path('/tmp/review.patch').write_bytes(patch)
+          subprocess.run(['git', 'apply', '--check', '--unidiff-zero', '/tmp/review.patch'], check=True)
+          subprocess.run(['git', 'apply', '--unidiff-zero', '/tmp/review.patch'], check=True)
+          subprocess.run(['git', 'rm', '.github/workflows/unitree-g1-review-capture.yml', '.github/workflows/unitree-g1-review-apply.yml'], check=True)
+          subprocess.run(['git', 'add', '-A'], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--check'], check=True)
+          subprocess.run(['git', 'diff', '--cached', '--stat'], check=True)
+          PY
+      - name: Execute independent boundary regressions and native frame checks
+        run: |
+          node tests/physics/session-epoch-publication-core.mjs
+          node tests/physics/unitree-g1-frames-core.mjs
+          node tests/physics/unitree-g1-worker-review.mjs
+          node tests/physics/unitree-g1-phase5d-core.mjs
+          node tests/validate.mjs
+          python -m pip install --disable-pip-version-check 'mujoco==3.11.0' numpy
+          python tests/validate_unitree_g1_frames.py
+      - name: Store candidate commit and exact file hashes without updating any branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, subprocess, urllib.request
+          repo = 'jivishov/RoboBuddy_IDE_v020'
+          assert os.environ['GITHUB_REPOSITORY'] == repo
+          api = 'https://api.github.com/repos/' + repo
+          def post(path, data):
+              request = urllib.request.Request(api + path, data=json.dumps(data).encode(), method='POST', headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'})
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  return json.load(response)
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          assert head == os.environ['GITHUB_SHA']
+          base_tree = subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip()
+          paths = subprocess.check_output(['git', 'diff', '--cached', '--name-only', '-z']).decode().rstrip('\0').split('\0')
+          entries, hashes, removed = [], {}, []
+          for name in paths:
+              path = pathlib.Path(name)
+              assert not path.is_absolute() and '..' not in path.parts
+              if not path.exists():
+                  assert name in ('.github/workflows/unitree-g1-review-capture.yml', '.github/workflows/unitree-g1-review-apply.yml')
+                  entries.append({'path': name, 'mode': '100644', 'type': 'blob', 'sha': None})
+                  removed.append(name)
+                  continue
+              content = path.read_bytes()
+              hashes[name] = hashlib.sha256(content).hexdigest()
+              blob = post('/git/blobs', {'content': content.decode('utf-8'), 'encoding': 'utf-8'})
+              entries.append({'path': name, 'mode': '100644', 'type': 'blob', 'sha': blob['sha']})
+          assert len(hashes) == 20 and len(removed) == 2
+          tree = post('/git/trees', {'base_tree': base_tree, 'tree': entries})
+          commit = post('/git/commits', {'message': 'fix: harden G1 physical authority, evidence and reproducibility after independent review\n\nPreserve exact model geometry and gains. Reject stale epoch continuations and malformed commands atomically, verify collision mesh hashes, publish world-frame angular velocities and actual contact forces, require complete continuous standing evidence, and fix native observation cadence. Add executable regressions and an isolated Pages build identifier. Remove temporary review tooling.', 'tree': tree['sha'], 'parents': [head]})
+          output = {'repository': repo, 'parent': head, 'candidate_sha': commit['sha'], 'tree_sha': tree['sha'], 'patch_sha256': 'cd44c82da67ef8689d82abf6211396ef6ce64b9d5c2ee9ff60d172fa0f2baee9', 'files_sha256': hashes, 'removed': removed, 'branch_updated': False}
+          dest = pathlib.Path('/tmp/g1-publish')
+          dest.mkdir()
+          (dest / 'candidate.json').write_text(json.dumps(output, indent=2) + '\n')
+          print('CANDIDATE_SHA=' + commit['sha'])
+          print(json.dumps(output, indent=2))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g1-reviewed-candidate-${{ github.sha }}
+          path: /tmp/g1-publish/
+          retention-days: 14
