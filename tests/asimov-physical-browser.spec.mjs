@@ -32,6 +32,8 @@ test('Asimov worker/session/bridge: all variants, stale epoch, pause, command bo
 test('Asimov actual full STL presentation follows observed bodies; renderer cannot advance clock',async({page})=>{
  await offlineRoutes(page); const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto('/physics-slice.html');
+ // This intentionally minimal physics harness does not have the IDE's import map.
+ await page.addScriptTag({type:'importmap',content:JSON.stringify({imports:{three:'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js'}})});
  const result=await page.evaluate(async()=>{
   const {AsimovPhysicalSimulator}=await import('/src/physics/asimov-physical-simulator.js');
   const {ASIMOV_WORKSPACES}=await import('/src/physics/asimov-workspaces.js');
@@ -46,7 +48,12 @@ test('Asimov actual full STL presentation follows observed bodies; renderer cann
  expect(result.start).toBe(result.end);expect(result.audit.meshCount).toBe(25);expect(result.audit.bodyCount).toBe(26);
  expect(result.alignment.maxBodyErrorMm).toBeLessThan(.001);expect(errors).toEqual([]);
  await page.screenshot({path:process.env.ASIMOV_SCREENSHOT||'test-results/asimov-mounted.png'});
- await page.evaluate(()=>window.asimovTestSim.dispose());
+ const reset=await page.evaluate(async()=>{
+  const sim=window.asimovTestSim;await sim.getPhysicalSession().cancelRun('test-stop');
+  const wasUnready=!sim.isReady();await sim.reset();
+  const result={wasUnready,ready:sim.isReady(),time:sim.getState().simulation_time_s};sim.dispose();return result;
+ });
+ expect(reset).toEqual({wasUnready:true,ready:true,time:0});
 });
 test('Asimov IDE selector, live Python and opt-in WebMCP share the visible physics session',async({page})=>{
  test.setTimeout(600000);
@@ -64,6 +71,10 @@ test('Asimov IDE selector, live Python and opt-in WebMCP share the visible physi
  await page.evaluate(async()=>{const app=window.__robobuddyCi.app; await app.run();});
  const python=await page.evaluate(()=>({out:window.__robobuddyCi.app.console,diagnostics:window.__robobuddyCi.app.sim.backend.getState()}));
  expect(python.out.stderr).toBe('');expect(python.out.stdout).toContain('elbow');expect(python.diagnostics.simulation_time_s).toBeGreaterThan(.9);
+ await expect(page.locator('#simActionLabel')).toHaveText('Run complete · observations recorded');
+ await expect(page.locator('#physicsBackendBadge')).toContainText('browser-mujoco');
+ await expect(page.locator('#simBadge')).toContainText('MUJOCO');
+ expect(await page.locator('#telemetryPanel').textContent()).not.toContain('NaN');
  await page.locator('#agentAccessControl button[data-agent-access="assist"]').click();
  const agent=await page.evaluate(async()=>{
   const {agentFacade:facade}=window.__robobuddyCi;

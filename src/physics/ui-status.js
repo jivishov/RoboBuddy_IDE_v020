@@ -1,6 +1,7 @@
 import { capabilityLabel, physicsCapabilityFor } from './capabilities.js';
 
 const PHYSICAL_MODE_CHIP = Object.freeze({
+  asimov: 'ASIMOV 1 PHYSICAL WORKSPACE · MUJOCO AUTHORITY',
   openarm: 'OPENARM V2 PHYSICAL WORKSPACE · MUJOCO AUTHORITY',
   lekiwi: 'LEKIWI V1 PHYSICAL WORKSPACE · MUJOCO AUTHORITY',
   so101: 'SO-101 PHYSICAL WORKSPACE · MUJOCO AUTHORITY',
@@ -8,6 +9,7 @@ const PHYSICAL_MODE_CHIP = Object.freeze({
 });
 
 const PHYSICAL_SIM_BADGE = Object.freeze({
+  asimov: 'MUJOCO · 23 SOURCE JOINTS · ESTIMATED PD',
   openarm: 'MUJOCO V2 BIMANUAL DRY-STACK · SHARED FREE BODIES · NOT HARDWARE CALIBRATION',
   lekiwi: 'MUJOCO HOLONOMIC BASE · PASSIVE OMNI ROLLERS · FREE PAYLOAD · NOT HARDWARE CALIBRATION',
   so101: 'MUJOCO RIGID-BODY BENCHMARK · ACTUAL CONTACT/GRAVITY · NOT HARDWARE CALIBRATION',
@@ -15,6 +17,7 @@ const PHYSICAL_SIM_BADGE = Object.freeze({
 });
 
 const PHYSICAL_SIDE_SUMMARY = Object.freeze({
+  asimov: 'Asimov 1. Browser MuJoCo owns the 23-joint source model; full-resolution meshes follow measured body poses. The mounted scene is explicitly supported; free-base scenes are not stabilized. No trained walking or hardware-calibration claim.',
   openarm: 'OpenArm V2. Browser MuJoCo is the single physical authority for both arms and the free task objects; the canonical mesh is presentation-only and hardware validation remains pending.',
   lekiwi: 'LeKiwi V1. Browser MuJoCo is the single physical authority for the free base, driven wheels, mounted arm and free beaker; the canonical mesh follows observed state only and hardware validation remains pending.',
   so101: 'SO-101. Browser MuJoCo is the single physical authority for the arm and free benchmark object; the canonical mesh is presentation-only and hardware validation remains pending.',

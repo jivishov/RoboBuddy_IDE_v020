@@ -93,6 +93,7 @@ export function fidelityNoticeFor(profileId, { physical = true } = {}) {
   }
   if (profileId === 'unitree') return 'The Unitree G1 physical workspace uses one browser MuJoCo authority on the pinned 29-DoF fixed-rubber-hand model. Joint commands become bounded actuator torque, never state assignment. Standing is a verified unsupported posture hold; walking, perturbation recovery and dexterous hands are unsupported. Numerical verification is not hardware calibration.';
   if (profileId === 'microduck') return 'MicroDuck physical tasks use one browser MuJoCo authority, source-derived collision plants and bounded policy control. Rendered body poses follow measured simulation state. Roller modes are unsupported; simulator verification is not hardware calibration.';
+  if (profileId === 'asimov') return 'Asimov 1 uses one browser MuJoCo authority with the pinned Menlo masses, inertias, collision primitives and 23 movable joints; the two source neck bodies remain fixed. Full-resolution source meshes follow observed body poses. Ideal torque motors and PD gains are simulator estimates. No trained walking, grasping or hardware-calibration claim is made.';
   return FIDELITY_NOTICE;
 }
 

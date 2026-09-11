@@ -26,7 +26,7 @@ The source defines no actuators. This integration adds one **ideal joint torque
 motor** per hinge, bounded in command and effort by the URDF limits. PD gains are
 **repository estimates**, not Menlo's training configuration and not measured
 motor parameters. Ankle pitch/roll remain the source's ideal coordinates, not the
-hardware parallel ankle transmission. The fixed wrists have no finger actuators;
+hardware parallel ankle transmission. The wrist-end meshes have no finger actuators;
 no grasping capability is claimed. The two neck bodies stay fixed.
 
 ## Authority and controls

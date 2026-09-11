@@ -40,6 +40,16 @@ export const PHYSICS_PREVIEW_CAPABILITIES = Object.freeze({
       'No hardware comparison exists. Nothing here establishes installed-LeKiwi calibration, payload rating, real grip force, or hardware safety.',
     ],
   }),
+  asimov: capabilityRecord({
+    backend: EXECUTION_BACKENDS.BROWSER_MUJOCO,
+    capability: 'single-authority Menlo Asimov 1 23-joint rigid-body simulation with mounted and free-base scenes, live Python and bounded WebMCP control',
+    evidence: MODEL_EVIDENCE.NUMERICALLY_VERIFIED,
+    limitations: [
+      'Pinned Menlo model: 23 movable joints and a fixed neck, not the hardware marketing count of 25 joints. Source mass, inertias, joint frames, limits and collision primitives are preserved.',
+      'Ideal torque actuators, PD gains and initial conditions are declared simulator estimates. The mounted joint laboratory deliberately fixes the pelvis; free-base scenes have no hidden support or root stabilization.',
+      'No trained walking, robust balance, finger grasping, calibrated ankle transmission or hardware validation is claimed.',
+    ],
+  }),
   unitree: UNITREE_G1_PHYSICAL_CAPABILITY,
   microduck: MICRODUCK_PHYSICAL_CAPABILITY,
 });

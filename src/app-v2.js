@@ -627,8 +627,8 @@ class App {
       this.console = { stdout: result.stdout || '', stderr: result.stderr || '' };
       const evaluation = this.sim.getTaskEvaluation();
       this.editor.highlightLine(null);
-      $('simActionLabel').textContent = evaluation?.success ? 'Physical task complete' : 'Run complete · task incomplete';
-      this.setStatus(evaluation?.success ? `Run complete · ${PROFILES[this.profileId].shortLabel} physical task succeeded` : 'Run complete · physical task criteria not yet satisfied');
+      $('simActionLabel').textContent = evaluation?.status === 'observation-only' ? 'Run complete · observations recorded' : evaluation?.success ? 'Physical task complete' : 'Run complete · task incomplete';
+      this.setStatus(evaluation?.status === 'observation-only' ? 'Run complete · physical observations recorded' : evaluation?.success ? `Run complete · ${PROFILES[this.profileId].shortLabel} physical task succeeded` : 'Run complete · physical task criteria not yet satisfied');
       this.renderPanels();
       completed = true;
       return true;
@@ -814,14 +814,16 @@ class App {
       : kinematic
       ? 'BROWSER-HELD KINEMATIC G1 JOINT STATE — not measured telemetry, controller state, or a physical robot observation.'
       : 'SIMULATED ACTUAL STATE FROM THE PINNED ROBObUDDY FIXED-STEP PLANT — not measured hardware telemetry.';
-    $('telemetryPanel').innerHTML = `<div class="panel-note">${telemetryNote}</div><table><tr><th>Field</th><th>Modeled value</th></tr>${Object.entries(telemetry).map(([key, value]) => `<tr><td>${escapeHtml(key)}</td><td>${Number(value).toFixed(3)}</td></tr>`).join('')}</table>`;
+    $('telemetryPanel').innerHTML = `<div class="panel-note">${telemetryNote}</div><table><tr><th>Field</th><th>Modeled value</th></tr>${Object.entries(telemetry).map(([key, value]) => `<tr><td>${escapeHtml(key)}</td><td>${typeof value === 'number' ? value.toFixed(3) : escapeHtml(value == null ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value))}</td></tr>`).join('')}</table>`;
     $('commandsPanel').innerHTML = this.commands.length ? this.commands.map((command, index) => physical
       ? `<div class="command-row ${index === this.commands.length - 1 ? 'active' : ''}"><span>${index + 1}</span><span>${escapeHtml(`${command.file}:${command.line}`)}</span><code>${escapeHtml(command.command)}</code><span>live robobuddy.sim.v1</span></div>`
       : this.isPolicyWorkspace()
       ? `<div class="command-row ${index === this.commands.length - 1 ? 'active' : ''}"><span>${index + 1}</span><span>${escapeHtml(`${command.file}:${command.line}`)}</span><code>${escapeHtml(command.command)}</code><span>browser simulation</span></div>`
-      : `<div class="command-row ${index === this.stepIndex - 1 ? 'active' : ''}"><span>${index + 1}</span><span>${escapeHtml(this.actionLabel(index))}</span><code>${escapeHtml(JSON.stringify(command.action))}</code><span>${kinematic ? 'kinematic pose' : 'physical target'}</span></div>`).join('') : physical ? '<div class="empty-state">Run the live async SO-101 Python program to populate physical API boundaries.</div>' : this.isPolicyWorkspace() ? '<div class="empty-state">Run, Step, or Run to Cursor to execute live catalog-backed MicroDuck Python.</div>' : `<div class="empty-state">Run or Step Action to prepare the ${kinematic ? 'kinematic pose' : 'physical command'} queue.</div>`;
+      : `<div class="command-row ${index === this.stepIndex - 1 ? 'active' : ''}"><span>${index + 1}</span><span>${escapeHtml(this.actionLabel(index))}</span><code>${escapeHtml(JSON.stringify(command.action))}</code><span>${kinematic ? 'kinematic pose' : 'physical target'}</span></div>`).join('') : physical ? '<div class="empty-state">Run the live async Python program to populate physical API boundaries.</div>' : this.isPolicyWorkspace() ? '<div class="empty-state">Run, Step, or Run to Cursor to execute live catalog-backed MicroDuck Python.</div>' : `<div class="empty-state">Run or Step Action to prepare the ${kinematic ? 'kinematic pose' : 'physical command'} queue.</div>`;
     const contacts = this.sim.getContacts();
-    const contactsNote = physical
+    const contactsNote = physical && this.profileId === 'asimov'
+      ? 'MUJOCO CONTACT EVIDENCE. Foot-floor and self contacts come from the source rigid-body model. Mounted support is an explicit scene condition; no grasp, walking or task-success claim is inferred.'
+      : physical
       ? 'MUJOCO CONTACT / TASK EVIDENCE. Gripper contact, lift, carry, release, settling, and final target state are observation-derived; no synthetic contact/success events or hidden attachments.'
       : this.isPolicyWorkspace()
       ? 'APPROXIMATE MUJOCO CONTACT STATE. Ball motion is contact-derived; no grasp attachment, physical parity, or hardware validation is claimed.'
