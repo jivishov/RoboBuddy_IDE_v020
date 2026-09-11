@@ -46,7 +46,7 @@ export const PHYSICS_PREVIEW_CAPABILITIES = Object.freeze({
     evidence: MODEL_EVIDENCE.NUMERICALLY_VERIFIED,
     limitations: [
       'Pinned Menlo model: 23 movable joints and a fixed neck, not the hardware marketing count of 25 joints. Source mass, inertias, joint frames, limits and collision primitives are preserved.',
-      'Ideal torque actuators, PD gains and initial conditions are declared simulator estimates. The mounted joint laboratory deliberately fixes the pelvis; free-base scenes have no hidden support or root stabilization.',
+      'Reference ideal motors and separate actuator/standing experiments use declared simulator estimates; continuous ratings do not establish hardware accuracy. The mounted joint laboratory deliberately fixes the pelvis; free-base scenes have no hidden support or root stabilization.',
       'No trained walking, robust balance, finger grasping, calibrated ankle transmission or hardware validation is claimed.',
     ],
   }),

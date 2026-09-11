@@ -19,3 +19,7 @@ Python and opt-in WebMCP send bounded joint commands; full source STL visuals
 follow measured body poses. Added ideal torque motors and PD gains are estimates;
 walking, balance recovery, grasping and hardware calibration are not supplied.
 See [Asimov provenance, controls and validation](docs/physics/asimov-provenance.md).
+
+### Asimov actuator and standing experiments
+
+Asimov's original three reference scenes remain available. **Actuator Lab (experimental)** and **Actuator Free-base (experimental)** add continuous motor caps, estimated speed/friction/delay behavior, and a separate synthetic sensor view. **Standing Trial (experimental)** tests a bounded torso-feedback controller with an observation-derived support assessment. These are source-informed simulation experiments, not hardware calibration, walking, or a completed ankle transmission model. See [scope, source reconciliation and validation](docs/physics/asimov-actuator-fidelity.md).

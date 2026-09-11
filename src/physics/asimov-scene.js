@@ -1,6 +1,6 @@
 import { PHYSICS_BACKEND_API_VERSION } from './backend-contract.js';
-import { ASIMOV_PACKAGES } from './asimov-model-package.js';
-export const ASIMOV_SCENES=Object.freeze(Object.fromEntries(Object.entries(ASIMOV_PACKAGES).map(([variant,p])=>[variant,Object.freeze({
+import { ASIMOV_ALL_PACKAGES } from './asimov-model-package.js';
+export const ASIMOV_SCENES=Object.freeze(Object.fromEntries(Object.entries(ASIMOV_ALL_PACKAGES).map(([variant,p])=>[variant,Object.freeze({
   schemaVersion:PHYSICS_BACKEND_API_VERSION,id:`asimov-${variant}`,revision:`asimov-${variant}-v1`,
   robotId:p.robotId,modelPackage:p.id,legacyTaskId:null,physics:{...p.physics},
   fixtures:p.sceneConstraints.fixtures.map(id=>({id})),objects:[],controllers:[...p.controllers],

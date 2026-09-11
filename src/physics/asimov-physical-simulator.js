@@ -27,12 +27,13 @@ function putPose(object, position, quaternion) {
 export class AsimovPhysicalSimulator {
   constructor(canvas) {
     this.canvas=canvas; this.disposed=false; this.ready=false; this.session=null; this.lastObservation=null;
-    this.renderedFrames=0; this.highContrast=true; this.sequence=0; this.groups=new Map(); this.geometries=new Map();
+    this.renderedFrames=0; this.renderDirty=true; this.highContrast=true; this.sequence=0; this.groups=new Map(); this.geometries=new Map();
     this.abort=new AbortController();
     this.scene=new THREE.Scene(); this.scene.background=new THREE.Color(0xb4bcc0);
     this.camera=new THREE.PerspectiveCamera(45,1,.01,30); this.camera.position.set(1.8,1.35,2.1);
     this.renderer=new THREE.WebGLRenderer({canvas,antialias:true}); this.renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
     this.controls=new OrbitControls(this.camera,canvas); this.controls.enableDamping=true;
+    this.controls.addEventListener('change',()=>{this.renderDirty=true;});
     this.scene.add(new THREE.HemisphereLight(0xffffff,0x30404a,1.8));
     const light=new THREE.DirectionalLight(0xffffff,2.2); light.position.set(1.2,2.4,1.2); this.scene.add(light);
     // Whole physical world uses SI metres/Z-up. One presentation-only basis converts to Three Y-up.
@@ -51,7 +52,7 @@ export class AsimovPhysicalSimulator {
     if(this.disposed) throw new Error('Disposed Asimov simulator');
     const generation=++this.sequence; this.ready=false;
     this.unsubscribe?.(); this.session?.dispose();
-    this.selectedScene=scene; this.mount.visible=scene.id==='asimov-mounted';
+    this.selectedScene=scene; this.mount.visible=scene.id.endsWith('mounted');
     const session=new PhysicsSession(new BrowserMuJoCoBackend({workerUrl:new URL('./asimov-mujoco-worker.js',import.meta.url),setupOperations:['set_actuation']}),{observationBatchSteps:4});
     this.session=session; this.unsubscribe=session.subscribe(({observation})=>{if(!this.disposed && generation===this.sequence) this.consume(observation);});
     try {
@@ -59,7 +60,7 @@ export class AsimovPhysicalSimulator {
       if(this.disposed || generation!==this.sequence) throw new Error('Superseded Asimov scene');
       this.ready=true; Object.assign(this.canvas.dataset,{simulatorBackend:'browser-mujoco',simulationAuthority:'physics-session',physicalSceneId:scene.id,
         physicalSceneRevision:scene.revision,modelPackageId:scene.modelPackage,asimovRootMode:this.lastObservation.root.mode,asimovWalking:'unsupported'});
-      this.applyObservation(); this.fit(); return true;
+      this.applyObservation(); this.renderDirty=true; this.fit(); return true;
     } catch(error) {session.dispose(); this.ready=false; throw error;}
   }
   async loadMeshes() {
@@ -85,7 +86,7 @@ export class AsimovPhysicalSimulator {
     }
   }
   consume(observation) {
-    this.lastObservation=structuredClone(observation);
+    this.lastObservation=structuredClone(observation); this.renderDirty=true;
     this.canvas.dataset.simulationClockS=String(observation.simulationTimeSeconds);
     this.canvas.dataset.asimovPelvisZM=String(observation.root?.positionM?.[2]);
     this.canvas.dataset.asimovContactCount=String(observation.contactCount);
@@ -98,13 +99,17 @@ export class AsimovPhysicalSimulator {
   }
   renderFrame() {
     if(this.disposed) return;
-    this.applyObservation(); this.controls.update(); this.renderer.render(this.scene,this.camera);
+    this.controls.update();
+    if(!this.renderDirty) return;
+    // Full-resolution meshes need not be redrawn while nothing changes. This skips
+    // presentation work only; the worker still executes every requested physics step.
+    this.applyObservation(); this.renderer.render(this.scene,this.camera); this.renderDirty=false;
     this.canvas.dataset.renderedFrames=String(++this.renderedFrames);
   }
   resize() {
     if(this.disposed) return;
     const w=Math.max(1,this.canvas.clientWidth||640), h=Math.max(1,this.canvas.clientHeight||480);
-    this.renderer.setSize(w,h,false); this.camera.aspect=w/h; this.camera.updateProjectionMatrix();
+    this.renderer.setSize(w,h,false); this.camera.aspect=w/h; this.camera.updateProjectionMatrix(); this.renderDirty=true;
   }
   fit() { this.camera.position.set(1.8,1.35,2.1); this.controls.target.set(0,this.mount?.visible?1:.65,0); this.controls.update(); }
   setHighContrastScene(v) {this.highContrast=Boolean(v); return this.highContrast;}
@@ -124,7 +129,7 @@ export class AsimovPhysicalSimulator {
   }
   async advanceTime(seconds,{maxSeconds=20}={}) {
     this.assertReady(); if(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<=0||seconds>maxSeconds) throw new RangeError('Asimov advance outside bounded simulation-time interval');
-    const steps=Math.round(seconds/ASIMOV_PHYSICS_TIMESTEP_SECONDS); if(steps<1) throw new RangeError('Advance needs at least one physics step');
+    const dt=this.selectedScene.physics.timestepSeconds; const steps=Math.round(seconds/dt); if(Math.abs(steps*dt-seconds)>1e-9) throw new RangeError('Advance must align with this scene timestep'); if(steps<1) throw new RangeError('Advance needs at least one physics step');
     return this.session.advanceSteps(steps);
   }
   async reset() {
@@ -152,12 +157,15 @@ export class AsimovPhysicalSimulator {
       linear_velocity_m_s:o.root.linearVelocityMS,angular_velocity_rad_s:o.root.angularVelocityRadS},
       joints:Object.fromEntries(Object.entries(o.joints).map(([id,j])=>[id,{position_rad:j.positionRad,velocity_rad_s:j.velocityRadS,effort_nm:j.effortNm,
         requested_target_rad:j.requestedTargetRad,accepted_target_rad:j.acceptedTargetRad,command_bounded:j.commandBounded,effort_limit_nm:j.effortLimitNm}])),
+      ...(o.actuatorModel?{actuator_model:structuredClone(o.actuatorModel),standing_assessment:structuredClone(o.standingAssessment)}:{}),
       contacts:o.contacts,controller_mode:o.controller.id,actuation_enabled:o.actuationEnabled,walking:'unsupported'};
   }
   getContacts() {return {count:this.lastObservation?.contactCount??0,readable:!!this.lastObservation?.contactsReadable,...this.lastObservation?.contactClasses};}
   getTelemetry() {return {backend:'browser-mujoco',authority:'physics-session',simulationTimeSeconds:this.lastObservation?.simulationTimeSeconds??0,
     rootMode:this.lastObservation?.root?.mode,totalMassKg:ASIMOV_SOURCE.totalMassKg,controllerId:this.lastObservation?.controller?.id,walking:'unsupported'};}
-  getTaskEvaluation() {return {status:'observation-only',standing:null,walking:'unsupported',syntheticSuccessEvents:false};}
+  getSensorObservation() {this.assertReady();if(!this.lastObservation.sensorObservation)throw new Error('No hardware-like profile in this reference scene');return structuredClone(this.lastObservation.sensorObservation);}
+  engageStand() {this.assertReady();return this.session.sendCommand({type:'engage_stand',controllerId:'asimov-stance-feedback-v1'},{maxSteps:8000});}
+  getTaskEvaluation() {return this.lastObservation?.standingAssessment?.status !== 'not-started' && this.lastObservation?.standingAssessment ? structuredClone(this.lastObservation.standingAssessment) : {status:'observation-only',standing:null,walking:'unsupported',syntheticSuccessEvents:false};}
   getPresentationAudit() {return {sourceRevision:ASIMOV_SOURCE.revision,jointCount:23,meshCount:this.geometries.size,bodyCount:this.groups.size,drivesFromObservation:!!this.lastObservation};}
   getPresentationAlignment() {
     this.applyObservation(); let maximum=0;

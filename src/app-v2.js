@@ -622,6 +622,7 @@ class App {
       const result = await this.physicalRuntime.start(this.files, {
         workspaceEpoch: this.workspaceGeneration,
         robotId: this.scenario.robotId,
+        ...(this.scenario.executionBudget?.pythonWallTimeMs == null ? {} : { runTimeoutMs: this.scenario.executionBudget.pythonWallTimeMs }),
       });
       if (token !== this.runToken) return false;
       this.console = { stdout: result.stdout || '', stderr: result.stderr || '' };

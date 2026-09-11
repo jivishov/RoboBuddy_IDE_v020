@@ -163,6 +163,16 @@ export class LivePythonBridge {
 
   async getObservation({ view = 'ground_truth' } = {}) {
     await this.#assertOwner();
+    if (view === 'hardware_like' && this.owner.robotId === 'asimov_1_23dof_physical') {
+      const owner = this.owner;
+      const observation = await this.#withTimeout(this.session.getObservation({ view:'ground_truth' }));
+      await this.#assertOwner();
+      if (this.owner !== owner || observation.sessionId !== owner.sessionId || observation.epoch !== owner.epoch) {
+        throw liveError('STALE_LIVE_SESSION', 'The sensor read crossed a session reset or reconnect');
+      }
+      if (!observation.sensorObservation) throw liveError('UNSUPPORTED_OBSERVATION_PROFILE','This Asimov reference scene has no declared hardware-like sensitivity profile');
+      return { ...structuredClone(observation.sensorObservation), sessionId:owner.sessionId, epoch:owner.epoch };
+    }
     if (view !== 'ground_truth') {
       throw liveError('UNSUPPORTED_OBSERVATION_PROFILE', `Observation view ${view} is not calibrated or supported for this physical preview`);
     }
@@ -312,6 +322,7 @@ export class LivePythonBridge {
       controller_mode: observation.controller?.id ?? null,
       controller_claim: observation.controller?.claim ?? null,
       actuation_enabled: observation.actuationEnabled,
+      ...(observation.actuatorModel ? {actuator_model:structuredClone(observation.actuatorModel),standing_assessment:structuredClone(observation.standingAssessment)} : {}),
       setup_log: Array.isArray(observation.setupLog) ? structuredClone(observation.setupLog) : [],
     };
   }
@@ -373,7 +384,7 @@ export class LivePythonBridge {
       physical: true,
       ...structuredClone(this.owner),
       units: Object.freeze({ length: 'm', mass: 'kg', time: 's', angle: 'rad', angularVelocity: 'rad/s' }),
-      observationProfiles: Object.freeze(['ground_truth']),
+      observationProfiles: Object.freeze(this.owner.robotId === 'asimov_1_23dof_physical' && /(?:actuator|standing)/.test(this.owner.modelPackageId) ? ['ground_truth','hardware_like'] : ['ground_truth']),
     });
   }
 
