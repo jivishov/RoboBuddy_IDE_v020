@@ -127,7 +127,19 @@ export class AsimovPhysicalSimulator {
     const steps=Math.round(seconds/ASIMOV_PHYSICS_TIMESTEP_SECONDS); if(steps<1) throw new RangeError('Advance needs at least one physics step');
     return this.session.advanceSteps(steps);
   }
-  async reset() {this.assertReady(); await this.session.reset({reason:'explicit-user-reset'}); return true;}
+  async reset() {
+    if(this.disposed || !this.session || !this.selectedScene) throw new Error('No live Asimov scene to reset');
+    this.ready=false;
+    try {
+      let diagnostics=null;
+      try {diagnostics=await this.session.getDiagnostics();} catch {}
+      // Stop/Python cancellation terminates the worker. Explicit Reset reloads the
+      // declared initial condition; it is never an automatic recovery during a run.
+      if(!diagnostics?.loaded) await this.session.loadScene(structuredClone(this.selectedScene));
+      else await this.session.reset({reason:'explicit-user-reset'});
+      this.ready=true; return true;
+    } catch(error) {this.ready=false; throw error;}
+  }
   pause() {this.assertReady(); return this.session.pause();}
   resume() {this.assertReady(); return this.session.resume();}
   async stop() {
