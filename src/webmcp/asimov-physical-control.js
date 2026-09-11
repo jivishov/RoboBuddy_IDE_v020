@@ -147,6 +147,8 @@ function observedState(facade) {
     root: state.root,
     footContacts: state.foot_contacts,
     contacts: state.contacts,
+    ...(state.actuator_model ? { actuator_model: structuredClone(state.actuator_model) } : {}),
+    ...(state.standing_assessment ? { standing_assessment: structuredClone(state.standing_assessment) } : {}),
     controllerMode: state.controller_mode,
     actuationEnabled: state.actuation_enabled,
     joints: state.joints,

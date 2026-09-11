@@ -3,6 +3,7 @@ import { LIVE_SIM_API_VERSION } from './live-python-bridge.js';
 const MAX_PAYLOAD_BYTES = 512 * 1024;
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const DEFAULT_RUN_TIMEOUT_MS = 30_000;
+const MAX_RUN_TIMEOUT_MS = 120_000;
 const DEFAULT_COOPERATIVE_GRACE_MS = 150;
 
 export class PhysicalPythonRuntime {
@@ -33,7 +34,12 @@ export class PhysicalPythonRuntime {
   isPaused() { return Boolean(this.active?.externallyPaused); }
   getRunEpoch() { return this.active?.runEpoch ?? this.runEpoch; }
 
-  start(files, { workspaceEpoch, robotId = '' } = {}) {
+  start(files, { workspaceEpoch, robotId = '', runTimeoutMs = this.runTimeoutMs } = {}) {
+    // A declared long physical trial may need more wall time on slow clients.
+    // The limit is finite, independent of simulation time, and never renewed by progress.
+    if (!Number.isInteger(runTimeoutMs) || runTimeoutMs < 1 || runTimeoutMs > MAX_RUN_TIMEOUT_MS) {
+      return Promise.reject(runtimeError('INVALID_ARGUMENT', `Physical Python wall deadline must be 1..${MAX_RUN_TIMEOUT_MS} ms`));
+    }
     void this.cancel('REPLACED_RUN', { silent: true, immediate: true });
     const workspace = boundedWorkspace(files);
     if (!Number.isInteger(workspaceEpoch) || workspaceEpoch < 0) return Promise.reject(runtimeError('INVALID_ARGUMENT', 'workspaceEpoch must be a non-negative integer'));
@@ -53,7 +59,7 @@ export class PhysicalPythonRuntime {
     worker.onerror = (event) => this.#fail(active, runtimeError('PYTHON_WORKER', event.message || 'Physical Python worker failed'));
     active.timeout = setTimeout(() => {
       void this.cancel('PROGRAM_TIMEOUT', { error: runtimeError('PROGRAM_TIMEOUT', 'Physical Python run exceeded its bounded browser deadline') });
-    }, this.runTimeoutMs);
+    }, runTimeoutMs);
     worker.postMessage(boundedClone({ type: 'run', runEpoch, workspaceEpoch, files: workspace }));
     this.onState({ state: 'running', runEpoch, apiVersion: LIVE_SIM_API_VERSION });
     return completion.promise;

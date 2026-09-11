@@ -104,10 +104,12 @@ test('Asimov actuator experiment: sensor isolation, continuous caps and physical
  await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
  await expect(page.locator('#simCanvas')).toHaveAttribute('data-asimov-root-mode','fixed-mounted');
  const lab=await page.evaluate(async()=>{
-  const app=window.__robobuddyCi.app;await app.run();
+  const app=window.__robobuddyCi.app;const ok=await app.run();
   const b=app.sim.backend;
-  return {out:app.console,state:b.getState(),audit:b.getPresentationAlignment(),sensors:b.getSensorObservation()};
+  return {ok,problems:app.problems,out:app.console,state:b.getState(),audit:b.getPresentationAlignment(),sensors:b.getSensorObservation()};
  });
+ expect(lab.ok,JSON.stringify(lab.problems)).toBe(true);
+ expect(lab.state.simulation_time_s).toBeCloseTo(1,8);
  expect(lab.out.stderr).toBe('');expect(lab.out.stdout).toContain('Sensor profile');
  expect(lab.state.actuator_model.continuousOnly).toBe(true);expect(lab.state.actuator_model.configurationSha256).toMatch(/^[0-9a-f]{64}$/);
  expect(lab.sensors.view).toBe('hardware_like');expect(lab.sensors.root).toBeUndefined();expect(lab.sensors.bodies).toBeUndefined();
@@ -116,8 +118,10 @@ test('Asimov actuator experiment: sensor isolation, continuous caps and physical
  await page.locator('#taskSelect').selectOption('asimov-standing');
  await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
  const standing=await page.evaluate(async()=>{
-  const app=window.__robobuddyCi.app;await app.run();return {out:app.console,state:app.sim.getState(),evaluation:app.sim.getTaskEvaluation()};
+  const app=window.__robobuddyCi.app;const ok=await app.run();return {ok,problems:app.problems,out:app.console,state:app.sim.getState(),evaluation:app.sim.getTaskEvaluation()};
  });
+ expect(standing.ok,JSON.stringify(standing.problems)).toBe(true);
+ expect(standing.state.simulation_time_s).toBeCloseTo(12,8);expect(standing.evaluation.samples).toBeGreaterThanOrEqual(4800);
  expect(standing.out.stderr).toBe('');expect(standing.state.controller_mode).toBe('asimov-stance-feedback-v1');
  expect(standing.evaluation.status).toBe('passed');expect(standing.evaluation.success).toBe(true);expect(standing.evaluation.validDwellSeconds).toBeGreaterThan(10);
  await expect(page.locator('#simActionLabel')).toHaveText('Physical task complete');

@@ -12,7 +12,7 @@ The original Mounted Joint Lab, Free-base Dynamics and Passive Gravity Drop are 
 | Actuator Free-base (experimental) | Same actuator experiment with free base; joint hold may fall |
 | Standing Trial (experimental) | Same free-base plant plus an explicitly engaged, repository-designed torso-feedback controller and continuous support evaluator |
 
-Select **Asimov 1 — Physical**, select one of the above workspaces, and run its included Python example. The standing example advances 12 simulation seconds; it does not equate elapsed wall time with simulation time. Explicit Reset starts a new trial. The original default workspace remains Mounted Joint Lab.
+Select **Asimov 1 — Physical**, select one of the above workspaces, and run its included Python example. The standing example advances 12 simulation seconds, polling from Python once per simulation second. Feedback still runs at 200 Hz and standing assessment at every 2.5 ms physics step. Its explicit 120-second wall deadline accommodates slower clients; the default remains 30 seconds elsewhere. Deadlines are never automatically extended by progress, and human Stop remains available. Neither value equates elapsed wall time with simulation time. Full-resolution presentation redraws only when observations or the camera change; no physical step is omitted. Explicit Reset starts a new trial. The original default workspace remains Mounted Joint Lab.
 
 No hardware connection, trained walking, grasping, calibrated digital twin, or general disturbance-recovery capability is introduced.
 

@@ -27,12 +27,13 @@ function putPose(object, position, quaternion) {
 export class AsimovPhysicalSimulator {
   constructor(canvas) {
     this.canvas=canvas; this.disposed=false; this.ready=false; this.session=null; this.lastObservation=null;
-    this.renderedFrames=0; this.highContrast=true; this.sequence=0; this.groups=new Map(); this.geometries=new Map();
+    this.renderedFrames=0; this.renderDirty=true; this.highContrast=true; this.sequence=0; this.groups=new Map(); this.geometries=new Map();
     this.abort=new AbortController();
     this.scene=new THREE.Scene(); this.scene.background=new THREE.Color(0xb4bcc0);
     this.camera=new THREE.PerspectiveCamera(45,1,.01,30); this.camera.position.set(1.8,1.35,2.1);
     this.renderer=new THREE.WebGLRenderer({canvas,antialias:true}); this.renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
     this.controls=new OrbitControls(this.camera,canvas); this.controls.enableDamping=true;
+    this.controls.addEventListener('change',()=>{this.renderDirty=true;});
     this.scene.add(new THREE.HemisphereLight(0xffffff,0x30404a,1.8));
     const light=new THREE.DirectionalLight(0xffffff,2.2); light.position.set(1.2,2.4,1.2); this.scene.add(light);
     // Whole physical world uses SI metres/Z-up. One presentation-only basis converts to Three Y-up.
@@ -85,7 +86,7 @@ export class AsimovPhysicalSimulator {
     }
   }
   consume(observation) {
-    this.lastObservation=structuredClone(observation);
+    this.lastObservation=structuredClone(observation); this.renderDirty=true;
     this.canvas.dataset.simulationClockS=String(observation.simulationTimeSeconds);
     this.canvas.dataset.asimovPelvisZM=String(observation.root?.positionM?.[2]);
     this.canvas.dataset.asimovContactCount=String(observation.contactCount);
@@ -98,13 +99,17 @@ export class AsimovPhysicalSimulator {
   }
   renderFrame() {
     if(this.disposed) return;
-    this.applyObservation(); this.controls.update(); this.renderer.render(this.scene,this.camera);
+    this.controls.update();
+    if(!this.renderDirty) return;
+    // Full-resolution meshes need not be redrawn while nothing changes. This skips
+    // presentation work only; the worker still executes every requested physics step.
+    this.applyObservation(); this.renderer.render(this.scene,this.camera); this.renderDirty=false;
     this.canvas.dataset.renderedFrames=String(++this.renderedFrames);
   }
   resize() {
     if(this.disposed) return;
     const w=Math.max(1,this.canvas.clientWidth||640), h=Math.max(1,this.canvas.clientHeight||480);
-    this.renderer.setSize(w,h,false); this.camera.aspect=w/h; this.camera.updateProjectionMatrix();
+    this.renderer.setSize(w,h,false); this.camera.aspect=w/h; this.camera.updateProjectionMatrix(); this.renderDirty=true;
   }
   fit() { this.camera.position.set(1.8,1.35,2.1); this.controls.target.set(0,this.mount?.visible?1:.65,0); this.controls.update(); }
   setHighContrastScene(v) {this.highContrast=Boolean(v); return this.highContrast;}
