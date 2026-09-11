@@ -1,3 +1,4 @@
+import { asimovWorkspaceFiles } from './physics/asimov-workspaces.js';
 import { TASK_PATCH_REVISION, TASK_PATCH_SOURCE } from './task-catalog.js';
 
 const isKinematicPoseScenario = (scenario) => scenario?.simulationMode === 'kinematic_pose';
@@ -295,6 +296,7 @@ function unitreeG1PhysicalWorkspace(scenario) {
 }
 
 function physicalWorkspace(profileId, scenario) {
+  if (profileId === 'asimov') return asimovWorkspaceFiles(scenario);
   if (profileId === 'microduck') return microduckPhysicalWorkspace(scenario);
   if (profileId === 'lekiwi') return lekiwiPhysicalWorkspace(scenario);
   if (profileId === 'unitree') return unitreeG1PhysicalWorkspace(scenario);

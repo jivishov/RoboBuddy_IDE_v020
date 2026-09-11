@@ -144,3 +144,5 @@ export const SO101_MANIPULATION_MODEL_PACKAGE = registerModelPackage({
     'No hardware trajectory-error, backlash, compliance, fingertip-friction, work-surface-friction, servo-latency, or installed-tool calibration has been performed.',
   ],
 });
+
+import './asimov-model-package.js';

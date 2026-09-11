@@ -1,3 +1,4 @@
+import { AsimovPhysicalSimulator } from './physics/asimov-physical-simulator.js';
 import { SourceRobotSimulator } from './source-simulator.js';
 import { So101PhysicalSimulator } from './physics/so101-physical-simulator.js';
 import { OpenArmPhysicalSimulator } from './physics/openarm-physical-simulator.js';
@@ -12,6 +13,7 @@ export class SimulatorHost {
     openarmPhysicalFactory = (target) => new OpenArmPhysicalSimulator(target),
     lekiwiPhysicalFactory = (target) => new LeKiwiPhysicalSimulator(target),
     microduckPhysicalFactory = (target) => new MicroDuckPhysicalSimulator(target),
+    asimovPhysicalFactory = (target) => new AsimovPhysicalSimulator(target),
     unitreeG1PhysicalFactory = (target) => new UnitreeG1PhysicalSimulator(target),
   } = {}) {
     this.canvas = canvas;
@@ -25,6 +27,7 @@ export class SimulatorHost {
     this.openarmPhysicalFactory = openarmPhysicalFactory;
     this.lekiwiPhysicalFactory = lekiwiPhysicalFactory;
     this.microduckPhysicalFactory = microduckPhysicalFactory;
+    this.asimovPhysicalFactory = asimovPhysicalFactory;
     this.unitreeG1PhysicalFactory = unitreeG1PhysicalFactory;
     this.controllerPreemptHandler = () => {};
     this.disposed = false;
@@ -38,6 +41,7 @@ export class SimulatorHost {
   }
   syncLifecycleDiagnostics() { this.canvas.dataset.simulatorHostPendingCount = String(this.pending.size); }
   async setScenario(profileId, scenario, fallbackRest = {}) {
+    if (profileId === 'asimov' && scenario?.simulationMode !== 'physical_mujoco') throw new Error('Asimov is physical-only');
     if (profileId === 'microduck' && scenario?.simulationMode !== 'physical_mujoco') {
       throw new Error('MicroDuck supports physical tasks only; the legacy policy demonstrator has been retired.');
     }
@@ -49,7 +53,9 @@ export class SimulatorHost {
     for (const pendingBackend of this.pending) pendingBackend.dispose?.();
     this.pending.clear();
     const physical = scenario?.simulationMode === 'physical_mujoco';
-    const backend = physical && profileId === 'microduck'
+    const backend = physical && profileId === 'asimov'
+      ? this.asimovPhysicalFactory(this.canvas)
+      : physical && profileId === 'microduck'
       ? this.microduckPhysicalFactory(this.canvas)
       : physical && profileId === 'so101'
       ? this.so101PhysicalFactory(this.canvas)

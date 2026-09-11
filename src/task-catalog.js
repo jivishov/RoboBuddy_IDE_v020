@@ -1,3 +1,4 @@
+import { ASIMOV_TASKS, ASIMOV_WORKSPACES } from './physics/asimov-workspaces.js';
 import { OPENARM_V2_PHASE5A_MODEL_PACKAGE } from './physics/openarm-model-package.js';
 import { OPENARM_V2_PHASE5A_SCENE, OPENARM_V2_BIMANUAL_CONTROLLER } from './physics/openarm-scene.js';
 import { LEKIWI_COURIER_PACKAGE } from './physics/lekiwi-model-package.js';
@@ -327,6 +328,7 @@ const cache = new Map();
 
 export function tasksForProfile(profileId) {
   if (profileId === 'openarm') return OPENARM_PHYSICAL_TASKS;
+  if (profileId === 'asimov') return ASIMOV_TASKS;
   if (profileId === 'so101') return SO101_PHYSICAL_TASKS;
   if (profileId === 'lekiwi') return LEKIWI_TASKS;
   if (profileId === 'unitree') return UNITREE_TASKS;
@@ -343,6 +345,7 @@ export async function loadPatchedScenario(profileId, taskId) {
   const descriptor = legacySo101 || taskDescriptor(profileId, taskId);
   if (!descriptor) return null;
   if (descriptor.simulationMode === 'physical_mujoco') {
+    if (profileId === 'asimov') return structuredClone(ASIMOV_WORKSPACES[descriptor.id]);
     if (profileId === 'openarm') return structuredClone(OPENARM_PHYSICAL_SCENARIO);
     if (profileId === 'lekiwi') return structuredClone(LEKIWI_PHYSICAL_SCENARIO);
     if (profileId === 'microduck') return structuredClone(MICRODUCK_PHYSICAL_SCENARIOS[descriptor.id]);
@@ -370,6 +373,7 @@ export async function loadPatchedScenario(profileId, taskId) {
 
 export function taskPatchProvenance(descriptor) {
   if (descriptor?.simulationMode === 'physical_mujoco') {
+    if (descriptor.profileId === 'asimov') return {repository:'jivishov/RoboBuddy_IDE_v020',upstreamRepository:'menloresearch/asimov-1',upstreamRevision:descriptor.canonicalModel.revision,scenarioId:descriptor.id,physicalSceneId:descriptor.physicalSceneId,modelPackage:descriptor.modelPackage,simulationMode:'physical_mujoco'};
     if (descriptor.profileId === 'openarm') return {
       repository: 'jivishov/RoboBuddy_IDE_v020',
       upstreamRepository: 'enactic/openarm_mujoco',

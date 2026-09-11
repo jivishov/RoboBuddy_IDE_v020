@@ -113,6 +113,11 @@ class App {
   updateSimulationPresentation(profile, selectedMode = profile?.simulationMode) {
     // The selected workspace decides the labels, not the profile. MicroDuck's profile mode is the
     // demonstrator's, so reading it here would badge the physical workspace APPROXIMATE DYNAMICS.
+    if (profile?.id === 'asimov') {
+      $('modeChip').textContent = 'MUJOCO PHYSICS · ESTIMATED PD · HW VALIDATION PENDING';
+      $('simBadge').textContent = 'ASIMOV 1 · 23 SOURCE JOINTS · FIXED NECK · OBSERVED BODY MESHES · NO VERIFIED WALKING';
+      return;
+    }
     const kinematic = selectedMode === 'kinematic_pose';
     const policy = selectedMode === 'policy_sim';
     $('modeChip').textContent = policy
@@ -167,7 +172,7 @@ class App {
     // demonstrator label.
     const selectedMode = taskDescriptor(id, this.taskId)?.simulationMode || p.simulationMode;
     const migratedPhysical = id === 'so101' || id === 'openarm'
-      || ((id === 'lekiwi' || id === 'microduck' || id === 'unitree') && selectedMode === 'physical_mujoco');
+      || ((id === 'asimov' || id === 'lekiwi' || id === 'microduck' || id === 'unitree') && selectedMode === 'physical_mujoco');
     const visibleDriver = migratedPhysical ? 'robobuddy.sim.v1 · browser MuJoCo' : p.driver;
     $('driverLabel').textContent = visibleDriver;
     $('driverStatus').textContent = visibleDriver;

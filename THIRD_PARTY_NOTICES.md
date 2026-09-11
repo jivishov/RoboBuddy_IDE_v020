@@ -21,3 +21,14 @@ Source: `Rhoban/bam` v1.0.1, commit `ab81512c44f1f709b99ef332addb5e51568cd51c`. 
 ## Important scope note
 
 The component licenses above are not relicensed by RoboBuddy's MIT default. This file records provenance and scope; it is not a claim that hardware calibration has been performed.
+
+## Menlo Asimov 1
+
+`models/asimov/` includes full-resolution losslessly compressed STL visuals and
+physics descriptions derived from `menloresearch/asimov-1` at
+`732cc60dcb8f2b4fd26c3d7346b35f9b89c3cd47`. Original MJCF/URDF and both upstream
+license texts are preserved in `models/asimov/source/`: CERN-OHL-S-2.0 for
+hardware and GPL-2.0 for software. These source-derived assets are **not MIT**.
+The reproducible transformations, limitations and numerical checks are documented
+in `docs/physics/asimov-provenance.md`. The added ideal torque actuators and PD
+gains are simulator assumptions, not an official Menlo policy or hardware calibration.

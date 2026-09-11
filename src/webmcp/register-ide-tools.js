@@ -1,3 +1,4 @@
+import { executeAsimovPhysicalControl, getAsimovPhysicalControlDefinition } from './asimov-physical-control.js';
 import { cancelledResult, domainErrorResult } from './agent-facade.js';
 import { createMicroDuckControlSchema } from './microduck-control.js';
 import { createMicroduckVisualCueSchema } from './microduck-visual-cues.js';
@@ -101,6 +102,8 @@ function createTools(facade, epoch) {
   // Present only for the ready Unitree G1 PHYSICAL workspace. The retained kinematic pose
   // workspace keeps its own separately named tool and is suppressed here, so the two never share
   // a name and a physical badge can never sit on a synthetic pose-write command path.
+  const asimovControl = getAsimovPhysicalControlDefinition(facade);
+  if (asimovControl) tools.push({ ...asimovControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeAsimovPhysicalControl(facade, input, signal, epoch)) });
   const unitreeG1Control = getUnitreeG1PhysicalControlDefinition(facade);
   if (unitreeG1Control) tools.push({ ...unitreeG1Control, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeUnitreeG1PhysicalControl(facade, input, signal, epoch)) });
   const microduckPhysicalControl = getMicroDuckPhysicalControlDefinition(facade);

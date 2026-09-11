@@ -11,3 +11,8 @@ There is no single license that applies to every file in this repository.
 4. Some existing locally generated MicroDuck artifacts are marked PolyForm-Noncommercial-1.0.0 in assets/microduck/manifest.json. Those file-level declarations remain controlling for those artifacts.
 
 When redistributing a subset of this repository, comply with the license that applies to every included component.
+
+Asimov 1 source-derived model and visual assets under models/asimov/ are separately
+licensed under the upstream CERN-OHL-S-2.0 hardware / GPL-2.0 software notices.
+See models/asimov/source/HARDWARE-LICENSE.txt, SOFTWARE-LICENSE.txt and
+THIRD_PARTY_NOTICES.md. They are not covered by the original-code MIT grant.
