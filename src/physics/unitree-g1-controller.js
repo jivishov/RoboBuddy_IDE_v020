@@ -85,6 +85,15 @@ export const G1_CONTROLLERS = Object.freeze({
 // The default gains behind a plain joint-target request, used wherever no standing claim is being
 // made: joint inspection, the blocked-joint fixture, self-contact probing. They are Unitree's own
 // FixStand gains, unchanged, which is exactly what that controller is - a joint-position hold.
+// The identity of an explicit per-joint low-level command. It exists separately from the joint-hold
+// profile because such a command may carry caller-supplied kp/kd, so reporting it as the source-gain
+// hold would misdescribe the gains that are actually running.
+export const G1_LOWLEVEL_COMMAND_PROFILE = Object.freeze({
+  id: G1_CONTROLLERS.LOWLEVEL,
+  label: 'Unitree low-level motor command at caller-supplied gains',
+  claim: 'bounded per-joint low-level motor command: tau = kp*(q_target-q) + kd*(dq_target-dq) + tau_ff, clamped to the source effort limit. It makes no standing, balance or locomotion claim, and a gravity-loaded joint will visibly settle short of its target.',
+});
+
 export const G1_JOINT_HOLD_PROFILE = Object.freeze({
   id: G1_CONTROLLERS.JOINT_HOLD,
   label: 'Unitree source joint-position hold gains',

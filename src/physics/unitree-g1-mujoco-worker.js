@@ -1,7 +1,7 @@
 import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
 import { MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, sampledObservationCount } from './backend-contract.js';
 import {
-  G1_CONTROLLERS, G1_JOINT_HOLD_PROFILE, G1_LOWLEVEL_CONTROL_INTERVAL_SECONDS, G1_STAND_CONTROLLER_PROFILES,
+  G1_CONTROLLERS, G1_JOINT_HOLD_PROFILE, G1_LOWLEVEL_COMMAND_PROFILE, G1_LOWLEVEL_CONTROL_INTERVAL_SECONDS, G1_STAND_CONTROLLER_PROFILES,
   boundLowLevelCommand, lowLevelTorqueNm, standTargetRad,
 } from './unitree-g1-controller.js';
 import { G1_FOOT_CONTACT_GEOMS, G1_JOINT_ORDER } from './unitree-g1-source-audit.js';
@@ -46,6 +46,10 @@ let accepted = [];
 let controller = null;
 let actuationEnabled = true;
 let setupLog = [];
+// Which command path produced the running per-joint command vector, reported whenever no stand
+// controller is engaged. A declared hold and a caller's own low-level command are not the same
+// thing and must not share one identity.
+let commandProfile = G1_JOINT_HOLD_PROFILE;
 
 function reply(id, ok, payload = null, error = null) { postMessage({ id, ok, payload, error }); }
 async function ensureMuJoCo() { if (mujoco) return mujoco; mujoco = await loadMujoco({ locateFile: (path) => new URL(path, MUJOCO_BASE_URL).href }); return mujoco; }
@@ -244,6 +248,14 @@ function observation() {
   if (!model || !data || !descriptor || !modelInfo) {
     return { simulationTime: 0, model: null, engine: null, root: null, joints: {}, bodies: {}, contactCount: 0, contactsReadable: false, contacts: [], contactClasses: null, controller: null, actuationEnabled: true, setupLog: [] };
   }
+  // mj_step integrates qpos/qvel but leaves the derived quantities - body poses, contacts - at the
+  // state before the integration, so reading them straight after a step publishes body positions
+  // that lag the joint angles and velocities beside them by one timestep. During a fall that is a
+  // visible millimetres-scale disagreement between the rendered rig and the reported bodies. One
+  // forward evaluation puts every published quantity at the same instant. The actuators are plain
+  // torque motors, so the reported effort is unchanged by it, and the trajectory is untouched:
+  // mj_step performs this same evaluation itself before integrating.
+  mujoco.mj_forward(model, data);
   const joints = {};
   for (const [index, jointId] of G1_JOINT_ORDER.entries()) {
     const joint = jointState.get(jointId);
@@ -300,7 +312,9 @@ function observation() {
     contactsReadable: contactState.readable,
     contacts: contactState.contacts,
     contactClasses: contactState.classified,
-    controller: controller ? { id: controller.profile.id, label: controller.profile.label, mode: controller.kind, engagedAtSeconds: controller.startedAtSeconds, claim: controller.profile.claim } : { id: G1_CONTROLLERS.JOINT_HOLD, label: G1_JOINT_HOLD_PROFILE.label, mode: 'joint-hold', engagedAtSeconds: null, claim: G1_JOINT_HOLD_PROFILE.claim },
+    controller: controller
+      ? { id: controller.profile.id, label: controller.profile.label, mode: controller.kind, engagedAtSeconds: controller.startedAtSeconds, claim: controller.profile.claim }
+      : { id: commandProfile.id, label: commandProfile.label, mode: commandProfile === G1_LOWLEVEL_COMMAND_PROFILE ? 'low-level' : 'joint-hold', engagedAtSeconds: null, claim: commandProfile.claim },
     actuationEnabled,
     setupLog: [...setupLog],
   };
@@ -315,6 +329,7 @@ function applyDeclaredInitialState() {
   mujoco.mj_resetDataKeyframe(model, data, 0);
   paused = false;
   controller = null;
+  commandProfile = G1_JOINT_HOLD_PROFILE;
   actuationEnabled = true;
   setupLog = [];
   if (!['joint-hold', 'passive'].includes(descriptor.initialCommand)) {
@@ -340,7 +355,7 @@ function disposeModel() {
   try { model?.delete?.(); } catch { /* disposal is best effort */ }
   data = null; model = null; descriptor = null; modelInfo = null;
   jointState = new Map(); actuatorState = new Map(); bodyState = new Map();
-  accepted = []; controller = null; actuationEnabled = true; paused = false; setupLog = [];
+  accepted = []; controller = null; commandProfile = G1_JOINT_HOLD_PROFILE; actuationEnabled = true; paused = false; setupLog = [];
 }
 
 function meshDependenciesFromXml(xml) {
@@ -443,6 +458,7 @@ function command(payload = {}) {
     if (!targets || typeof targets !== 'object' || Array.isArray(targets) || !Object.keys(targets).length) throw new Error('set_joint_targets requires a non-empty targetsRad object');
     for (const jointId of Object.keys(targets)) if (!jointState.has(jointId)) throw new Error(`Unknown declared joint ${jointId}`);
     controller = null;
+    commandProfile = G1_JOINT_HOLD_PROFILE;
     const positions = G1_JOINT_ORDER.map((jointId, index) => (jointId in targets ? Number(targets[jointId]) : accepted[index].positionRad));
     for (const value of positions) if (!Number.isFinite(value)) throw new TypeError('Every joint target must be finite radians');
     accepted = holdCommandsAt(positions);
@@ -451,6 +467,7 @@ function command(payload = {}) {
     if (!commands || typeof commands !== 'object' || Array.isArray(commands) || !Object.keys(commands).length) throw new Error('set_lowlevel_targets requires a non-empty commands object');
     for (const jointId of Object.keys(commands)) if (!jointState.has(jointId)) throw new Error(`Unknown declared joint ${jointId}`);
     controller = null;
+    commandProfile = G1_LOWLEVEL_COMMAND_PROFILE;
     accepted = G1_JOINT_ORDER.map((jointId, index) => {
       const request = commands[jointId];
       if (!request) return accepted[index];
@@ -475,6 +492,7 @@ function command(payload = {}) {
   } else if (payload.type === 'release_stand') {
     if (controller?.kind === 'stand') accepted = holdCommandsAt(accepted.map((item) => item.positionRad));
     controller = null;
+    commandProfile = G1_JOINT_HOLD_PROFILE;
   } else {
     throw new Error(`Unsupported physical command: ${payload.type}`);
   }

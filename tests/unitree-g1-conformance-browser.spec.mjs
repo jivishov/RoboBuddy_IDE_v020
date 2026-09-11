@@ -13,10 +13,18 @@ import { writeFile } from 'node:fs/promises';
 // same controller and the same approximations, so it is not hardware validation.
 
 const NATIVE_DIR = process.env.UNITREE_G1_NATIVE_REPORT_DIR || '';
+const NATIVE_TRIALS = Object.freeze(['stand-nominal', 'stand-source-fixstand', 'stand-motors-disabled', 'blocked-joint', 'free-fall', 'external-object', 'self-contact']);
+let nativeComparisons = 0;
+// When a native report directory is configured, every comparison it promises must actually run.
+// A missing file is a failure, not a silently skipped check: CI would otherwise report a green
+// cross-backend conformance run that compared nothing.
 const nativeReport = (trial) => {
   if (!NATIVE_DIR) return null;
+  if (!NATIVE_TRIALS.includes(trial)) throw new Error(`Undeclared native conformance trial: ${trial}`);
   const path = `${NATIVE_DIR}/unitree-g1-${trial}.json`;
-  return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null;
+  if (!existsSync(path)) throw new Error(`UNITREE_G1_NATIVE_REPORT_DIR is set but ${path} is missing; run native/unitree_g1_reference.py --trial ${trial}`);
+  nativeComparisons += 1;
+  return JSON.parse(readFileSync(path, 'utf8'));
 };
 
 const TOLERANCE = Object.freeze({
@@ -37,7 +45,7 @@ test('Unitree G1 Phase 5D browser MuJoCo reproduces the native physical gates', 
     const { PhysicsSession } = await import('/src/physics/session.js');
     const { BrowserMuJoCoBackend } = await import('/src/physics/browser-mujoco-backend.js');
     const { UNITREE_G1_SCENES, UNITREE_G1_STAND_GATE, UnitreeG1StandEvaluator } = await import('/src/physics/unitree-g1-scene.js');
-    const { G1_CONTROLLERS, G1_PHYSICS_TIMESTEP_SECONDS, G1_STAND_POSE_RAD } = await import('/src/physics/unitree-g1-controller.js');
+    const { G1_CONTROLLERS, G1_PHYSICS_TIMESTEP_SECONDS, G1_STAND_CONTROLLER_PROFILES, G1_STAND_POSE_RAD } = await import('/src/physics/unitree-g1-controller.js');
     const { G1_JOINT_ORDER } = await import('/src/physics/unitree-g1-source-audit.js');
 
     const workerUrl = new URL('/src/physics/unitree-g1-mujoco-worker.js', window.location.origin);
@@ -203,11 +211,20 @@ test('Unitree G1 Phase 5D browser MuJoCo reproduces the native physical gates', 
         await session.sendCommand({ type: 'engage_stand', controllerId: G1_CONTROLLERS.STAND }, { maxSteps: 200000 });
         await advance(session, 2.0);
         const before = (await session.getObservation()).bodies.contact_probe_block.positionM;
-        const reach = Object.fromEntries(G1_JOINT_ORDER.map((jointId, index) => [jointId, G1_STAND_POSE_RAD[index]]));
-        reach.right_hip_pitch_joint = -0.95;
-        reach.right_knee_joint = 0.45;
-        reach.right_ankle_pitch_joint = -0.25;
-        await session.sendCommand({ type: 'set_joint_targets', targetsRad: reach }, { maxSteps: 40000 });
+        // The reach is held at the standing controller's own gains, which is exactly what the native
+        // trial does, so the two backends run the same experiment. It is a large asymmetric
+        // single-leg motion: the robot topples, its right knee strikes the declared free block, and
+        // the block's response is contact physics rather than any placement or transform write.
+        const profile = G1_STAND_CONTROLLER_PROFILES[G1_CONTROLLERS.STAND];
+        const reachRad = [...G1_STAND_POSE_RAD];
+        reachRad[G1_JOINT_ORDER.indexOf('right_hip_pitch_joint')] = -0.95;
+        reachRad[G1_JOINT_ORDER.indexOf('right_knee_joint')] = 0.45;
+        reachRad[G1_JOINT_ORDER.indexOf('right_ankle_pitch_joint')] = -0.25;
+        const reach = Object.fromEntries(G1_JOINT_ORDER.map((jointId, index) => [jointId, {
+          positionRad: reachRad[index], velocityRadS: 0, feedforwardTorqueNm: 0,
+          kp: profile.kp[index], kd: profile.kd[index],
+        }]));
+        await session.sendCommand({ type: 'set_lowlevel_targets', commands: reach }, { maxSteps: 40000 });
         const final = await advance(session, 1.6);
         const after = final.bodies.contact_probe_block.positionM;
         out.externalObject = {
@@ -429,9 +446,38 @@ test('Unitree G1 Phase 5D browser MuJoCo reproduces the native physical gates', 
   }
   const nativeObject = nativeReport('external-object');
   if (nativeObject) {
-    expect(results.externalObject.displacementM).toBeGreaterThan(0.02);
     expect(nativeObject.objectDisplacementM).toBeGreaterThan(0.02);
+    expect(
+      Math.abs(results.externalObject.displacementM - nativeObject.objectDisplacementM),
+      'the two backends must move the free object by the same amount, not merely both move it',
+    ).toBeLessThan(TOLERANCE.objectDisplacementM);
+    expect(results.externalObject.contactPairs.map((pair) => pair.split(' | ').sort().join(' | ')).sort())
+      .toEqual(nativeObject.contactGeomPairs.map((pair) => [...pair].sort().join(' | ')).sort());
   }
   const nativeSelf = nativeReport('self-contact');
   if (nativeSelf) expect(nativeSelf.selfContactPairs.flat().join(' ')).toContain('knee_link');
+  expect(nativeComparisons, NATIVE_DIR
+    ? 'every declared native conformance report must have been compared'
+    : 'no native report directory is configured, so no native comparison may claim to have run',
+  ).toBe(NATIVE_DIR ? NATIVE_TRIALS.length : 0);
+  await testInfo.attach('unitree-g1-native-conformance', {
+    body: JSON.stringify({
+      nativeReportDir: NATIVE_DIR || null,
+      nativeComparisons,
+      tolerance: TOLERANCE,
+      browser: {
+        standNominal: nominal.measured,
+        blocked: { blockedRad: blocked.blocked.positionRad, unobstructedRad: blocked.unobstructed.positionRad },
+        freeFall: results.freeFall,
+        externalObject: results.externalObject,
+      },
+      native: NATIVE_DIR ? {
+        standNominal: nativeStand.evaluation.measured,
+        blocked: { blockedRad: nativeBlocked.comparison.blocked.measuredPositionRad, unobstructedRad: nativeBlocked.comparison.unobstructed.measuredPositionRad },
+        freeFall: { heightChangeM: nativeFall.rootHeightChangeM, finalUprightZ: nativeFall.final.root.uprightZ },
+        externalObject: { displacementM: nativeObject.objectDisplacementM },
+      } : null,
+    }, null, 2),
+    contentType: 'application/json',
+  });
 });

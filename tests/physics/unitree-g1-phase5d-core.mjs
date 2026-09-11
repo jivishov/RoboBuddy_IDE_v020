@@ -413,9 +413,14 @@ assert.notEqual(physicsCapabilityFor('unitree').capability, physicsCapabilityFor
   const declared = [...simulator.matchAll(/this\.canvas\.dataset\.(\w+)\s*=/g)].map((match) => match[1]);
   const cleared = /static DATASET_KEYS = Object\.freeze\(\[([\s\S]*?)\]\)/.exec(simulator)[1].match(/'(\w+)'/g).map((token) => token.slice(1, -1));
   // Anything the simulator claims while it owns the canvas must be withdrawn when it stops owning
-  // it, or the pose workspace could inherit a stale "free-base" or "standing" attribute. Keys the
-  // shared host resets on every scenario switch are excluded by name.
-  const hostOwned = new Set(['simulatorBackend', 'simulationAuthority', 'physicalSceneId', 'modelPackageId', 'presentationGroundColor', 'simulationClockS', 'renderedFrames']);
+  // it, or the pose workspace could inherit a stale "free-base", "standing", "physics-session" or
+  // physical model-package attribute. Only keys the next backend itself re-stamps are exempt, and
+  // the exemption is checked against that backend rather than asserted.
+  const source = read('src/source-simulator.js');
+  const hostOwned = new Set(['simulatorBackend', 'presentationGroundColor', 'simulationClockS']);
+  for (const key of hostOwned) {
+    assert.ok(source.includes(`this.canvas.dataset.${key} =`), `${key} is exempt only because the source backend re-stamps it`);
+  }
   const leaked = declared.filter((key) => !cleared.includes(key) && !hostOwned.has(key));
   assert.deepEqual(leaked, [], `these dataset keys are set but never withdrawn: ${leaked.join(', ')}`);
 }

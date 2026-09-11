@@ -56,7 +56,10 @@ export const PROFILES = Object.freeze({
     task:Object.freeze({title:'Arm positioning and bounded base velocity', steps:['Send a stowed arm pose','Pan the arm left and right on the canonical LeKiwi model','Return the arm to stow','Command a bounded forward base velocity','Stop base velocity explicitly'], limitations:'Canonical RoboBuddy visual geometry is used. No wheel-contact dynamics, odometry, SLAM, network timing, or hardware validation.'}),
   }),
   unitree: Object.freeze({
-    id:'unitree', label:'Unitree G1 29-DoF', shortLabel:'Unitree G1', driver:'robobuddy.sim.v1 · browser MuJoCo', transport:'none — local browser simulation', simulationMode:'physical_mujoco',
+    // driver/transport are the RETAINED POSE workspace's labels. The physical workspace supplies
+    // its own browser-MuJoCo driver label from the selected task, so selecting the pose workspace
+    // can never leave a physical driver claim on screen.
+    id:'unitree', label:'Unitree G1 29-DoF', shortLabel:'Unitree G1', driver:'RoboBuddy G1 pose rig (kinematic only)', transport:'none — browser-only pose workspace', simulationMode:'physical_mujoco',
     visual:Object.freeze({robotId:'unitree_g1_29dof', repository:'jivishov/RoboBuddy_AI', revision:ROBOBUDDY_AI_VISUAL_REVISION, modelRevision:'dd4fa6866e523ad61324f658d63736e4eda3a6e4', modelRepository:'unitreerobotics/unitree_ros', modelPath:'robots/g1_description/g1_29dof.urdf', license:'BSD-3-Clause'}),
     limits:unitreeG1JointLimits,
     rest:unitreeG1Rest,

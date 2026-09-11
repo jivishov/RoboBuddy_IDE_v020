@@ -312,6 +312,12 @@ class Plant:
         return out
 
     def observation(self):
+        # mj_step integrates qpos/qvel but leaves body poses and contacts at the pre-integration
+        # state, so a sample read straight after a step would report body positions one timestep
+        # behind the joint angles beside them. One forward evaluation puts every reported quantity
+        # at the same instant; the actuators are plain torque motors, so effort is unchanged, and
+        # the trajectory is untouched because mj_step performs this same evaluation itself.
+        mujoco.mj_forward(self.model, self.data)
         q, dq = self.q(), self.dq()
         joints = {}
         for index, name in enumerate(JOINT_ORDER):

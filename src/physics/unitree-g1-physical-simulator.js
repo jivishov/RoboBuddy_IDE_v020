@@ -41,6 +41,11 @@ function box(widthM, heightM, depthM, material) {
  * the physical and presentation conventions, it is applied at the rendering boundary, and it never
  * feeds anything back into MuJoCo.
  */
+// The source names one child body after the link rather than after its joint: the body below
+// waist_pitch_joint is torso_link. Naming it explicitly keeps all 29 joints in the alignment check
+// instead of silently skipping the torso.
+const JOINT_BODY_OVERRIDES = Object.freeze({ waist_pitch_joint: 'torso_link' });
+
 export function canonicalJointStateDeg(observation) {
   const state = {};
   for (const jointId of G1_JOINT_ORDER) {
@@ -308,7 +313,7 @@ export class UnitreeG1PhysicalSimulator {
     let worst = 0;
     let worstBody = null;
     for (const jointId of G1_JOINT_ORDER) {
-      const bodyId = `${jointId.replace(/_joint$/, '')}_link`;
+      const bodyId = JOINT_BODY_OVERRIDES[jointId] || `${jointId.replace(/_joint$/, '')}_link`;
       if (!G1_BODY_ORDER.includes(bodyId)) continue;
       const body = observation.bodies[bodyId];
       const group = rig.groups?.[jointId];
@@ -420,12 +425,15 @@ export class UnitreeG1PhysicalSimulator {
 
   // Every dataset key this simulator publishes, so switching away from the physical workspace
   // cannot leave a stale "free-base" or "standing" attribute describing a workspace that has
-  // neither.
+  // neither. The retained kinematic pose workspace runs on the source backend, which re-stamps
+  // simulatorBackend, presentationGroundColor and simulationClockS but claims no physical
+  // authority, scene or model package of its own: those must be withdrawn here.
   static DATASET_KEYS = Object.freeze([
     'unitreeG1RootMode', 'unitreeG1Walking', 'unitreeG1Hands', 'unitreeG1PelvisZM', 'unitreeG1PelvisTiltRad',
     'unitreeG1UprightZ', 'unitreeG1LeftFootContacts', 'unitreeG1RightFootContacts', 'unitreeG1NonFootGroundContacts',
     'unitreeG1SelfContacts', 'unitreeG1ExternalObjectContacts', 'unitreeG1ControllerId', 'unitreeG1ActuationEnabled',
-    'unitreeG1Standing', 'unitreeG1Fell', 'physicalSceneRevision',
+    'unitreeG1Standing', 'unitreeG1Fell',
+    'simulationAuthority', 'physicalSceneId', 'physicalSceneRevision', 'modelPackageId', 'renderedFrames',
   ]);
 
   dispose() {
