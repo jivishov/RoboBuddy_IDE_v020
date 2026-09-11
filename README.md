@@ -9,3 +9,13 @@ Phase 5C migrates MicroDuck onto the same single-authority backend as a matched-
 Phase 5D migrates the Unitree G1 29-DoF fixed-rubber-hand robot onto the same single-authority backend as a separate physical workspace, beside the retained kinematic pose workspace. The free-base plant has gravity, a floor, named foot contact primitives, self-contact and a declared free object. Actuation follows Unitree's own low-level motor law, bounded by the source joint, velocity and effort limits, and requested, accepted and measured joint values are reported separately. Standing is a bounded posture hold that the free-base gate verifies, and it is measured against its own negative controls: the exact source FixStand gains topple this model, disabling the motors topples it, and a 0.20 m/s forward impulse topples it. Perturbation recovery, walking, dexterous-hand control and hardware calibration are unsupported and are not exposed. See `docs/physics/unitree-g1-provenance.md`.
 
 The supported SO-101 task is a synthetic rigid-body block-transfer benchmark. Simulator validation is not hardware calibration. LeKiwi, MicroDuck and Unitree G1 have separate physical workspaces. Panda and ASIMOV remain separate later robot-specific migration work.
+
+### Asimov 1 physical preview
+
+Select **Asimov 1 — Physical** to use the mounted joint laboratory, free-base
+dynamics or passive gravity drop with the same authoritative MuJoCo session as the
+existing physical robots. The source model has **23 hinges and a fixed neck**.
+Python and opt-in WebMCP send bounded joint commands; full source STL visuals
+follow measured body poses. Added ideal torque motors and PD gains are estimates;
+walking, balance recovery, grasping and hardware calibration are not supplied.
+See [Asimov provenance, controls and validation](docs/physics/asimov-provenance.md).
