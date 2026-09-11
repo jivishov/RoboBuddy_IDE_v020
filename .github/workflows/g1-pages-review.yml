@@ -21,7 +21,7 @@ jobs:
         run: |
           npm install --ignore-scripts --no-audit --no-fund
           npx playwright install --with-deps chromium
-      - name: Verify deployed commit, changed public assets and physical browser journey
+      - name: Verify public source hashes and physical browser journey
         run: |
           mkdir -p /tmp/g1-pages-evidence
           cat > .g1-pages-review.mjs <<'JS'
@@ -32,17 +32,19 @@ jobs:
           const site = 'https://jivishov.github.io/RoboBuddy_IDE_v020/';
           const expected = '36da0b8163ef7b4d95544593c7aeb55babdbdff2';
           const out = '/tmp/g1-pages-evidence';
-          let build;
-          for (let attempt = 0; attempt < 60; attempt++) {
-            const res = await fetch(site + 'physics-build.json?review=' + expected + '&attempt=' + attempt);
-            if (res.ok) {
-              build = await res.json();
-              if (build.commit === expected) break;
-            }
-            await new Promise(resolve => setTimeout(resolve, 5000));
+          // The custom workflow emits this manifest. GitHub's inherited branch-based
+          // Pages build may publish the identical source without generated files.
+          // Public source hashes are mandatory in either mode; never infer success
+          // from the optional manifest or a deployment status alone.
+          const manifest = await fetch(site + 'physics-build.json?review=' + expected);
+          let build = null;
+          if (manifest.ok) {
+            build = await manifest.json();
+            assert.equal(build.repository, 'jivishov/RoboBuddy_IDE_v020');
+            assert.equal(build.commit, expected);
+          } else {
+            assert.equal(manifest.status, 404);
           }
-          assert.equal(build?.repository, 'jivishov/RoboBuddy_IDE_v020');
-          assert.equal(build?.commit, expected, 'public Pages must serve the reviewed exact commit');
           const assets = {
             'src/physics/session.js': '63a936928ede6c502c00d9ded1181c8eb7af9f7f501b306c28faa0b2a873c327',
             'src/physics/unitree-g1-mujoco-worker.js': '8256be7a81bfebe48dec5426714c7438b7dcf7a9945a8328296f748e23270b4f',
@@ -56,6 +58,7 @@ jobs:
             assert.equal(res.status, 200, path);
             assert.equal(createHash('sha256').update(Buffer.from(await res.arrayBuffer())).digest('hex'), sha, path);
           }
+          fs.writeFileSync(out + '/published-source-verification.json', JSON.stringify({site, expectedCommit: expected, build, manifestStatus: manifest.status, verifiedAssetHashes: assets}, null, 2) + '\n');
           const browser = await chromium.launch();
           try {
             const page = await browser.newPage({ viewport: { width: 1366, height: 768 } });
@@ -90,9 +93,9 @@ jobs:
             assert.equal(pose.physicalSession, false);
             await page.screenshot({ path: out + '/published-g1-pose.png' });
             assert.deepEqual(errors, []);
-            const result = { site, build, assets, physical, pose, pageErrors: errors };
+            const result = { site, expectedCommit: expected, build, assets, physical, pose, pageErrors: errors };
             fs.writeFileSync(out + '/published-verification.json', JSON.stringify(result, null, 2) + '\n');
-            console.log(JSON.stringify({ site, commit: build.commit, publicAssetHashesVerified: Object.keys(assets).length, standing: physical.evaluation.standing, posePreserved: pose.rootFixed, pageErrors: errors }));
+            console.log(JSON.stringify({ site, expectedCommit: expected, publicAssetHashesVerified: Object.keys(assets).length, standing: physical.evaluation.standing, posePreserved: pose.rootFixed, pageErrors: errors }));
           } finally {
             await browser.close();
           }
