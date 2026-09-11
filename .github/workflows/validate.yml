@@ -11,7 +11,10 @@ permissions:
 jobs:
   fidelity:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The full browser suite consumed 18.7 of the previous 20 minutes before Phase 5D added its
+    # three specs and wired the previously unexecuted webmcp-robot-controls unit spec into the
+    # test match. The margin was under a minute, so this follows the other physical workflows.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
