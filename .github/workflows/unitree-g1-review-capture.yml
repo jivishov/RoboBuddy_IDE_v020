@@ -9,17 +9,28 @@ jobs:
   capture:
     if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Archive exact source without credentials or runtime files
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Archive exact source and pinned test dependencies
         run: |
-          mkdir -p /tmp/g1-review
+          mkdir -p /tmp/g1-review/wheels /tmp/g1-review/reference
           git rev-parse HEAD > /tmp/g1-review/COMMIT.txt
           git archive --format=tar.gz HEAD > /tmp/g1-review/source.tar.gz
-          sha256sum /tmp/g1-review/source.tar.gz > /tmp/g1-review/SHA256SUMS.txt
+          npm install --ignore-scripts --no-audit --no-fund
+          npm install --ignore-scripts --no-audit --no-fund --no-save --package-lock=false three@0.180.0
+          tar -czf /tmp/g1-review/node_modules.tar.gz node_modules
+          python -m pip download --only-binary=:all: --dest /tmp/g1-review/wheels 'mujoco==3.11.0'
+          curl --fail --location --retry 2 'https://cdn.jsdelivr.net/gh/jivishov/RoboBuddy_AI@66d18a029a0caeb6a6075e681dbd9ecd6b22affa/simulator/js/robot-mesh-data-unitree-g1.js' -o /tmp/g1-review/reference/robot-mesh-data-unitree-g1.js
+          sha256sum /tmp/g1-review/*.tar.gz /tmp/g1-review/reference/* > /tmp/g1-review/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
           name: unitree-g1-independent-source-${{ github.sha }}
