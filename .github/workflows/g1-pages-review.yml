@@ -19,7 +19,7 @@ jobs:
           node-version: '22'
       - name: Install pinned browser test harness
         run: |
-          npm ci --no-audit --no-fund
+          npm install --ignore-scripts --no-audit --no-fund
           npx playwright install --with-deps chromium
       - name: Verify deployed commit, changed public assets and physical browser journey
         run: |
