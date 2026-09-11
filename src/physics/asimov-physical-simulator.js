@@ -60,7 +60,7 @@ export class AsimovPhysicalSimulator {
       if(this.disposed || generation!==this.sequence) throw new Error('Superseded Asimov scene');
       this.ready=true; Object.assign(this.canvas.dataset,{simulatorBackend:'browser-mujoco',simulationAuthority:'physics-session',physicalSceneId:scene.id,
         physicalSceneRevision:scene.revision,modelPackageId:scene.modelPackage,asimovRootMode:this.lastObservation.root.mode,asimovWalking:'unsupported'});
-      this.applyObservation(); this.fit(); return true;
+      this.applyObservation(); this.renderDirty=true; this.fit(); return true;
     } catch(error) {session.dispose(); this.ready=false; throw error;}
   }
   async loadMeshes() {
