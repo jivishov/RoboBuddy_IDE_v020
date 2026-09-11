@@ -109,8 +109,8 @@ assert.deepEqual([...G1_STAND_POSE_RAD.slice(0, 6)], [-0.1, 0, 0, 0.3, -0.2, 0],
   assert.equal(source.totalAnkleKpNmPerRad, 80);
   assert.equal(repository.totalAnkleKpNmPerRad, 500);
   assert.ok(Math.abs(G1_ANKLE_STABILITY_REQUIREMENT_NM_PER_RAD - G1_TOTAL_MASS_KG * 9.81 * 0.6715) < 1e-9);
-  assert.equal(source.freeBaseStable, false, 'source FixStand ankle stiffness is below m g h and cannot hold a free base');
-  assert.equal(repository.freeBaseStable, true);
+  assert.equal(source.passesRigidPendulumHeuristic, false, 'source FixStand stiffness falls below the rigid-pendulum heuristic, not a proof of failure');
+  assert.equal(repository.passesRigidPendulumHeuristic, true);
   assert.ok(repository.marginRatio > 2);
   assert.match(G1_STAND_CONTROLLER_PROFILES[G1_CONTROLLERS.SOURCE_FIXSTAND].claim, /NOT to maintain free-base posture/);
   assert.match(G1_STAND_CONTROLLER_PROFILES[G1_CONTROLLERS.STAND].claim, /Not dynamic balance, not perturbation recovery/);
@@ -292,11 +292,12 @@ assert.equal(UNITREE_G1_STAND_GATE.forbidNonFootGroundContact, true);
 assert.equal(UNITREE_G1_STAND_GATE.forbidExternalSupport, true);
 
 {
-  const contact = (geoms) => ({ geoms, bodies: ['a', 'b'], distanceM: -0.001 });
+  const contact = (geoms) => ({ geoms, bodies: ['a', 'b'], distanceM: -0.001, normalForceN: 10 });
   const sample = (seconds, { z = 0.7809, tilt = 0.05, feet = true, nonFoot = 0, external = 0, effort = 5, actuation = true } = {}) => ({
     simulationTimeSeconds: seconds,
-    root: { mode: 'free-base', positionM: [0.01, 0, z], quaternionWxyz: [1, 0, 0, 0], linearVelocityMS: [0.001, 0, 0], angularVelocityRadS: [0.001, 0, 0], uprightZ: Math.cos(tilt), tiltRad: tilt },
-    joints: { left_knee_joint: { effortNm: effort, effortLimitNm: 139 } },
+    contactsReadable: true, engine: { gravity: [0, 0, -9.81] },
+    root: { mode: 'free-base', free: true, positionM: [0.01, 0, z], quaternionWxyz: [1, 0, 0, 0], linearVelocityMS: [0.001, 0, 0], angularVelocityRadS: [0.001, 0, 0], uprightZ: Math.cos(tilt), tiltRad: tilt },
+    joints: Object.fromEntries(G1_JOINT_ORDER.map((id, index) => [id, { effortNm: id === 'left_knee_joint' ? effort : 0, effortLimitNm: G1_EFFORT_LIMIT_NM[index] }])),
     contactClasses: {
       leftFootFloor: feet ? [contact(['left_foot_toe_medial', 'floor'])] : [],
       rightFootFloor: feet ? [contact(['right_foot_toe_medial', 'floor'])] : [],
@@ -311,6 +312,25 @@ assert.equal(UNITREE_G1_STAND_GATE.forbidExternalSupport, true);
     return evaluator.snapshot();
   };
   assert.equal(feed(new UnitreeG1StandEvaluator()).standing, true, 'a clean nominal run stands');
+  // The old evaluator accepted two snapshots six seconds apart and silently treated missing
+  // velocities/effort as zero. Neither is sufficient evidence of a continuously held stand.
+  const sparse = new UnitreeG1StandEvaluator();
+  sparse.observe(sample(2)); sparse.observe(sample(8));
+  assert.equal(sparse.snapshot().standing, false, 'two endpoint poses are not six seconds of standing evidence');
+  for (const corrupt of [
+    (o) => { delete o.root.angularVelocityRadS; },
+    (o) => { o.root.linearVelocityMS[0] = NaN; },
+    (o) => { o.root.mode = 'fixed-mounted'; o.root.free = false; },
+    (o) => { delete o.joints.left_knee_joint; },
+    (o) => { o.contactsReadable = false; },
+    (o) => { o.engine.gravity = [0, 0, 0]; },
+    (o) => { for (const side of ['leftFootFloor', 'rightFootFloor']) for (const c of o.contactClasses[side]) c.normalForceN = 0; },
+  ]) {
+    const evaluator = new UnitreeG1StandEvaluator();
+    for (let i = 0; i <= 400; ++i) { const o = sample(i * .02); corrupt(o); evaluator.observe(o); }
+    assert.equal(evaluator.snapshot().standing, false, 'incomplete or unsupported observations cannot earn standing');
+  }
+
   assert.equal(feed(new UnitreeG1StandEvaluator(), { feet: false }).checks.bothFeetSupportedThroughout, false);
   assert.equal(feed(new UnitreeG1StandEvaluator(), { nonFoot: 3 }).checks.noNonFootGroundContact, false);
   assert.equal(feed(new UnitreeG1StandEvaluator(), { external: 1 }).checks.noExternalOrFixtureSupport, false,

@@ -231,6 +231,7 @@ export class UnitreeG1PhysicalSimulator {
         quaternion_wxyz: observation.root?.quaternionWxyz ?? null,
         linear_velocity_m_s: observation.root?.linearVelocityMS ?? null,
         angular_velocity_rad_s: observation.root?.angularVelocityRadS ?? null,
+        frame: observation.root?.frame ?? null,
         upright_z: observation.root?.uprightZ ?? null,
         tilt_rad: observation.root?.tiltRad ?? null,
       },

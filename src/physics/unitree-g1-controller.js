@@ -48,9 +48,9 @@ export const G1_STAND_POSE_RAD = Object.freeze([
 ]);
 
 // --- free-base ankle stability criterion ----------------------------------------------------------
-// A joint-space PD holding an upright free-base humanoid is an inverted pendulum about the ankle:
-// the total ankle-pitch stiffness must exceed m g h of the centre of mass above the ankle axis, or
-// the posture diverges no matter how much torque headroom remains.
+// A rigid inverted-pendulum approximation gives an ankle-pitch stiffness scale m*g*h.
+// This is a gain-selection heuristic, not a necessary/sufficient stability theorem for the
+// articulated, contacting robot. Only the actual free-base trials establish the standing claim.
 export const G1_ANKLE_STABILITY_REQUIREMENT_NM_PER_RAD = G1_TOTAL_MASS_KG * 9.81 * G1_STAND_COM_HEIGHT_ABOVE_ANKLE_M;
 export const G1_ROBOBUDDY_ANKLE_KP = 250;
 // Bounded above by explicit-integration stability on the *unloaded* foot: with the foot's own
@@ -225,7 +225,7 @@ export function ankleStiffnessAudit(profile) {
     totalAnkleKpNmPerRad: total,
     requiredNmPerRad: G1_ANKLE_STABILITY_REQUIREMENT_NM_PER_RAD,
     marginRatio: total / G1_ANKLE_STABILITY_REQUIREMENT_NM_PER_RAD,
-    freeBaseStable: total > G1_ANKLE_STABILITY_REQUIREMENT_NM_PER_RAD,
+    passesRigidPendulumHeuristic: total > G1_ANKLE_STABILITY_REQUIREMENT_NM_PER_RAD,
   });
 }
 

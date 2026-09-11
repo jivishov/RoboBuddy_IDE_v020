@@ -68,6 +68,12 @@ jobs:
       - name: Unitree G1 source audit, controller, model package, capability and WebMCP contracts
         run: node tests/physics/unitree-g1-phase5d-core.mjs
 
+      - name: Independent G1 review regressions and shipped WASM worker
+        run: |
+          node tests/physics/session-epoch-publication-core.mjs
+          node tests/physics/unitree-g1-frames-core.mjs
+          node tests/physics/unitree-g1-worker-review.mjs
+
       - name: Repository static fidelity checks
         run: node tests/validate.mjs
 
@@ -75,7 +81,9 @@ jobs:
         run: python -m pip install --disable-pip-version-check --no-cache-dir "mujoco==3.11.0" numpy
 
       - name: JavaScript and native low-level motor law agree exactly
-        run: python tests/validate_unitree_g1_controller_parity.py
+        run: |
+          python tests/validate_unitree_g1_controller_parity.py
+          python tests/validate_unitree_g1_frames.py
 
       - name: Generate native Unitree G1 physical, negative and sensitivity evidence
         run: |

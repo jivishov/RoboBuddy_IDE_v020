@@ -242,6 +242,7 @@ class Plant:
             body = mujoco.mj_name2id(self.model, mujoco.mjtObj.mjOBJ_BODY, "pelvis")
             return {
                 "mode": "fixed-mounted",
+                "frame": "mujoco_world",
                 "positionM": [round(float(v), 6) for v in self.data.xpos[body]],
                 "quaternionWxyz": [round(float(v), 6) for v in self.data.xquat[body]],
                 "linearVelocityMS": [0.0, 0.0, 0.0],
@@ -252,10 +253,11 @@ class Plant:
         mujoco.mju_quat2Mat(matrix, self.data.qpos[3:7])
         return {
             "mode": "free-base",
+            "frame": "mujoco_world",
             "positionM": [round(float(v), 6) for v in self.data.qpos[0:3]],
             "quaternionWxyz": [round(float(v), 6) for v in self.data.qpos[3:7]],
             "linearVelocityMS": [round(float(v), 6) for v in self.data.qvel[0:3]],
-            "angularVelocityRadS": [round(float(v), 6) for v in self.data.qvel[3:6]],
+            "angularVelocityRadS": [round(float(v), 6) for v in matrix.reshape(3, 3) @ self.data.qvel[3:6]],
             "uprightZ": round(float(matrix.reshape(3, 3)[2, 2]), 6),
         }
 
@@ -375,20 +377,25 @@ class Plant:
             mujoco.mj_step(self.model, self.data)
 
     def run(self, duration, command_fn, sample_interval=OBSERVATION_INTERVAL_SECONDS, monitor=None):
+        total = duration / self.control_interval
+        cadence = sample_interval / self.control_interval
+        if abs(total - round(total)) > 1e-9 or round(total) < 1:
+            raise ValueError("run duration must be a positive whole number of controller intervals")
+        if abs(cadence - round(cadence)) > 1e-9 or round(cadence) < 1:
+            raise ValueError("sample interval must be a positive whole number of controller intervals")
+        total_ticks, sample_ticks = int(round(total)), int(round(cadence))
         samples = []
-        start = float(self.data.time)
-        next_sample = start
-        while float(self.data.time) - start < duration - 1e-12:
-            now = float(self.data.time)
-            self.apply(command_fn(now))
+        # Integer ticks prevent floating-point time comparisons from occasionally turning a
+        # declared 20 ms cadence into a 22 ms gap. The browser uses this same tick discipline.
+        for tick in range(1, total_ticks + 1):
+            self.apply(command_fn(float(self.data.time)))
             self.step_control_interval()
             if monitor:
                 monitor(self)
-            if float(self.data.time) >= next_sample:
+            if tick % sample_ticks == 0 or tick == total_ticks:
                 samples.append(self.observation())
-                next_sample += sample_interval
-        samples.append(self.observation())
         return samples
+
 
 
 def stand_commands(profile, start_pose, elapsed):
@@ -632,10 +639,15 @@ def evaluate_stand(samples, gate, worst):
     drifts = [math.hypot(float(s["root"]["positionM"][0]), float(s["root"]["positionM"][1])) for s in window]
     tilts = [math.acos(clamp(float(s["root"]["uprightZ"]), -1.0, 1.0)) for s in window]
     final = window[-1]
-    both_feet = all(bool(s["contacts"]["leftFootFloor"]) and bool(s["contacts"]["rightFootFloor"]) for s in window)
+    both_feet = all(all(any(c["normalForceN"] > 1e-6 for c in s["contacts"][side])
+                         for side in ("leftFootFloor", "rightFootFloor")) for s in window)
     non_foot = max(len(s["contacts"]["otherBodyFloor"]) for s in window)
     external_support = max(len(s["contacts"]["robotExternalObject"]) + len(s["contacts"]["robotFixture"]) for s in window)
+    times = [s["simulationTimeSeconds"] for s in window]
     checks = {
+        "continuousEvaluationEvidence": bool(times[0] <= start + OBSERVATION_INTERVAL_SECONDS + 1e-6
+            and times[-1] >= start + gate["evaluationSeconds"] - 1e-6
+            and all(0 <= b - a <= OBSERVATION_INTERVAL_SECONDS + 1e-6 for a, b in zip(times, times[1:]))),
         "pelvisHeightInBand": bool(min(heights) >= gate["pelvisHeightRangeM"][0] and max(heights) <= gate["pelvisHeightRangeM"][1]),
         "tiltWithinLimit": bool(max(tilts) <= gate["maxPelvisTiltRad"]),
         "driftWithinLimit": bool(max(drifts) <= gate["maxHorizontalDriftM"]),

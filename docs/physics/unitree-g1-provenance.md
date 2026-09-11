@@ -97,7 +97,7 @@ Commands are bounded before they reach the plant: position to the source joint r
 
 ## 7. Standing, and the one declared deviation
 
-A joint-space PD holding an upright free-base humanoid is an inverted pendulum about the ankle. Its total ankle-pitch stiffness must exceed `m·g·h` of the centre of mass above the ankle axis, which for this model is **231.3 N·m/rad**. Unitree's FixStand ankle gains of kp 40 / kd 2 give 80 N·m/rad, well under that bound.
+A rigid inverted-pendulum approximation gives an ankle stiffness scale of `m·g·h`, here **231.3 N·m/rad**. Unitree's FixStand gains give 80 N·m/rad. This comparison is a gain-selection heuristic, not a necessary or sufficient stability proof for an articulated robot with contacts. The source-gain failure and engineering-controller success below are established by the actual physical trials, not by this calculation.
 
 This is not a theoretical objection. Running the exact source FixStand gains on this model is a shipped trial: the robot topples in about 1.5 s, reaching 95° of tilt with seven non-foot ground contacts, at only 12 N·m of peak torque. It is retained as evidence, is reported under its own controller identity `unitree_g1_fixstand_source_v1`, and is deliberately not agent-reachable.
 

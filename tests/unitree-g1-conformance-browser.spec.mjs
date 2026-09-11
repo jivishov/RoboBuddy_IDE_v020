@@ -481,3 +481,40 @@ test('Unitree G1 Phase 5D browser MuJoCo reproduces the native physical gates', 
     contentType: 'application/json',
   });
 });
+
+
+// Independent review: reject malformed requests atomically at the actual worker boundary,
+// rather than relying only on the UI/Python validators to protect an engaged controller.
+test('G1 rejected commands preserve the active controller and expose real support forces', async ({ page }) => {
+  await page.goto('/physics-slice.html', { waitUntil: 'domcontentloaded' });
+  const result = await page.evaluate(async () => {
+    const { PhysicsSession } = await import('/src/physics/session.js');
+    const { BrowserMuJoCoBackend } = await import('/src/physics/browser-mujoco-backend.js');
+    const { UNITREE_G1_FREEBASE_SCENE } = await import('/src/physics/unitree-g1-scene.js');
+    const session = new PhysicsSession(new BrowserMuJoCoBackend({ workerUrl: new URL('/src/physics/unitree-g1-mujoco-worker.js', location.href) }));
+    try {
+      await session.loadScene(UNITREE_G1_FREEBASE_SCENE);
+      await session.sendCommand({ type: 'engage_stand' }, { maxSteps: 500 });
+      const before = await session.getObservation();
+      const errors = [];
+      for (const command of [
+        { type: 'set_joint_targets', targetsRad: { left_knee_joint: NaN } },
+        { type: 'set_lowlevel_targets', commands: { left_knee_joint: { kp: Infinity } } },
+      ]) {
+        try { await session.sendCommand(command, { maxSteps: 500 }); errors.push(null); }
+        catch (error) { errors.push(String(error)); }
+      }
+      const after = await session.getObservation();
+      const settled = await session.advanceSteps(500);
+      return { errors, before: before.controller, after: after.controller,
+        sameJoints: JSON.stringify(before.joints) === JSON.stringify(after.joints),
+        worldFrame: settled.root.frame,
+        supportN: ['leftFootFloor', 'rightFootFloor'].map((side) => settled.contactClasses[side].reduce((sum, c) => sum + c.normalForceN, 0)) };
+    } finally { session.dispose(); }
+  });
+  expect(result.errors.every((error) => error?.includes('finite'))).toBe(true);
+  expect(result.after).toEqual(result.before);
+  expect(result.sameJoints).toBe(true);
+  expect(result.worldFrame).toBe('mujoco_world');
+  for (const force of result.supportN) expect(force).toBeGreaterThan(1);
+});

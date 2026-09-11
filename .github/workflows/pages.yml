@@ -16,6 +16,7 @@ concurrency:
 
 jobs:
   deploy:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -25,6 +26,9 @@ jobs:
         uses: actions/checkout@v4
       - name: Configure Pages
         uses: actions/configure-pages@v5
+      - name: Record deployed source identity
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; fs.writeFileSync('physics-build.json', JSON.stringify({repository: process.env.GITHUB_REPOSITORY, commit: process.env.GITHUB_SHA, runId: process.env.GITHUB_RUN_ID}, null, 2) + '\n')"
       - name: Upload static site
         uses: actions/upload-pages-artifact@v3
         with:

@@ -1,3 +1,4 @@
+import { angularVelocityWorld } from './unitree-g1-frames.js';
 import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
 import { MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, sampledObservationCount } from './backend-contract.js';
 import {
@@ -182,6 +183,7 @@ function readContacts() {
   let readable = true;
   const collection = data?.contact;
   if (!collection) return { count, readable: count === 0, contacts, classified };
+  const force = new mujoco.DoubleBuffer(6);
   try {
     const available = typeof collection.size === 'function' ? Number(collection.size()) : count;
     if (available < count) readable = false;
@@ -195,7 +197,12 @@ function readContacts() {
         const name2 = nameFor('mjOBJ_GEOM', geom2);
         const body1 = nameFor('mjOBJ_BODY', Number(model.geom_bodyid[geom1]));
         const body2 = nameFor('mjOBJ_BODY', Number(model.geom_bodyid[geom2]));
-        const entry = { geoms: [name1, name2], bodies: [body1, body2], distanceM: Number(contact.dist ?? 0) };
+        // MuJoCo 3.11 WASM out parameters need a heap-backed DoubleBuffer. A JS
+        // Float64Array is copied into WASM and silently retains zeros on return.
+        mujoco.mj_contactForce(model, data, index, force);
+        const normalForceN = Number(force.GetView()[0]);
+        if (!Number.isFinite(normalForceN)) readable = false;
+        const entry = { geoms: [name1, name2], bodies: [body1, body2], distanceM: Number(contact.dist ?? 0), normalForceN };
         contacts.push(entry);
         const names = [name1, name2];
         if (names.includes('floor')) {
@@ -214,7 +221,7 @@ function readContacts() {
         }
       } finally { contact.delete?.(); }
     }
-  } finally { collection.delete?.(); }
+  } finally { force.delete(); collection.delete?.(); }
   return { count, readable, contacts, classified };
 }
 
@@ -238,7 +245,7 @@ function rootObservation() {
   };
   if (pelvis.freeDof != null) {
     record.linearVelocityMS = [Number(data.qvel[pelvis.freeDof]), Number(data.qvel[pelvis.freeDof + 1]), Number(data.qvel[pelvis.freeDof + 2])];
-    record.angularVelocityRadS = [Number(data.qvel[pelvis.freeDof + 3]), Number(data.qvel[pelvis.freeDof + 4]), Number(data.qvel[pelvis.freeDof + 5])];
+    record.angularVelocityRadS = angularVelocityWorld(quaternion, Array.from(data.qvel.slice(pelvis.freeDof + 3, pelvis.freeDof + 6)));
   }
   void w;
   return record;
@@ -291,7 +298,7 @@ function observation() {
     };
     if (body.freeDof != null) {
       record.linearVelocityMS = [Number(data.qvel[body.freeDof]), Number(data.qvel[body.freeDof + 1]), Number(data.qvel[body.freeDof + 2])];
-      record.angularVelocityRadS = [Number(data.qvel[body.freeDof + 3]), Number(data.qvel[body.freeDof + 4]), Number(data.qvel[body.freeDof + 5])];
+      record.angularVelocityRadS = angularVelocityWorld(record.quaternionWxyz, Array.from(data.qvel.slice(body.freeDof + 3, body.freeDof + 6)));
       record.freeBody = true;
     }
     bodies[name] = record;
@@ -373,24 +380,42 @@ function meshDependenciesFromXml(xml) {
   return unique;
 }
 
-async function buildModelVfs(mj, xml, modelUrl) {
+async function buildModelVfs(mj, xml, modelUrl, modelPackage) {
   if (typeof mj?.MjVFS !== 'function') throw new Error('Bundled MuJoCo runtime does not expose MjVFS');
   const files = meshDependenciesFromXml(xml);
   const assetDirectory = new URL('assets/', new URL('./', modelUrl));
   if (assetDirectory.origin !== self.location.origin) throw new Error('Unitree G1 mesh directory must be same-origin');
+  const pin = modelPackage.meshManifest;
+  if (pin?.asset !== 'models/unitree_g1/source/MESH_MANIFEST.json' || !/^[a-f0-9]{64}$/.test(pin?.sha256 || '')) {
+    throw new Error('Unitree G1 model requires its pinned mesh manifest');
+  }
+  const manifestUrl = new URL('../../' + pin.asset, import.meta.url);
+  const manifestResponse = await fetch(manifestUrl.href, { cache: 'no-store' });
+  if (!manifestResponse.ok) throw new Error(`Unitree G1 mesh manifest returned HTTP ${manifestResponse.status}`);
+  const manifestText = await manifestResponse.text();
+  if (await sha256Text(manifestText) !== pin.sha256) throw new Error('Unitree G1 mesh manifest SHA-256 mismatch');
+  const manifest = JSON.parse(manifestText);
+  if (manifest.schema !== 'robobuddy.unitree-g1.mesh-manifest.v1' || !Array.isArray(manifest.meshes)) throw new Error('Invalid Unitree G1 mesh manifest');
+  const meshes = new Map(manifest.meshes.map((entry) => [entry.mesh, entry]));
+  if (meshes.size !== manifest.meshes.length) throw new Error('Duplicate Unitree G1 mesh manifest entries');
+  // Fetch and verify before allocating/populating the VFS. A rejected parallel fetch can no
+  // longer leave other promises writing into a VFS that the failure handler already deleted.
+  const assets = await Promise.all(files.map(async (file) => {
+    const pin = meshes.get(file);
+    if (!pin || !/^[a-f0-9]{64}$/.test(pin.hullSha256)) throw new Error(`Unpinned Unitree G1 mesh ${file}`);
+    const url = new URL(file, assetDirectory);
+    if (url.origin !== self.location.origin || !url.pathname.startsWith(assetDirectory.pathname)) throw new Error(`Worker rejected escaping mesh ${file}`);
+    const response = await fetch(url.href, { cache: 'no-store' });
+    if (!response.ok) throw new Error(`Unitree G1 mesh ${file} returned HTTP ${response.status}`);
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    const digest = await crypto.subtle.digest('SHA-256', bytes);
+    const sha256 = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, '0')).join('');
+    if (bytes.byteLength !== pin.hullBytes || sha256 !== pin.hullSha256) throw new Error(`Unitree G1 mesh ${file} SHA-256 or byte-length mismatch`);
+    return { file, bytes };
+  }));
   const vfs = new mj.MjVFS();
   try {
-    await Promise.all(files.map(async (file) => {
-      const url = new URL(file, assetDirectory);
-      if (url.origin !== self.location.origin || !url.pathname.startsWith(assetDirectory.pathname)) {
-        throw new Error(`Worker rejected cross-origin or escaping Unitree G1 mesh dependency: ${file}`);
-      }
-      const response = await fetch(url.href, { cache: 'no-store' });
-      if (!response.ok) throw new Error(`Unitree G1 mesh ${file} returned HTTP ${response.status}`);
-      const bytes = new Uint8Array(await response.arrayBuffer());
-      if (!bytes.byteLength) throw new Error(`Unitree G1 mesh ${file} is empty`);
-      vfs.addBuffer(`assets/${file}`, bytes);
-    }));
+    for (const { file, bytes } of assets) vfs.addBuffer(`assets/${file}`, bytes);
     return vfs;
   } catch (error) {
     try { vfs.delete?.(); } catch { /* disposal is best effort */ }
@@ -408,7 +433,7 @@ async function load(modelPackage) {
   const xml = await fetch(modelUrl, { cache: 'no-store' }).then((response) => { if (!response.ok) throw new Error(`MuJoCo model returned HTTP ${response.status}`); return response.text(); });
   const modelSha256 = await sha256Text(xml);
   if (modelSha256 !== modelPackage.sha256) throw new Error(`Model SHA-256 mismatch for ${modelPackage.id}`);
-  const vfs = await buildModelVfs(mj, xml, modelUrl);
+  const vfs = await buildModelVfs(mj, xml, modelUrl, modelPackage);
   try { model = mj.MjModel.from_xml_string(xml, vfs); } finally { try { vfs.delete?.(); } catch { /* disposal is best effort */ } }
   if (!model) throw new Error(`MuJoCo failed to compile ${modelPackage.id}`);
   data = new mj.MjData(model);
@@ -457,20 +482,22 @@ function command(payload = {}) {
     const targets = payload.targetsRad;
     if (!targets || typeof targets !== 'object' || Array.isArray(targets) || !Object.keys(targets).length) throw new Error('set_joint_targets requires a non-empty targetsRad object');
     for (const jointId of Object.keys(targets)) if (!jointState.has(jointId)) throw new Error(`Unknown declared joint ${jointId}`);
-    controller = null;
-    commandProfile = G1_JOINT_HOLD_PROFILE;
     const positions = G1_JOINT_ORDER.map((jointId, index) => (jointId in targets ? Number(targets[jointId]) : accepted[index].positionRad));
     for (const value of positions) if (!Number.isFinite(value)) throw new TypeError('Every joint target must be finite radians');
-    accepted = holdCommandsAt(positions);
+    const nextAccepted = holdCommandsAt(positions);
+    // Validate the complete request before changing the active controller or command vector.
+    // A rejected command must not silently disengage a physically supporting standing controller.
+    controller = null;
+    commandProfile = G1_JOINT_HOLD_PROFILE;
+    accepted = nextAccepted;
   } else if (payload.type === 'set_lowlevel_targets') {
     const commands = payload.commands;
     if (!commands || typeof commands !== 'object' || Array.isArray(commands) || !Object.keys(commands).length) throw new Error('set_lowlevel_targets requires a non-empty commands object');
     for (const jointId of Object.keys(commands)) if (!jointState.has(jointId)) throw new Error(`Unknown declared joint ${jointId}`);
-    controller = null;
-    commandProfile = G1_LOWLEVEL_COMMAND_PROFILE;
-    accepted = G1_JOINT_ORDER.map((jointId, index) => {
+    const nextAccepted = G1_JOINT_ORDER.map((jointId, index) => {
       const request = commands[jointId];
-      if (!request) return accepted[index];
+      if (!(jointId in commands)) return accepted[index];
+      if (!request || typeof request !== 'object' || Array.isArray(request)) throw new TypeError(`Low-level command ${jointId} must be an object`);
       return boundLowLevelCommand(jointId, {
         positionRad: request.positionRad ?? accepted[index].positionRad,
         velocityRadS: request.velocityRadS ?? 0,
@@ -479,6 +506,9 @@ function command(payload = {}) {
         kd: request.kd ?? G1_JOINT_HOLD_PROFILE.kd[index],
       });
     });
+    controller = null;
+    commandProfile = G1_LOWLEVEL_COMMAND_PROFILE;
+    accepted = nextAccepted;
   } else if (payload.type === 'engage_stand') {
     const profile = requireProfile(String(payload.controllerId || G1_CONTROLLERS.STAND));
     // Exactly Unitree's State_FixStand entry: latch the measured joint vector, then interpolate.

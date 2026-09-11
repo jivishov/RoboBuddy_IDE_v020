@@ -32,14 +32,16 @@ export class PhysicsSession {
     assertPhysicalScene(scene);
     this.epoch += 1;
     this.activeCommandId = null;
+    const context = this.#context();
     try {
-      const result = await this.backend.loadScene(structuredClone(scene), this.#context());
+      const result = await this.backend.loadScene(structuredClone(scene), context);
+      this.#assertCurrent(context);
       this.sceneRevision = result?.sceneRevision ?? scene.revision;
       this.robotId = result?.robotId ?? scene.robotId;
-      this.#publishObservation(result?.observation, 'loadScene');
+      this.#publishObservation(result?.observation, 'loadScene', context);
       return { apiVersion: PHYSICS_BACKEND_API_VERSION, ...this.#context(), ...result };
     } catch (error) {
-      this.#clearLoadedState();
+      if (this.epoch === context.epoch && !this.disposed) this.#clearLoadedState();
       throw error;
     }
   }
@@ -48,24 +50,27 @@ export class PhysicsSession {
     this.#assertLoaded();
     this.epoch += 1;
     this.activeCommandId = null;
-    const result = await this.#runLoadedOperation(() => this.backend.reset({ ...structuredClone(options), ...this.#context() }));
-    this.#publishObservation(result, 'reset');
+    const context = this.#context();
+    const result = await this.#runLoadedOperation(() => this.backend.reset({ ...structuredClone(options), ...context }), context);
+    this.#publishObservation(result, 'reset', context);
     return { ...this.#context(), result };
   }
 
   async sendCommand(command, { commandId = uid('cmd'), maxSteps = null } = {}) {
     this.#assertLoaded();
+    const context = this.#context();
     const envelope = makeCommandEnvelope({
-      ...this.#context(),
+      ...context,
       commandId,
       sceneRevision: this.sceneRevision,
       robotId: this.robotId,
       command,
       maxSteps,
     });
-    const result = await this.#runLoadedOperation(() => this.backend.acceptCommand(envelope));
+    const result = await this.#runLoadedOperation(() => this.backend.acceptCommand(envelope), context);
+    this.#assertCurrent(context);
     this.activeCommandId = envelope.commandId;
-    this.#publishObservation(result?.observation, 'sendCommand');
+    this.#publishObservation(result?.observation, 'sendCommand', context);
     return result;
   }
 
@@ -77,18 +82,20 @@ export class PhysicsSession {
   async applySetup(payload) {
     this.#assertLoaded();
     if (typeof this.backend.applySetup !== 'function') throw new Error('This physics backend declares no setup path');
-    const observation = await this.#runLoadedOperation(() => this.backend.applySetup(structuredClone(payload), this.#context()));
-    this.#publishObservation(observation, 'applySetup');
+    const context = this.#context();
+    const observation = await this.#runLoadedOperation(() => this.backend.applySetup(structuredClone(payload), context), context);
+    this.#publishObservation(observation, 'applySetup', context);
     return observation;
   }
 
   async advanceSteps(steps) {
     this.#assertLoaded();
     if (!Number.isInteger(steps) || steps < 1) throw new RangeError('steps must be a positive integer');
+    const context = this.#context();
     const batch = this.observationBatchSteps;
     if (!batch || steps <= batch) {
-      const observation = await this.#runLoadedOperation(() => this.backend.advanceSteps(steps, this.#context()));
-      this.#publishObservation(observation, 'advanceSteps');
+      const observation = await this.#runLoadedOperation(() => this.backend.advanceSteps(steps, context), context);
+      this.#publishObservation(observation, 'advanceSteps', context);
       return observation;
     }
 
@@ -96,14 +103,14 @@ export class PhysicsSession {
     // but publish intermediate ground-truth observations at a declared physics-step
     // cadence. This prevents task evaluators/controllers from losing short-lived
     // physical contacts merely because a caller requested a long simulation interval.
-    if (supportsSampledAdvance(this.backend)) return this.#advanceSampled(steps, batch);
+    if (supportsSampledAdvance(this.backend)) return this.#advanceSampled(steps, batch, context);
 
     let remaining = steps;
     let observation = null;
     while (remaining > 0) {
       const chunk = Math.min(batch, remaining);
-      observation = await this.#runLoadedOperation(() => this.backend.advanceSteps(chunk, this.#context()));
-      this.#publishObservation(observation, 'advanceSteps');
+      observation = await this.#runLoadedOperation(() => this.backend.advanceSteps(chunk, context), context);
+      this.#publishObservation(observation, 'advanceSteps', context);
       remaining -= chunk;
     }
     return observation;
@@ -114,16 +121,16 @@ export class PhysicsSession {
   // no longer costs one cross-thread round trip per sample. The session stays the sampling
   // policy owner: it declares the cadence, validates ordering, and publishes each real
   // observation through the ordinary subscriber mechanism.
-  async #advanceSampled(steps, sampleEverySteps) {
+  async #advanceSampled(steps, sampleEverySteps, context) {
     const maxStepsPerRequest = Math.min(sampleEverySteps * MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, MAX_ADVANCE_STEPS_PER_REQUEST);
     let remaining = steps;
     let previousSimulationTimeSeconds = null;
     let finalObservation = null;
     while (remaining > 0) {
       const requested = Math.min(maxStepsPerRequest, remaining);
-      const result = await this.#runLoadedOperation(() => this.backend.advanceStepsObserved(requested, { ...this.#context(), sampleEverySteps }));
+      const result = await this.#runLoadedOperation(() => this.backend.advanceStepsObserved(requested, { ...context, sampleEverySteps }), context);
       const { observations, finalObservation: last } = assertSampledObservations(result, { stepCount: requested, sampleEverySteps, previousSimulationTimeSeconds });
-      for (const observation of observations) this.#publishObservation(observation, 'advanceSteps');
+      for (const observation of observations) this.#publishObservation(observation, 'advanceSteps', context);
       previousSimulationTimeSeconds = Number(last.simulationTimeSeconds);
       finalObservation = last;
       remaining -= requested;
@@ -135,36 +142,43 @@ export class PhysicsSession {
 
   async getObservation(options = {}) {
     this.#assertLoaded();
-    const observation = await this.#runLoadedOperation(() => this.backend.getObservation({ ...options, ...this.#context() }));
-    this.#publishObservation(observation, 'getObservation');
+    const context = this.#context();
+    const observation = await this.#runLoadedOperation(() => this.backend.getObservation({ ...options, ...context }), context);
+    this.#publishObservation(observation, 'getObservation', context);
     return observation;
   }
 
   async getDiagnostics() {
     this.#assertLive();
-    const diagnostics = await this.backend.getDiagnostics(this.#context());
+    const context = this.#context();
+    const diagnostics = await this.backend.getDiagnostics(context);
+    this.#assertCurrent(context);
     if (diagnostics?.loaded === false) this.#clearLoadedState();
     return diagnostics;
   }
 
   async pause() {
     this.#assertLoaded();
-    const observation = await this.#runLoadedOperation(() => this.backend.pause(this.#context()));
-    this.#publishObservation(observation, 'pause');
+    const context = this.#context();
+    const observation = await this.#runLoadedOperation(() => this.backend.pause(context), context);
+    this.#publishObservation(observation, 'pause', context);
     return observation;
   }
 
   async resume() {
     this.#assertLoaded();
-    const observation = await this.#runLoadedOperation(() => this.backend.resume(this.#context()));
-    this.#publishObservation(observation, 'resume');
+    const context = this.#context();
+    const observation = await this.#runLoadedOperation(() => this.backend.resume(context), context);
+    this.#publishObservation(observation, 'resume', context);
     return observation;
   }
 
   async cancelRun(reason = 'cancelled') {
     this.#assertLoaded();
     this.epoch += 1;
-    const result = await this.#runLoadedOperation(() => this.backend.cancelRun({ reason, ...this.#context() }));
+    const context = this.#context();
+    const result = await this.#runLoadedOperation(() => this.backend.cancelRun({ reason, ...context }), context);
+    this.#assertCurrent(context);
     this.activeCommandId = null;
     if (result?.reloadRequired) this.#clearLoadedState();
     return result;
@@ -188,7 +202,8 @@ export class PhysicsSession {
     return { sessionId: this.sessionId, epoch: this.epoch };
   }
 
-  #publishObservation(observation, source) {
+  #publishObservation(observation, source, context) {
+    this.#assertCurrent(context);
     if (!observation || typeof observation !== 'object') return;
     const event = Object.freeze({
       source: String(source),
@@ -199,17 +214,33 @@ export class PhysicsSession {
       observation: structuredClone(observation),
     });
     for (const listener of this.observationListeners) {
+      this.#assertCurrent(context);
       try { listener(event); } catch { /* Observation consumers cannot become simulation authorities. */ }
+    }
+    this.#assertCurrent(context);
+  }
+
+  // An operation belongs to the epoch it started in, including every sample and every chunk.
+  // Backends also reject stale RPCs, but that cannot protect publication after an RPC returns:
+  // an observation subscriber may synchronously reset/dispose the session during delivery.
+  #assertCurrent(context) {
+    if (this.disposed || !context || context.epoch !== this.epoch || context.sessionId !== this.sessionId) {
+      throw new Error('Stale physics session operation: its epoch was superseded');
     }
   }
 
-  async #runLoadedOperation(operation) {
+  async #runLoadedOperation(operation, context) {
+    this.#assertCurrent(context);
     try {
-      return await operation();
+      const result = await operation();
+      this.#assertCurrent(context);
+      return result;
     } catch (error) {
+      // A late failure is not evidence that the replacement scene has failed.
+      if (this.disposed || context.epoch !== this.epoch) throw error;
       try {
-        const diagnostics = await this.backend.getDiagnostics(this.#context());
-        if (diagnostics?.loaded === false) this.#clearLoadedState();
+        const diagnostics = await this.backend.getDiagnostics(context);
+        if (!this.disposed && context.epoch === this.epoch && diagnostics?.loaded === false) this.#clearLoadedState();
       } catch {
         // Preserve the original operation failure. A diagnostic failure is not authority evidence.
       }

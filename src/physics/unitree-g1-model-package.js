@@ -74,6 +74,7 @@ function g1Package({ id, modelId, asset, sha256, variant, rootMode, controllers,
   const freeRoot = rootMode === 'free-base';
   return {
     id, modelId, asset, sha256,
+    meshManifest: { asset: 'models/unitree_g1/source/MESH_MANIFEST.json', sha256: 'a7a70ed60b67b018f85df632080f7320c72ad8974badedc722f3b76eb2a60e91' },
     robotId: UNITREE_G1_ROBOT_ID,
     source: {
       url: SOURCE_URL,
