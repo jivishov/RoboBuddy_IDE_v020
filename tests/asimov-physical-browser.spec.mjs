@@ -66,7 +66,7 @@ test('Asimov IDE selector, live Python and opt-in WebMCP share the visible physi
  await page.goto('/?ci=asimov-physical',{waitUntil:'domcontentloaded'});
  await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
  await expect(page.locator('#robotSelect')).toHaveValue('asimov');
- expect(await page.locator('#taskSelect option').count()).toBe(3);
+ expect(await page.locator('#taskSelect option').count()).toBe(6);
  await expect(page.locator('#simCanvas')).toHaveAttribute('data-asimov-root-mode','fixed-mounted');
  await page.evaluate(async()=>{const app=window.__robobuddyCi.app; await app.run();});
  const python=await page.evaluate(()=>({out:window.__robobuddyCi.app.console,diagnostics:window.__robobuddyCi.app.sim.backend.getState()}));
@@ -92,4 +92,56 @@ test('Asimov IDE selector, live Python and opt-in WebMCP share the visible physi
  await page.locator('#robotSelect').selectOption('unitree');
  await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
  await expect(page.locator('#simCanvas')).not.toHaveAttribute('data-asimov-root-mode',/.+/);
+});
+
+test('Asimov actuator experiment: sensor isolation, continuous caps and physical standing via Python and WebMCP',async({page})=>{
+ test.setTimeout(600000);
+ await page.addInitScript(()=>{
+  localStorage.setItem('rbide.profile','asimov');localStorage.setItem('rbide.task.asimov','asimov-actuator-mounted');
+  Object.defineProperty(document,'modelContext',{configurable:true,value:{registerTool(){return Promise.resolve();}}});
+ });
+ await page.goto('/?ci=asimov-physical',{waitUntil:'domcontentloaded'});
+ await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
+ await expect(page.locator('#simCanvas')).toHaveAttribute('data-asimov-root-mode','fixed-mounted');
+ const lab=await page.evaluate(async()=>{
+  const app=window.__robobuddyCi.app;await app.run();
+  const b=app.sim.backend;
+  return {out:app.console,state:b.getState(),audit:b.getPresentationAlignment(),sensors:b.getSensorObservation()};
+ });
+ expect(lab.out.stderr).toBe('');expect(lab.out.stdout).toContain('Sensor profile');
+ expect(lab.state.actuator_model.continuousOnly).toBe(true);expect(lab.state.actuator_model.configurationSha256).toMatch(/^[0-9a-f]{64}$/);
+ expect(lab.sensors.view).toBe('hardware_like');expect(lab.sensors.root).toBeUndefined();expect(lab.sensors.bodies).toBeUndefined();
+ expect(lab.audit.maxBodyErrorMm).toBeLessThan(.001);
+ await page.screenshot({path:'test-results/asimov-actuator-lab.png'});
+ await page.locator('#taskSelect').selectOption('asimov-standing');
+ await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
+ const standing=await page.evaluate(async()=>{
+  const app=window.__robobuddyCi.app;await app.run();return {out:app.console,state:app.sim.getState(),evaluation:app.sim.getTaskEvaluation()};
+ });
+ expect(standing.out.stderr).toBe('');expect(standing.state.controller_mode).toBe('asimov-stance-feedback-v1');
+ expect(standing.evaluation.status).toBe('passed');expect(standing.evaluation.success).toBe(true);expect(standing.evaluation.validDwellSeconds).toBeGreaterThan(10);
+ await expect(page.locator('#simActionLabel')).toHaveText('Physical task complete');
+ await page.screenshot({path:'test-results/asimov-standing-trial.png'});
+ await page.locator('#agentAccessControl button[data-agent-access="assist"]').click();
+ const agent=await page.evaluate(async()=>{
+  const {app,agentFacade:f}=window.__robobuddyCi;
+  const {executeAsimovPhysicalControl:execute,WEBMCP_ASIMOV_SCHEMA_VERSION:v}=await import('/src/webmcp/asimov-physical-control.js');
+  const sensors=await execute(f,{schema_version:v,command:'read_sensors'},null,f.registrationEpoch);
+  await execute(f,{schema_version:v,command:'stop'},null,f.registrationEpoch);
+  const stopped=app.sim.getTaskEvaluation();
+  await execute(f,{schema_version:v,command:'reset'},null,f.registrationEpoch);
+  const start=await execute(f,{schema_version:v,command:'engage_stand'},null,f.registrationEpoch);
+  await execute(f,{schema_version:v,command:'advance',advance_seconds:.2},null,f.registrationEpoch);
+  return {sensors,stopped,start,state:app.sim.getState()};
+ });
+ expect(agent.sensors.sensorObservation.view).toBe('hardware_like');expect(agent.stopped.status).toBe('failed');
+ expect(agent.start.observedState.standing_assessment.status).toBe('running');expect(agent.state.simulation_time_s).toBeCloseTo(.2,8);
+ await page.locator('#taskSelect').selectOption('asimov-mounted');await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
+ const reference=await page.evaluate(async()=>{
+  const {app,agentFacade:f}=window.__robobuddyCi;
+  const {executeAsimovPhysicalControl:execute,WEBMCP_ASIMOV_SCHEMA_VERSION:v}=await import('/src/webmcp/asimov-physical-control.js');
+  let blocked=false;try{await execute(f,{schema_version:v,command:'engage_stand'},null,f.registrationEpoch);}catch{blocked=true;}
+  return {blocked,state:app.sim.getState()};
+ });
+ expect(reference.blocked).toBe(true);expect(reference.state.actuator_model).toBeUndefined();
 });

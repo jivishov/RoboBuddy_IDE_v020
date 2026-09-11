@@ -100,3 +100,7 @@ MJCF, original URDF and generated source audit. Model/mesh derivations are not
 relicensed as MIT. Original RoboBuddy glue/fixtures remain separately scoped by
 the repository license. Upstream source and corresponding changes are publicly
 available in this repository and in the pinned upstream repository.
+
+## Subsequent actuator experiment
+
+The three source-reference workspaces above remain unchanged. Separately selected Actuator Lab, Actuator Free-base and Standing Trial workspaces introduce the uncalibrated profile documented in [asimov-actuator-fidelity.md](asimov-actuator-fidelity.md). They do not supersede source-reference evidence or establish hardware equivalence. In particular, ankle motor-space actuation is still gated on compatible numeric transmission data.

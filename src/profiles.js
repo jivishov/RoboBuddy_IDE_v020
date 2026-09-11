@@ -21,7 +21,7 @@ export const PROFILES = Object.freeze({
     simulationMode:'physical_mujoco', visual:{robotId:'asimov_1_23dof_physical',repository:'menloresearch/asimov-1',revision:ASIMOV_SOURCE.revision},
     limits:Object.freeze(Object.fromEntries(ASIMOV_SOURCE.joints.map(j=>[j.id,d(j.rangeRad.map(v=>v*180/Math.PI))]))),
     rest:Object.freeze(Object.fromEntries(ASIMOV_SOURCE.joints.map(j=>[j.id,j.referenceRad*180/Math.PI]))), units:Object.freeze({}),
-    source:'Pinned Menlo Asimov 1: 23 source hinges, fixed neck, source inertias and collision primitives; ideal bounded torque actuation with estimated PD gains.',
+    source:'Pinned Menlo Asimov 1: 23 source hinges, fixed neck, source inertias and collision primitives; reference actuation and separately labeled actuator/standing experiments.',
     task:{title:'Physical joint and gravity laboratory',steps:['Choose mounted or free-base dynamics','Run live Python in the shared physics session','Inspect measured joints and contacts'],limitations:'No verified walking, balance recovery, grasping or hardware calibration.'},
   }),
   so101: Object.freeze({
@@ -93,7 +93,7 @@ export function fidelityNoticeFor(profileId, { physical = true } = {}) {
   }
   if (profileId === 'unitree') return 'The Unitree G1 physical workspace uses one browser MuJoCo authority on the pinned 29-DoF fixed-rubber-hand model. Joint commands become bounded actuator torque, never state assignment. Standing is a verified unsupported posture hold; walking, perturbation recovery and dexterous hands are unsupported. Numerical verification is not hardware calibration.';
   if (profileId === 'microduck') return 'MicroDuck physical tasks use one browser MuJoCo authority, source-derived collision plants and bounded policy control. Rendered body poses follow measured simulation state. Roller modes are unsupported; simulator verification is not hardware calibration.';
-  if (profileId === 'asimov') return 'Asimov 1 uses one browser MuJoCo authority with the pinned Menlo masses, inertias, collision primitives and 23 movable joints; the two source neck bodies remain fixed. Full-resolution source meshes follow observed body poses. Ideal torque motors and PD gains are simulator estimates. No trained walking, grasping or hardware-calibration claim is made.';
+  if (profileId === 'asimov') return 'Asimov 1 uses one browser MuJoCo authority with the pinned Menlo masses, inertias, collision primitives and 23 movable joints; the two source neck bodies remain fixed. Full-resolution source meshes follow observed body poses. Reference ideal motors and spec-informed experimental profiles remain uncalibrated. A separately declared flat-floor standing trial is available. No trained walking, grasping or hardware-calibration claim is made.';
   return FIDELITY_NOTICE;
 }
 

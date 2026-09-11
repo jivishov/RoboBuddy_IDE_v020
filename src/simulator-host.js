@@ -128,6 +128,10 @@ export class SimulatorHost {
   advanceBase(...args) { return this.backend?.advanceBase?.(...args); }
   getTelemetry() { return this.backend?.getTelemetry?.() || {}; }
   getContacts() { return this.backend?.getContacts?.() || {}; }
+  getSensorObservation() {
+    if(typeof this.backend?.getSensorObservation!=='function')throw new Error('No sensor sensitivity view on this backend');
+    return this.backend.getSensorObservation();
+  }
   getTaskEvaluation() { return this.backend?.getTaskEvaluation?.() || null; }
   getPhysicalSession() { return this.backend?.getPhysicalSession?.() || null; }
   getPhysicalAuthorityToken() { return this.backend?.getPhysicalAuthorityToken?.() || null; }

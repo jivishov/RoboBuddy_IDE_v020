@@ -1,11 +1,17 @@
+import { ASIMOV_ACTUATOR_PROFILE, ASIMOV_SENSOR_PROFILE } from './asimov-actuator-profile.js';
+import { AsimovActuatorPlant } from './asimov-actuator-plant.js';
+import { AsimovSensorModel } from './asimov-sensor-model.js';
+import { ASIMOV_STANDING_CONTROLLER, AsimovStandingEvaluator, stanceFeedback } from './asimov-standing.js';
+import { ASIMOV_SOURCE } from './asimov-generated.js';
 import { angularVelocityWorld } from './asimov-frames.js';
 import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
 import { MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, sampledObservationCount } from './backend-contract.js';
 import { ASIMOV_JOINT_ORDER, ASIMOV_FOOT_CONTACT_GEOMS, ASIMOV_JOINT_HOLD_PROFILE, ASIMOV_LOWLEVEL_COMMAND_PROFILE, ASIMOV_LOWLEVEL_CONTROL_INTERVAL_SECONDS, boundLowLevelCommand, lowLevelTorqueNm } from './asimov-controller.js';
 
 // Asimov authoritative worker. The audited fleet RPC/session contract is reused,
-// but model identity and controller parameters are exclusively Asimov's. Only ctrl
-// is written during execution. Reset is the explicitly declared model keyframe.
+// but model identity and controller parameters are exclusively Asimov's. Control
+// writes motor ctrl and declared passive joint friction, never root or joint state.
+// Reset is the explicitly declared model keyframe.
 // Visual STLs have no mass/contact in source and are rendered outside the engine.
 
 const MUJOCO_BASE_URL = new URL('../../assets/microduck/runtime/mujoco/', import.meta.url);
@@ -35,6 +41,9 @@ let actuationEnabled = true;
 let setupLog = [];
 // Distinguish the estimated hold controller from caller-specified low-level commands.
 let commandProfile = ASIMOV_JOINT_HOLD_PROFILE;
+let actuatorPlant = null;
+let sensorModel = null;
+let standingEvaluator = new AsimovStandingEvaluator();
 
 function reply(id, ok, payload = null, error = null) { postMessage({ id, ok, payload, error }); }
 async function ensureMuJoCo() { if (mujoco) return mujoco; mujoco = await loadMujoco({ locateFile: (path) => new URL(path, MUJOCO_BASE_URL).href }); return mujoco; }
@@ -64,6 +73,9 @@ function resolveModelAddresses(modelSha256) {
     assertClose(range, joint.rangeRad, `Joint ${joint.id} range`);
     assertClose(axis, joint.axis, `Joint ${joint.id} axis`);
     assertClose(forceRange, [-joint.effortLimitNm, joint.effortLimitNm], `Joint ${joint.id} actuator force range`);
+    if (descriptor.actuatorProfileId) {
+      assertClose([Number(model.dof_armature[dof]),Number(model.dof_damping[dof]),Number(model.dof_frictionloss[dof])], [ASIMOV_SOURCE.joints[index].armature,0,0], `Joint ${joint.id} inertia/dissipation`);
+    }
     jointState.set(joint.id, { id, index, qpos, dof, range, axis });
   }
   for (const actuator of descriptor.actuators) {
@@ -145,6 +157,18 @@ function holdCommandsAt(positions, profile = ASIMOV_JOINT_HOLD_PROFILE) {
  * Its cadence follows the physics clock, never the rendering frame rate.
  */
 function applyControlLaw() {
+  if (actuatorPlant) {
+    const feedback = controller?.kind === 'standing' ? stanceFeedback(rootObservation()) : null;
+    const output = actuatorPlant.step(accepted, ASIMOV_JOINT_ORDER.map((_,i)=>measured(i)), actuationEnabled, feedback);
+    for (let i=0;i<ASIMOV_JOINT_ORDER.length;i++) {
+      const id=ASIMOV_JOINT_ORDER[i];
+      data.ctrl[actuatorState.get(id).id]=output[i].motorNm;
+      // Explicit passive joint friction; it persists when electric actuation is off.
+      // No root force/velocity, target state or object state is changed.
+      data.qfrc_applied[jointState.get(id).dof]=output[i].frictionNm;
+    }
+    return;
+  }
   for (let index = 0; index < ASIMOV_JOINT_ORDER.length; index += 1) {
     const command = accepted[index];
     const actuator = actuatorState.get(command.jointId);
@@ -300,6 +324,7 @@ function observation() {
       : { id: commandProfile.id, label: commandProfile.label, mode: commandProfile === ASIMOV_LOWLEVEL_COMMAND_PROFILE ? 'low-level' : 'joint-hold', engagedAtSeconds: null, claim: commandProfile.claim },
     actuationEnabled,
     setupLog: [...setupLog],
+    ...(actuatorPlant ? {actuatorModel: {...actuatorPlant.snapshot(),configurationSha256:modelInfo.actuatorProfileSha256,sensorConfigurationSha256:modelInfo.sensorProfileSha256}, sensorObservation: sensorModel.observation(Number(data.time)), standingAssessment: standingEvaluator.snapshot()} : {}),
   };
 }
 
@@ -315,6 +340,9 @@ function applyDeclaredInitialState() {
   commandProfile = ASIMOV_JOINT_HOLD_PROFILE;
   actuationEnabled = true;
   setupLog = [];
+  actuatorPlant = descriptor.actuatorProfileId ? new AsimovActuatorPlant(modelInfo.timestepSeconds) : null;
+  sensorModel = actuatorPlant ? new AsimovSensorModel() : null;
+  standingEvaluator.reset();
   if (!['joint-hold', 'passive'].includes(descriptor.initialCommand)) {
     throw new Error(`Model ${descriptor.id} declares an unknown initialCommand ${descriptor.initialCommand}`);
   }
@@ -330,6 +358,7 @@ function applyDeclaredInitialState() {
   logSetup({ event: 'initialCommand', initialCommand, detail: initialCommand === 'passive' ? 'every actuator commanded to zero torque' : 'bounded joint hold at the declared initial joint positions, at the repository-estimated PD gains' });
   for (const actuator of actuatorState.values()) data.ctrl[actuator.id] = 0;
   mujoco.mj_forward(model, data);
+  if (sensorModel) sampleSensors();
   return observation();
 }
 
@@ -337,6 +366,7 @@ function disposeModel() {
   try { data?.delete?.(); } catch { /* disposal is best effort */ }
   try { model?.delete?.(); } catch { /* disposal is best effort */ }
   data = null; model = null; descriptor = null; modelInfo = null;
+  actuatorPlant=null; sensorModel=null; standingEvaluator.reset();
   jointState = new Map(); actuatorState = new Map(); bodyState = new Map();
   accepted = []; controller = null; commandProfile = ASIMOV_JOINT_HOLD_PROFILE; actuationEnabled = true; paused = false; setupLog = [];
 }
@@ -360,6 +390,9 @@ async function load(modelPackage) {
   if (!modelPackage?.id || !modelPackage?.asset || !modelPackage?.sha256 || !Array.isArray(modelPackage.joints) || !Array.isArray(modelPackage.actuators)) {
     throw new Error('Worker requires a validated registered model package descriptor');
   }
+  if (modelPackage.actuatorProfileId && modelPackage.actuatorProfileId !== ASIMOV_ACTUATOR_PROFILE.id) throw new Error('Unknown Asimov actuator profile');
+  if (modelPackage.sensorProfileId && modelPackage.sensorProfileId !== ASIMOV_SENSOR_PROFILE.id) throw new Error('Unknown Asimov sensor profile');
+  if (modelPackage.standingControllerId && (!modelPackage.actuatorProfileId || modelPackage.standingControllerId !== ASIMOV_STANDING_CONTROLLER.id || modelPackage.rootMode !== 'free-base')) throw new Error('Invalid standing model/controller pair');
   const modelUrl = validatedModelUrl(modelPackage.asset);
   const mj = await ensureMuJoCo();
   disposeModel();
@@ -373,10 +406,28 @@ async function load(modelPackage) {
   if (!data) throw new Error(`MuJoCo failed to allocate data for ${modelPackage.id}`);
   descriptor = structuredClone(modelPackage);
   resolveModelAddresses(modelSha256);
+  if (descriptor.actuatorProfileId) {
+    modelInfo.actuatorProfileSha256=await sha256Text(JSON.stringify(ASIMOV_ACTUATOR_PROFILE));
+    modelInfo.sensorProfileSha256=await sha256Text(JSON.stringify(ASIMOV_SENSOR_PROFILE));
+  }
   return applyDeclaredInitialState();
 }
 
-function doPhysicsStep() { applyControlLaw(); mujoco.mj_step(model, data); }
+function sampleSensors() {
+  const joints=Object.fromEntries(ASIMOV_JOINT_ORDER.map((id,i)=>[id,measured(i)]));
+  sensorModel.sample(Number(data.time), joints, rootObservation());
+}
+function doPhysicsStep() {
+  applyControlLaw(); mujoco.mj_step(model, data);
+  if (actuatorPlant) {
+    // State-derived observations are synchronized, and their histories are updated
+    // by physics time even when no UI or Python caller reads them.
+    mujoco.mj_forward(model,data);
+    if (![...data.qpos,...data.qvel].every(Number.isFinite)) throw new Error('Non-finite Asimov physical state');
+    sampleSensors();
+    if (standingEvaluator.startedAt != null) standingEvaluator.update(Number(data.time),rootObservation(),readContacts(),actuationEnabled,controller?.kind==='standing');
+  }
+}
 
 function step(count = 1) {
   if (!model || !data) throw new Error('No MuJoCo model is loaded');
@@ -403,7 +454,19 @@ function stepSampled(count = 1, sampleEverySteps = 1) {
 
 function command(payload = {}) {
   if (!model || !data || !descriptor || !modelInfo) throw new Error('No MuJoCo model is loaded');
-  if (payload.type === 'set_joint_targets') {
+  if (payload.type === 'engage_stand') {
+    if (!actuatorPlant || descriptor.standingControllerId !== ASIMOV_STANDING_CONTROLLER.id || payload.controllerId !== ASIMOV_STANDING_CONTROLLER.id) throw new Error('Standing controller is only declared in the experimental standing scene');
+    if (Object.keys(payload).some(k=>!['type','controllerId'].includes(k))) throw new Error('Unexpected standing command field');
+    if (standingEvaluator.startedAt != null) throw new Error('Reset explicitly before starting a new standing trial');
+    if (!actuationEnabled) throw new Error('Standing cannot engage with actuation disabled');
+    accepted=holdCommandsAt(ASIMOV_SOURCE.joints.map(j=>j.referenceRad));
+    controller={kind:'standing',profile:ASIMOV_STANDING_CONTROLLER,startedAtSeconds:Number(data.time)};
+    standingEvaluator.start(Number(data.time),rootObservation());
+  } else if (payload.type === 'release_stand') {
+    if (descriptor.standingControllerId !== ASIMOV_STANDING_CONTROLLER.id) throw new Error('No standing controller in this scene');
+    accepted=holdCommandsAt(ASIMOV_JOINT_ORDER.map((_,i)=>measured(i).positionRad));
+    controller=null; commandProfile=ASIMOV_JOINT_HOLD_PROFILE;
+  } else if (payload.type === 'set_joint_targets') {
     const targets = payload.targetsRad;
     if (!targets || typeof targets !== 'object' || Array.isArray(targets) || !Object.keys(targets).length) throw new Error('set_joint_targets requires a non-empty targetsRad object');
     for (const jointId of Object.keys(targets)) if (!jointState.has(jointId)) throw new Error(`Unknown declared joint ${jointId}`);
@@ -438,6 +501,7 @@ function command(payload = {}) {
   } else {
     throw new Error(`Unsupported physical command: ${payload.type}`);
   }
+  if (standingEvaluator.startedAt != null) standingEvaluator.update(Number(data.time),rootObservation(),readContacts(),actuationEnabled,controller?.kind==='standing');
   return observation();
 }
 
@@ -450,9 +514,11 @@ function applySetup(payload = {}) {
   if (typeof payload.enabled !== 'boolean') throw new TypeError('enabled must be boolean');
   const enabled = payload.enabled;
   actuationEnabled = enabled;
+  if (!enabled) actuatorPlant?.disable();
   for (const actuator of actuatorState.values()) if (!enabled) data.ctrl[actuator.id] = 0;
   logSetup({ event: 'set_actuation', enabled, detail: enabled ? 'actuator effort re-enabled' : 'every actuator produces zero effort; the controller keeps running and keeps issuing bounded commands' });
   mujoco.mj_forward(model, data);
+  if (standingEvaluator.startedAt != null) standingEvaluator.update(Number(data.time),rootObservation(),readContacts(),actuationEnabled,controller?.kind==='standing');
   return observation();
 }
 

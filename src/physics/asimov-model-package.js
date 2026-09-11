@@ -1,3 +1,6 @@
+import { ASIMOV_ACTUATOR_MODELS } from './asimov-actuator-generated.js';
+import { ASIMOV_ACTUATOR_PROFILE, ASIMOV_SENSOR_PROFILE } from './asimov-actuator-profile.js';
+import { ASIMOV_STANDING_CONTROLLER } from './asimov-standing.js';
 import { registerModelPackage } from './model-registry.js';
 import { ASIMOV_SOURCE } from './asimov-generated.js';
 import { ASIMOV_CONTROLLERS, ASIMOV_FOOT_CONTACT_GEOMS } from './asimov-controller.js';
@@ -29,3 +32,28 @@ export const ASIMOV_FREEBASE_PACKAGE=pkg('freebase','free-base','joint-hold');
 export const ASIMOV_MOUNTED_PACKAGE=pkg('mounted','fixed-mounted','joint-hold');
 export const ASIMOV_DROP_PACKAGE=pkg('drop','free-base','passive');
 export const ASIMOV_PACKAGES=Object.freeze({freebase:ASIMOV_FREEBASE_PACKAGE,mounted:ASIMOV_MOUNTED_PACKAGE,drop:ASIMOV_DROP_PACKAGE});
+
+export const ASIMOV_ACTUATOR_LIMITATIONS=Object.freeze([
+  'Spec-informed experimental profile; not a calibrated digital twin. Original source geometry, mass, joint limits and reflected inertia are unchanged.',
+  'Nineteen single-axis motors use the lower of source effort limit and published continuous rating. Peak output is disabled without duty-cycle evidence.',
+  'Linear motoring-speed derating, smoothed friction, 5 ms command delay and sensor stress are explicit estimates, not identified full-body hardware responses.',
+  'The four ankle axes retain the source equivalent joint-space plant. A/B motor ratings and linkage ratios are unresolved; no guessed transmission or extra rotor inertia is enabled.',
+  'Experimental standing uses bounded ankle torques with ground-truth torso feedback on a flat floor. It may fail; it is neither walking nor general balance recovery.',
+  'Neck remains fixed; no actuated fingers, hardware connection or hardware validation.',
+]);
+const experiment=(key,sourceVariant,standing=false)=>{
+  const base=ASIMOV_PACKAGES[sourceVariant], generated=ASIMOV_ACTUATOR_MODELS[sourceVariant];
+  return registerModelPackage({...structuredClone(base),id:`asimov-1-${key}-v1`,modelId:`robobuddy-asimov-actuator-${sourceVariant}-v1`,
+    asset:generated.asset,sha256:generated.sha256,physics:{...base.physics,timestepSeconds:generated.timestepSeconds},
+    actuatorProfileId:ASIMOV_ACTUATOR_PROFILE.id,sensorProfileId:ASIMOV_SENSOR_PROFILE.id,
+    ...(standing?{standingControllerId:ASIMOV_STANDING_CONTROLLER.id}:{}),
+    controllers:[...base.controllers,...(standing?[ASIMOV_STANDING_CONTROLLER.id]:[])],
+    evidence:{...base.evidence,actuatorEnvelope:'estimated',sensorModel:'estimated',standing:'estimated'},
+    limitations:ASIMOV_ACTUATOR_LIMITATIONS});
+};
+export const ASIMOV_ACTUATOR_PACKAGES=Object.freeze({
+  'actuator-mounted':experiment('actuator-mounted','mounted'),
+  'actuator-freebase':experiment('actuator-freebase','freebase'),
+  standing:experiment('standing','freebase',true),
+});
+export const ASIMOV_ALL_PACKAGES=Object.freeze({...ASIMOV_PACKAGES,...ASIMOV_ACTUATOR_PACKAGES});

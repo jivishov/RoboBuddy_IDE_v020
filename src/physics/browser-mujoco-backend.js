@@ -261,6 +261,7 @@ export class BrowserMuJoCoBackend {
       firmwareGain: raw.firmwareGain === undefined ? null : Number(raw.firmwareGain),
       appliedServoKp: raw.appliedServoKp === undefined ? null : Number(raw.appliedServoKp),
       actuatorForceTotalNm: raw.actuatorForceTotalNm === undefined ? null : Number(raw.actuatorForceTotalNm),
+      ...(raw.actuatorModel ? {actuatorModel:structuredClone(raw.actuatorModel),sensorObservation:structuredClone(raw.sensorObservation),standingAssessment:structuredClone(raw.standingAssessment)} : {}),
       setupLog: Array.isArray(raw.setupLog) ? structuredClone(raw.setupLog) : [] };
   }
 

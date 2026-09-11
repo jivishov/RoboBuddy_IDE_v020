@@ -51,7 +51,7 @@ export class AsimovPhysicalSimulator {
     if(this.disposed) throw new Error('Disposed Asimov simulator');
     const generation=++this.sequence; this.ready=false;
     this.unsubscribe?.(); this.session?.dispose();
-    this.selectedScene=scene; this.mount.visible=scene.id==='asimov-mounted';
+    this.selectedScene=scene; this.mount.visible=scene.id.endsWith('mounted');
     const session=new PhysicsSession(new BrowserMuJoCoBackend({workerUrl:new URL('./asimov-mujoco-worker.js',import.meta.url),setupOperations:['set_actuation']}),{observationBatchSteps:4});
     this.session=session; this.unsubscribe=session.subscribe(({observation})=>{if(!this.disposed && generation===this.sequence) this.consume(observation);});
     try {
@@ -124,7 +124,7 @@ export class AsimovPhysicalSimulator {
   }
   async advanceTime(seconds,{maxSeconds=20}={}) {
     this.assertReady(); if(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<=0||seconds>maxSeconds) throw new RangeError('Asimov advance outside bounded simulation-time interval');
-    const steps=Math.round(seconds/ASIMOV_PHYSICS_TIMESTEP_SECONDS); if(steps<1) throw new RangeError('Advance needs at least one physics step');
+    const dt=this.selectedScene.physics.timestepSeconds; const steps=Math.round(seconds/dt); if(Math.abs(steps*dt-seconds)>1e-9) throw new RangeError('Advance must align with this scene timestep'); if(steps<1) throw new RangeError('Advance needs at least one physics step');
     return this.session.advanceSteps(steps);
   }
   async reset() {
@@ -152,12 +152,15 @@ export class AsimovPhysicalSimulator {
       linear_velocity_m_s:o.root.linearVelocityMS,angular_velocity_rad_s:o.root.angularVelocityRadS},
       joints:Object.fromEntries(Object.entries(o.joints).map(([id,j])=>[id,{position_rad:j.positionRad,velocity_rad_s:j.velocityRadS,effort_nm:j.effortNm,
         requested_target_rad:j.requestedTargetRad,accepted_target_rad:j.acceptedTargetRad,command_bounded:j.commandBounded,effort_limit_nm:j.effortLimitNm}])),
+      ...(o.actuatorModel?{actuator_model:structuredClone(o.actuatorModel),standing_assessment:structuredClone(o.standingAssessment)}:{}),
       contacts:o.contacts,controller_mode:o.controller.id,actuation_enabled:o.actuationEnabled,walking:'unsupported'};
   }
   getContacts() {return {count:this.lastObservation?.contactCount??0,readable:!!this.lastObservation?.contactsReadable,...this.lastObservation?.contactClasses};}
   getTelemetry() {return {backend:'browser-mujoco',authority:'physics-session',simulationTimeSeconds:this.lastObservation?.simulationTimeSeconds??0,
     rootMode:this.lastObservation?.root?.mode,totalMassKg:ASIMOV_SOURCE.totalMassKg,controllerId:this.lastObservation?.controller?.id,walking:'unsupported'};}
-  getTaskEvaluation() {return {status:'observation-only',standing:null,walking:'unsupported',syntheticSuccessEvents:false};}
+  getSensorObservation() {this.assertReady();if(!this.lastObservation.sensorObservation)throw new Error('No hardware-like profile in this reference scene');return structuredClone(this.lastObservation.sensorObservation);}
+  engageStand() {this.assertReady();return this.session.sendCommand({type:'engage_stand',controllerId:'asimov-stance-feedback-v1'},{maxSteps:8000});}
+  getTaskEvaluation() {return this.lastObservation?.standingAssessment?.status !== 'not-started' && this.lastObservation?.standingAssessment ? structuredClone(this.lastObservation.standingAssessment) : {status:'observation-only',standing:null,walking:'unsupported',syntheticSuccessEvents:false};}
   getPresentationAudit() {return {sourceRevision:ASIMOV_SOURCE.revision,jointCount:23,meshCount:this.geometries.size,bodyCount:this.groups.size,drivesFromObservation:!!this.lastObservation};}
   getPresentationAlignment() {
     this.applyObservation(); let maximum=0;
