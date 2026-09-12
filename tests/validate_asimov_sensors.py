@@ -21,6 +21,8 @@ PROFILES = json.loads(subprocess.check_output(['node','--input-type=module','-e'
 class SensorNative(Native):
     def __init__(self,profile='sensor-standing',dt=.0025,seed=None,delay=None,ankle_scale=None,mass_scale=1,com_shift=0,floor_friction=None,contact_time=None):
         super().__init__(dt=dt,feedback=False)
+        # Published caps happen to be integers; sensitivity multipliers are not.
+        self.cont = self.cont.astype(float)
         self.profile=copy.deepcopy(PROFILES[profile]);self.sensor=self.profile['sensor'];self.balance=self.profile['balanceController']
         if seed is not None:self.sensor['seed']=seed
         if delay is not None:self.sensor['imuDelaySeconds']=delay
@@ -132,6 +134,7 @@ def validate(wasm_path,report):
             for label,a,b in [('jointRad',n.d.qpos[n.q],[o['joints'][j['id']]['positionRad'] for j in SOURCE['joints']]),('bodyM',n.d.xpos[n.body_ids],[o['bodies'][b]['positionM'] for b in SOURCE['bodies']]),('motorNm',n.motor,[j['motorNm'] for j in o['actuatorModel']['joints']])]:errors[label]=max(errors[label],float(np.max(np.abs(a-np.array(b)))))
         assert errors['jointRad']<1e-6 and errors['bodyM']<1e-6 and errors['motorNm']<1e-4,(key,errors)
         parity[key]=errors
+        print(json.dumps({'nativeWasmProfile':key,'errors':errors}),flush=True)
     baseline=run('nominal');tight=run('tight-dt',dt=.00125)
     convergence={key:max(float(np.max(np.abs(np.array(a[field])-b[field]))) for a,b in zip(baseline['trace'],tight['trace'])) for key,field in [('jointRad','q'),('bodyM','b'),('velocityRadS','v'),('motorNm','motor')]}
     assert baseline['pass'] and tight['pass'] and convergence['jointRad']<=.025 and convergence['bodyM']<=.01,convergence
