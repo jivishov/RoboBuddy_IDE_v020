@@ -66,7 +66,7 @@ test('Asimov IDE selector, live Python and opt-in WebMCP share the visible physi
  await page.goto('/?ci=asimov-physical',{waitUntil:'domcontentloaded'});
  await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
  await expect(page.locator('#robotSelect')).toHaveValue('asimov');
- expect(await page.locator('#taskSelect option').count()).toBe(6);
+ expect(await page.locator('#taskSelect option').count()).toBe(9);
  await expect(page.locator('#simCanvas')).toHaveAttribute('data-asimov-root-mode','fixed-mounted');
  await page.evaluate(async()=>{const app=window.__robobuddyCi.app; await app.run();});
  const python=await page.evaluate(()=>({out:window.__robobuddyCi.app.console,diagnostics:window.__robobuddyCi.app.sim.backend.getState()}));
@@ -148,4 +148,48 @@ test('Asimov actuator experiment: sensor isolation, continuous caps and physical
   return {blocked,state:app.sim.getState()};
  });
  expect(reference.blocked).toBe(true);expect(reference.state.actuator_model).toBeUndefined();
+});
+
+test('Sensor standing and bounded programs are available through the registered WebMCP tool',async({page})=>{
+ test.setTimeout(600000);
+ await page.addInitScript(()=>{
+  localStorage.setItem('rbide.profile','asimov');localStorage.setItem('rbide.task.asimov','asimov-sensor-standing');
+  window.asimovProgramTools=[];
+  Object.defineProperty(document,'modelContext',{configurable:true,value:{registerTool(tool){window.asimovProgramTools.push(tool);return Promise.resolve();}}});
+ });
+ await page.goto('/?ci=asimov-physical',{waitUntil:'domcontentloaded'});
+ await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
+ const python=await page.evaluate(async()=>{
+  const app=window.__robobuddyCi.app,ok=await app.run();
+  return {ok,console:app.console,state:app.sim.getState()};
+ });
+ expect(python.ok,JSON.stringify(python.console)).toBe(true);
+ expect(python.state.standing_assessment.controllerId).toBe('asimov-sensor-stance-v2');
+ expect(python.state.standing_assessment.status).toBe('passed');
+ expect(python.state.standing_assessment.sensorFeedback.groundTruthFallback).toBe(false);
+ await page.locator('#agentAccessControl button[data-agent-access="assist"]').click();
+ const result=await page.evaluate(async()=>{
+  const {agentFacade:facade,app}=window.__robobuddyCi;
+  const v='robobuddy.asimov.physical.v1';
+  const exec=async(command,args={})=>{
+    const tool=window.asimovProgramTools.findLast(t=>t.name==='control_asimov_physical_simulation');
+    const result=await tool.execute({schema_version:v,command,...args},{signal:new AbortController().signal});
+    if(!result.ok)throw new Error(JSON.stringify(result));return result;
+  };
+  const registered=window.asimovProgramTools.findLast(t=>t.name==='control_asimov_physical_simulation');
+  const declared=registered.inputSchema.oneOf.map(b=>b.properties.command.const);
+  await exec('reset');await exec('engage_stand');
+  const sequence=await exec('run_sequence',{segments:[{duration_seconds:1},{targets_rad:{left_elbow_joint:1,right_elbow_joint:-1},preserve_standing:true,duration_seconds:.5},{targets_rad:{left_elbow_joint:.9,right_elbow_joint:-.9},preserve_standing:true,duration_seconds:.5}]});
+  const sensors=await exec('read_sensors');
+  let rejected=false;const before=app.sim.getState().simulation_time_s;
+  try {await exec('run_sequence',{segments:[{targets_rad:{left_elbow_joint:1},duration_seconds:.2},{duration_seconds:.003}]});} catch {rejected=true;}
+  const unchanged=app.sim.getState().simulation_time_s===before;
+  return {declared,sequence,sensors,rejected,unchanged};
+ });
+ expect(result.declared).toEqual(expect.arrayContaining(['run_sequence','wait_for_joint','set_standing_targets']));
+ expect(result.sequence.executionStatus).toBe('completed');
+ expect(result.sequence.observedState.controllerMode).toBe('asimov-sensor-stance-v2');
+ expect(result.sensors.sensorObservation.imu.frame).toBe('pelvis_link');
+ expect(result.rejected).toBe(true);expect(result.unchanged).toBe(true);
+ await page.screenshot({path:'test-results/asimov-sensor-webmcp.png'});
 });

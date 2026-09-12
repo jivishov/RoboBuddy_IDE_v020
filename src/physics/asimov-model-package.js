@@ -1,3 +1,4 @@
+import { ASIMOV_SENSITIVITY_PROFILES, ASIMOV_BODY_SENSOR_PROFILE, ASIMOV_SENSOR_STANDING_CONTROLLER } from './asimov-sensitivity.js';
 import { ASIMOV_ACTUATOR_MODELS } from './asimov-actuator-generated.js';
 import { ASIMOV_ACTUATOR_PROFILE, ASIMOV_SENSOR_PROFILE } from './asimov-actuator-profile.js';
 import { ASIMOV_STANDING_CONTROLLER } from './asimov-standing.js';
@@ -56,4 +57,13 @@ export const ASIMOV_ACTUATOR_PACKAGES=Object.freeze({
   'actuator-freebase':experiment('actuator-freebase','freebase'),
   standing:experiment('standing','freebase',true),
 });
-export const ASIMOV_ALL_PACKAGES=Object.freeze({...ASIMOV_PACKAGES,...ASIMOV_ACTUATOR_PACKAGES});
+export const ASIMOV_SENSOR_PACKAGES=Object.freeze(Object.fromEntries(Object.keys(ASIMOV_SENSITIVITY_PROFILES).map(key=>[key,registerModelPackage({
+  ...structuredClone(ASIMOV_ACTUATOR_PACKAGES.standing),id:`asimov-1-${key}-v2`,
+  sensorProfileId:ASIMOV_BODY_SENSOR_PROFILE.id,standingControllerId:ASIMOV_SENSOR_STANDING_CONTROLLER.id,sensitivityProfileId:key,
+  controllers:[...ASIMOV_PACKAGES.freebase.controllers,ASIMOV_SENSOR_STANDING_CONTROLLER.id],
+  limitations:[...ASIMOV_ACTUATOR_LIMITATIONS.filter(s=>!s.startsWith('Experimental standing uses')),
+    'Balance uses synthetic body-frame gyro/projected gravity only, with declared delay and filtering. Inner joint PD remains ideal local feedback.',
+    'Ankle stress is hypothetical independent-axis loss, not physical A/B transmission calibration. Sensor and mass/contact sweeps are not confidence intervals.',
+    'Pinned model mass is 32.224913 kg versus published nominal 35 kg; assembly configuration remains unreconciled.'],
+})])));
+export const ASIMOV_ALL_PACKAGES=Object.freeze({...ASIMOV_PACKAGES,...ASIMOV_ACTUATOR_PACKAGES,...ASIMOV_SENSOR_PACKAGES});

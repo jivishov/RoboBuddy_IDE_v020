@@ -1,3 +1,5 @@
+import { asimovProgramSchemas,parseAsimovProgram,executeAsimovProgram,ASIMOV_PROGRAM_LIMITS,ASIMOV_PROGRAM_REVISION,ASIMOV_UPPER_BODY_JOINTS } from './asimov-program.js';
+import { ASIMOV_MASS_RECONCILIATION } from '../physics/asimov-sensitivity.js';
 import { PROFILES } from '../profiles.js';
 import { ASIMOV_SOURCE } from '../physics/asimov-generated.js';
 import { ASIMOV_LIMITATIONS } from '../physics/asimov-model-package.js';
@@ -34,6 +36,8 @@ export function createAsimovControlSchema() {
   return {
     type: 'object',
     oneOf: [
+      ...asimovProgramSchemas(version,targets),
+      {type:'object',properties:{schema_version:version,command:{type:'string',const:'set_standing_targets'},targets_rad:{...targets,properties:Object.fromEntries(ASIMOV_UPPER_BODY_JOINTS.map(id=>[id,targets.properties[id]]))},advance_seconds:{type:'number',minimum:0,maximum:2},max_steps:{type:'integer',minimum:1,maximum:40000}},required:['schema_version','command','targets_rad'],additionalProperties:false},
       bare('inspect_capability'),
       bare('read_state'),
       bare('read_sensors'),
@@ -63,7 +67,6 @@ export function createAsimovControlSchema() {
         additionalProperties: false,
       },
     ],
-    additionalProperties: false,
   };
 }
 
@@ -73,7 +76,7 @@ export function getAsimovPhysicalControlDefinition(facade) {
   return {
     name: 'control_asimov_physical_simulation',
     title: 'Control the Asimov 1 physical MuJoCo simulation',
-    description: `Control the active Asimov physical scene through ${WEBMCP_ASIMOV_SCHEMA_VERSION}. Bounded joint torques under the selected reference or experimental actuator profile, measured state, gravity and contacts. Estimated PD gains are not hardware calibration. Mounted scenes fix the pelvis explicitly. Experimental standing can be engaged only in its declared standing scene; acceptance is not achievement. Separate synthetic sensor reads are available only in actuator experiments. No walk, grasp, root-pose write or external-force operation is exposed.`,
+    description: `Control the active Asimov physical scene through ${WEBMCP_ASIMOV_SCHEMA_VERSION}. Bounded joint torques under the selected reference or experimental actuator profile, measured state, gravity and contacts. Estimated PD gains are not hardware calibration. Mounted scenes fix the pelvis explicitly. Experimental standing can be engaged only in its declared standing scene; acceptance is not achievement. Separate synthetic sensor reads are available only in actuator experiments. run_sequence accepts 1..32 prevalidated segments totaling at most 12 simulation seconds; wait_for_joint tests measured attainment and can time out. Manual joint targets release standing. Inspect capability for the 23 joint IDs, limits, selected controller and timestep. No walk, grasp, root-pose write or external-force operation is exposed.`,
     inputSchema: createAsimovControlSchema(),
   };
 }
@@ -81,13 +84,15 @@ export function getAsimovPhysicalControlDefinition(facade) {
 function parse(input) {
   plain(input);
   if (input.schema_version !== WEBMCP_ASIMOV_SCHEMA_VERSION) invalid(`schema_version must be ${WEBMCP_ASIMOV_SCHEMA_VERSION}.`);
-  const command = String(input.command || '');
+  if(typeof input.command!=='string')invalid('command must be a string.');
+  const command = input.command;
+  if(['run_sequence','wait_for_joint'].includes(command)) {try{return parseAsimovProgram(input);}catch(e){invalid(e.message);}}
   if (['inspect_capability', 'read_state', 'read_sensors', 'engage_stand', 'stop', 'reset'].includes(command)) {
     onlyKeys(input, ['schema_version', 'command']);
     return { command };
   }
   const advanceOf = (value, { required = false } = {}) => {
-    if (value == null) {
+    if (value === undefined) {
       if (required) invalid('advance_seconds is required for this command.');
       return 0;
     }
@@ -100,7 +105,7 @@ function parse(input) {
     onlyKeys(input, ['schema_version', 'command', 'advance_seconds']);
     return { command, advanceSeconds: advanceOf(input.advance_seconds, { required: true }) };
   }
-  if (command !== 'set_joint_targets') invalid('Asimov 1 physical command must be inspect_capability, read_state, read_sensors, engage_stand, set_joint_targets, advance, stop or reset.');
+  if (!['set_joint_targets','set_standing_targets'].includes(command)) invalid('Asimov 1 physical command must be inspect_capability, read_state, read_sensors, engage_stand, set_joint_targets, advance, stop or reset.');
   onlyKeys(input, ['schema_version', 'command', 'targets_rad', 'advance_seconds', 'max_steps']);
   plain(input.targets_rad, 'targets_rad');
   const entries = Object.entries(input.targets_rad);
@@ -108,12 +113,13 @@ function parse(input) {
   const targetsRad = {};
   for (const [jointId, raw] of entries) {
     const range = JOINT_RANGES[jointId];
-    if (!range) invalid(`Unknown Asimov 1 joint: ${jointId}.`);
+    if (!Object.hasOwn(JOINT_RANGES,jointId)) invalid(`Unknown Asimov 1 joint: ${jointId}.`);
     const value = raw;
     if (!Number.isFinite(value) || value < range[0] || value > range[1]) invalid(`${jointId} must be within ${range[0]}..${range[1]} radians.`);
+    if(command==='set_standing_targets'&&!ASIMOV_UPPER_BODY_JOINTS.includes(jointId))invalid('Standing targets accept waist/arm joints only.');
     targetsRad[jointId] = value;
   }
-  const steps = input.max_steps == null ? DEFAULT_COMMAND_STEPS : input.max_steps;
+  const steps = input.max_steps === undefined ? DEFAULT_COMMAND_STEPS : input.max_steps;
   if (!Number.isInteger(steps) || steps < 1 || steps > MAX_COMMAND_STEPS) invalid(`max_steps must be an integer from 1 to ${MAX_COMMAND_STEPS}.`);
   return { command, targetsRad, advanceSeconds: advanceOf(input.advance_seconds), maxSteps: steps };
 }
@@ -127,7 +133,7 @@ function capture(facade, expectedEpoch) {
   if (facade.app.getExecutionState() !== 'idle') throw new WebMcpDomainError('SIMULATION_BUSY', 'Finish or stop the active Python run before direct Asimov 1 control.', { retryable: true });
   const authority = facade.app.sim.getPhysicalAuthorityToken?.();
   if (!authority?.sessionId) throw new WebMcpDomainError('SIMULATION_NOT_READY', 'Asimov 1 PhysicsSession authority is unavailable.', { retryable: true });
-  return Object.freeze({ workspaceGeneration: context.workspaceGeneration, simulatorEpoch: context.simulatorEpoch, authority: Object.freeze({ ...authority }) });
+  return Object.freeze({ workspaceGeneration: context.workspaceGeneration, simulatorEpoch: context.simulatorEpoch, authority: Object.freeze({ ...authority }), simulator: facade.app.sim.backend ?? facade.app.sim });
 }
 
 function assertCurrent(facade, baseline, expectedEpoch, signal, { allowAuthorityChange = false } = {}) {
@@ -162,9 +168,13 @@ export async function executeAsimovPhysicalControl(facade, input, signal, expect
   if (facade.activeControlId) throw new WebMcpDomainError('COMMAND_CONFLICT', 'Another bounded robot-control call is active.', { retryable: true });
   const controlId = `webmcp-asimov-${expectedEpoch}-${++facade.controlSequence}`;
   facade.activeControlId = controlId;
+  const sim=baseline.simulator;
+  const deadline=performance.now()+ASIMOV_PROGRAM_LIMITS.maxWallSeconds*1000;
+  const guard=()=>{assertCurrent(facade,baseline,expectedEpoch,signal);if(performance.now()>=deadline)throw new WebMcpDomainError('OPERATION_CANCELLED','Asimov call reached its fixed wall deadline.',{retryable:true});};
+  const advance=async(seconds)=>{guard();await sim.advanceTime(seconds,{signal,assertActive:guard,deadlineMs:deadline});guard();};
   const base = { ok: true, profileId: 'asimov', robot: PROFILES.asimov.label, schemaVersion: WEBMCP_ASIMOV_SCHEMA_VERSION, hardwareValidated: false };
   try {
-    assertCurrent(facade, baseline, expectedEpoch, signal);
+    guard();
 
     if (parsed.command === 'inspect_capability') {
       // Read-only. It reports the capability table verbatim and starts nothing.
@@ -173,11 +183,20 @@ export async function executeAsimovPhysicalControl(facade, input, signal, expect
         command: 'inspect_capability',
         sourceRevision: ASIMOV_SOURCE.revision,
         rootMode: facade.app.sim.getState()?.root?.mode,
-        capabilities: {jointTargets:'supported',walking:'unsupported',standing:facade.app.scenario?.physicalSceneId==='asimov-standing'?'experimental-flat-floor-trial':'unsupported',neck:'fixed in source'},
+        capabilities: {jointTargets:'supported',standingUpperBodyTargets:'supported-in-active-standing-trial',sequence:'supported',measuredJointWait:'supported',walking:'unsupported',standing:/^asimov-(?:standing$|sensor-standing)/.test(facade.app.scenario?.physicalSceneId??'')?'experimental-flat-floor-trial':'unsupported',neck:'fixed in source'},
+        programming:{revision:ASIMOV_PROGRAM_REVISION,limits:ASIMOV_PROGRAM_LIMITS,angleUnit:'rad',timeUnit:'simulation seconds',timestepSeconds:facade.app.scenario?.controller?.physicsTimestepSeconds??sim.selectedScene?.physics?.timestepSeconds,manualTargetsReleaseStanding:true,standingControllerId:sim.selectedScene?.controllers?.find(id=>['asimov-stance-feedback-v1','asimov-sensor-stance-v2'].includes(id))??null},
+        jointDefinitions:ASIMOV_SOURCE.joints.map(j=>({id:j.id,rangeRad:j.rangeRad,velocityLimitRadS:j.velocityLimitRadS,sourceEffortLimitNm:j.effortLimitNm})),
+        massReconciliation:ASIMOV_MASS_RECONCILIATION,
         actuatorModel:facade.app.sim.getState()?.actuator_model??null,
         limitations: [...(facade.app.scenario?.limitations??ASIMOV_LIMITATIONS)],
         physicalAuthority: facade.app.sim.getPhysicalAuthorityToken?.(),
       };
+    }
+
+    if (['run_sequence','wait_for_joint'].includes(parsed.command)) {
+      const dt=facade.app.scenario?.controller?.physicsTimestepSeconds??sim.selectedScene?.physics?.timestepSeconds;
+      const result=await executeAsimovProgram(sim,parsed,{dt,guard,advance});guard();facade.app.renderPanels?.();
+      return {...base,command:parsed.command,...result,observedState:observedState(facade),taskEvaluation:sim.getTaskEvaluation?.(),physicalAuthority:baseline.authority};
     }
 
     if (parsed.command === 'read_state') {
@@ -188,8 +207,8 @@ export async function executeAsimovPhysicalControl(facade, input, signal, expect
       return {...base,command:'read_sensors',sensorObservation:facade.app.sim.getSensorObservation(),physicalAuthority:facade.app.sim.getPhysicalAuthorityToken?.()};
     }
     if (parsed.command === 'engage_stand') {
-      if(facade.app.scenario?.physicalSceneId!=='asimov-standing') invalid('Standing is declared only in the experimental Standing Trial scene');
-      await facade.app.sim.engageStand();
+      if(!/^asimov-(?:standing$|sensor-standing)/.test(facade.app.scenario?.physicalSceneId??'')) invalid('Standing is declared only in a matching experimental standing scene');
+      await sim.engageStand();
       assertCurrent(facade,baseline,expectedEpoch,signal);
       facade.app.renderPanels?.();
       return {...base,command:'engage_stand',note:'Controller engaged without advancing time; read the continuous standing assessment after bounded advances.',observedState:observedState(facade),physicalAuthority:facade.app.sim.getPhysicalAuthorityToken?.()};
@@ -203,7 +222,7 @@ export async function executeAsimovPhysicalControl(facade, input, signal, expect
     }
 
     if (parsed.command === 'stop') {
-      await facade.app.sim.stop();
+      await sim.stop();
       assertCurrent(facade, baseline, expectedEpoch, signal);
       facade.app.setStatus?.('Agent commanded a bounded Asimov 1 hold at the measured joint state');
       facade.app.renderPanels?.();
@@ -211,19 +230,19 @@ export async function executeAsimovPhysicalControl(facade, input, signal, expect
     }
 
     if (parsed.command === 'advance') {
-      await facade.app.sim.advanceTime(parsed.advanceSeconds);
+      await advance(parsed.advanceSeconds);
       assertCurrent(facade, baseline, expectedEpoch, signal);
       facade.app.renderPanels?.();
       return { ...base, command: 'advance', advanceSeconds: parsed.advanceSeconds, observedState: observedState(facade), taskEvaluation: facade.app.sim.getTaskEvaluation?.(), physicalAuthority: facade.app.sim.getPhysicalAuthorityToken?.() };
     }
 
-    const result = await facade.app.sim.applyPhysicalTargets(parsed.targetsRad, { maxSteps: parsed.maxSteps, advanceSeconds: parsed.advanceSeconds });
+    const result = await (parsed.command==='set_standing_targets'?sim.applyStandingTargets.bind(sim):sim.applyPhysicalTargets.bind(sim))(parsed.targetsRad, { maxSteps: parsed.maxSteps, advanceSeconds: parsed.advanceSeconds, signal, assertActive:guard, deadlineMs:deadline });
     assertCurrent(facade, baseline, expectedEpoch, signal);
     facade.app.setStatus?.('Agent applied bounded Asimov 1 joint targets');
     facade.app.renderPanels?.();
     return {
       ...base,
-      command: 'set_joint_targets',
+      command: parsed.command,
       commandStatus: result?.status ?? 'accepted',
       commandId: result?.commandId ?? null,
       requestedTargetsRad: structuredClone(parsed.targetsRad),
@@ -245,7 +264,7 @@ export const ASIMOV_CONTROL_LIMITS = Object.freeze({
   maxAdvanceSeconds: MAX_ADVANCE_SECONDS,
   maxCommandSteps: MAX_COMMAND_STEPS,
   defaultCommandSteps: DEFAULT_COMMAND_STEPS,
-  exposedCommands: Object.freeze(['inspect_capability', 'read_state', 'read_sensors', 'engage_stand', 'set_joint_targets', 'advance', 'stop', 'reset']),
+  exposedCommands: Object.freeze(['inspect_capability', 'read_state', 'read_sensors', 'engage_stand', 'set_joint_targets', 'advance', 'stop', 'reset', 'run_sequence', 'wait_for_joint', 'set_standing_targets']),
   // Named so a reviewer can grep for them: none of these exists as an agent-reachable operation.
   neverExposed: Object.freeze(['set_root_pose', 'set_root_velocity', 'force_upright', 'walk', 'set_actuation', 'apply_external_force', 'place_object']),
 });

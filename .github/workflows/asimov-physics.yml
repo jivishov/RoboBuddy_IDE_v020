@@ -1,7 +1,7 @@
 name: Validate Asimov physics
 on:
   push:
-    branches: [main, integration/asimov-physics-20260911, integration/asimov-actuator-fidelity-20260911]
+    branches: [main, integration/asimov-physics-20260911, integration/asimov-actuator-fidelity-20260911, integration/asimov-sensor-webmcp-20260912]
     paths:
       - 'src/**'
       - 'models/asimov/**'
@@ -67,6 +67,12 @@ jobs:
           node tests/physics/asimov-actuator-core.mjs
           ASIMOV_ACTUATOR_REPORT=/tmp/asimov-actuator-wasm.json node tests/physics/asimov-actuator-worker.mjs
           python tests/validate_asimov_actuators.py --wasm-report /tmp/asimov-actuator-wasm.json --report /tmp/asimov-actuator-validation.json
+      - name: Sensor-driven balance and WebMCP programming
+        run: |
+          node tests/physics/asimov-sensor-core.mjs
+          node tests/physics/asimov-program-core.mjs
+          ASIMOV_SENSOR_REPORT=/tmp/asimov-sensor-wasm.json node tests/physics/asimov-sensor-worker.mjs
+          python tests/validate_asimov_sensors.py --wasm-report /tmp/asimov-sensor-wasm.json --report /tmp/asimov-sensor-validation.json
       - name: Chromium presentation and full IDE acceptance
         env:
           CI: 'true'
@@ -76,11 +82,11 @@ jobs:
         run: |
           mkdir -p asimov-evidence
           git rev-parse HEAD > asimov-evidence/tested-commit.txt
-          cp /tmp/asimov-native.json /tmp/asimov-actuator-validation.json asimov-evidence/ 2>/dev/null || true
+          cp /tmp/asimov-native.json /tmp/asimov-actuator-validation.json /tmp/asimov-sensor-validation.json asimov-evidence/ 2>/dev/null || true
           cp -r test-results asimov-evidence/ 2>/dev/null || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: asimov-physics-evidence
           path: asimov-evidence
-          retention-days: 14
+          retention-days: 90

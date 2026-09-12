@@ -18,6 +18,9 @@ export class AsimovActuatorPlant {
     this.every=Math.round(PROFILE.controlIntervalSeconds/timestepSeconds);
     this.delayTicks=Math.round((options.commandDelaySeconds ?? PROFILE.commandDelaySeconds)/PROFILE.controlIntervalSeconds);
     if(this.every<1 || Math.abs(this.every*timestepSeconds-PROFILE.controlIntervalSeconds)>1e-12 || !Number.isInteger(this.delayTicks) || this.delayTicks<0 || this.delayTicks>4 || Math.abs(this.delayTicks*PROFILE.controlIntervalSeconds-(options.commandDelaySeconds??PROFILE.commandDelaySeconds))>1e-12) throw new RangeError('Actuator timing must align with fixed 5 ms ticks');
+    const ankle=options.ankleStress;
+    if (ankle && (![ankle.torqueScale,ankle.speedRadS,ankle.staticNm,ankle.dynamicNm].every(Number.isFinite) || ankle.torqueScale<=0 || ankle.torqueScale>1 || ankle.speedRadS<=0 || ankle.staticNm<0 || ankle.dynamicNm<0)) throw new RangeError('Invalid hypothetical ankle loss profile');
+    this.specs=PROFILE.joints.map(spec=>!spec.family && ankle ? {...spec,family:'hypothetical-independent-ankle',continuousLimitNm:spec.continuousLimitNm*ankle.torqueScale,speedRadS:ankle.speedRadS,staticNm:ankle.staticNm,dynamicNm:ankle.dynamicNm} : spec);
     this.reset();
   }
   reset() { this.stepIndex=0;this.queue=[];this.active=null;this.held=new Array(23).fill(0);this.last=[];this.updates=0; }
@@ -33,11 +36,11 @@ export class AsimovActuatorPlant {
         return c ? c.feedforwardTorqueNm+c.kp*(c.positionRad-m.positionRad)+c.kd*(c.velocityRadS-m.velocityRadS)+(feedbackNm?.[i]??0) : 0;
       });
     }
-    this.last=PROFILE.joints.map((spec,i)=>({...actuatorOutput(spec,this.held[i],measurements[i].velocityRadS,{...this.options,enabled}),
+    this.last=this.specs.map((spec,i)=>({...actuatorOutput(spec,this.held[i],measurements[i].velocityRadS,{...this.options,enabled}),
       appliedTargetRad:this.active?.[i]?.positionRad??null,profileId:PROFILE.id}));
     this.stepIndex++;
     return this.last;
   }
   snapshot() { return {id:PROFILE.id,controlTicks:this.updates,stepIndex:this.stepIndex,queuedFrames:this.queue.length,commandDelaySeconds:this.delayTicks*PROFILE.controlIntervalSeconds,
-    continuousOnly:true,peakOperation:PROFILE.peakOperation,ankleTransmission:'source-equivalent; ratio/motor-rating evidence unresolved',joints:structuredClone(this.last)}; }
+    continuousOnly:true,peakOperation:PROFILE.peakOperation,...(this.options.ankleStress?{ankleStress:structuredClone(this.options.ankleStress)}:{}),ankleTransmission:'source-equivalent; ratio/motor-rating evidence unresolved',joints:structuredClone(this.last)}; }
 }

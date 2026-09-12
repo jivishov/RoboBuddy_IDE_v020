@@ -87,3 +87,12 @@ npx playwright test tests/asimov-physical-browser.spec.mjs --workers=1
 ## What still needs evidence
 
 A compatible numeric ankle mapping and motor limits are the next model dependency. Measured joint responses, high-rate timestamped commands/feedback, firmware/gain configuration and held-out trajectories are needed to fit and validate actuator parameters. Safe manufacturer-supervised measurements may be supplied by Menlo; ownership of hardware is not required to analyze them. No real-robot fall or disturbance test is requested here.
+
+
+## Status update — 2026-09-12
+
+The historical paragraph above records the implementation environment at the time. Its pending browser gate is now closed **for baseline `de97f7c99bcf2ef792c2ccaea3c4b704cf0eff9a`**: GitHub Actions run `34658975401` completed successfully on 2026-09-11, including the four dedicated Chromium journeys. This was CI evidence, not a local browser pass or hardware validation.
+
+Important qualifications: the 19 matched non-ankle motors receive the added friction/speed laws; the old standing regulator acts through four ankles that do not. The original command-delay queue delays nominal targets, not its ground-truth balance feedback. The 32.224913 kg source model differs from the published nominal 35 kg; configuration and mass distribution remain unresolved.
+
+The additive sensor-driven standing and hypothetical ankle-loss profiles are documented in `ASIMOV_WEBMCP_PROGRAMMING.md` and the reviewed `ASIMOV_SENSOR_WEBMCP_PLAN.md`. They do not change the six original workspaces. No guessed A/B transmission, increased peak allowance or rescaled production mass is introduced. New CI evidence must be read for the new tested commit, not inferred from the historical pass.
