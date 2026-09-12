@@ -4,6 +4,7 @@ import { STLLoader } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/j
 import { BrowserMuJoCoBackend } from './browser-mujoco-backend.js';
 import { PhysicsSession } from './session.js';
 import { asimovSceneById } from './asimov-scene.js';
+import { asimovAdvanceGuard, asimovCommandDuration } from './asimov-program-guard.js';
 import { ASIMOV_SOURCE } from './asimov-generated.js';
 import { ASIMOV_JOINT_ORDER, ASIMOV_PHYSICS_TIMESTEP_SECONDS } from './asimov-controller.js';
 
@@ -118,19 +119,36 @@ export class AsimovPhysicalSimulator {
   assertReady() {if(!this.isReady()) throw new Error('Asimov physical session is not ready');}
   getPhysicalSession() {return this.session;}
   getPhysicalAuthorityToken() {return this.isReady()?{sessionId:this.session.sessionId,epoch:this.session.epoch,sceneRevision:this.session.sceneRevision,robotId:this.session.robotId}:null;}
-  async applyPhysicalTargets(targetsRad,{advanceSeconds=0,maxSteps=4000}={}) {
-    this.assertReady(); const result=await this.session.sendCommand({type:'set_joint_targets',targetsRad},{maxSteps});
-    if(advanceSeconds>0) await this.advanceTime(advanceSeconds); return result;
+  async applyPhysicalTargets(targetsRad,{advanceSeconds=0,maxSteps=4000,...guard}={}) {
+    this.assertReady(); asimovCommandDuration(advanceSeconds,this.selectedScene.physics.timestepSeconds); asimovAdvanceGuard(guard); const result=await this.session.sendCommand({type:'set_joint_targets',targetsRad},{maxSteps});
+    asimovAdvanceGuard(guard); if(advanceSeconds>0) await this.advanceTime(advanceSeconds,guard); return result;
+  }
+  async applyStandingTargets(targetsRad,{advanceSeconds=0,maxSteps=4000,...guard}={}) {
+    this.assertReady();asimovCommandDuration(advanceSeconds,this.selectedScene.physics.timestepSeconds);asimovAdvanceGuard(guard);
+    const result=await this.session.sendCommand({type:'set_standing_targets',targetsRad},{maxSteps});
+    asimovAdvanceGuard(guard);if(advanceSeconds>0)await this.advanceTime(advanceSeconds,guard);return result;
   }
   applyAction(targetsRad,options) {return this.applyPhysicalTargets(targetsRad,options);}
-  async applyLowLevelCommands(commands,{advanceSeconds=0,maxSteps=4000}={}) {
-    this.assertReady(); const result=await this.session.sendCommand({type:'set_lowlevel_targets',commands},{maxSteps});
-    if(advanceSeconds>0) await this.advanceTime(advanceSeconds); return result;
+  async applyLowLevelCommands(commands,{advanceSeconds=0,maxSteps=4000,...guard}={}) {
+    this.assertReady(); asimovCommandDuration(advanceSeconds,this.selectedScene.physics.timestepSeconds); asimovAdvanceGuard(guard); const result=await this.session.sendCommand({type:'set_lowlevel_targets',commands},{maxSteps});
+    asimovAdvanceGuard(guard); if(advanceSeconds>0) await this.advanceTime(advanceSeconds,guard); return result;
   }
-  async advanceTime(seconds,{maxSeconds=20}={}) {
+  async advanceTime(seconds,{maxSeconds=20,...guard}={}) {
     this.assertReady(); if(typeof seconds!=='number'||!Number.isFinite(seconds)||seconds<=0||seconds>maxSeconds) throw new RangeError('Asimov advance outside bounded simulation-time interval');
     const dt=this.selectedScene.physics.timestepSeconds; const steps=Math.round(seconds/dt); if(Math.abs(steps*dt-seconds)>1e-9) throw new RangeError('Advance must align with this scene timestep'); if(steps<1) throw new RangeError('Advance needs at least one physics step');
-    return this.session.advanceSteps(steps);
+    const session=this.session,epoch=session.epoch;
+    let remaining=steps,result=null;
+    const batch=Math.max(1,Math.floor(.05/dt));
+    while(remaining>0) {
+      asimovAdvanceGuard(guard);
+      if(this.session!==session||session.epoch!==epoch||!this.isReady()) throw new Error('Asimov session changed during advance');
+      const chunk=Math.min(batch,remaining), before=this.lastObservation.simulationTimeSeconds;
+      result=await session.advanceSteps(chunk); remaining-=chunk;
+      asimovAdvanceGuard(guard);
+      if(this.session!==session||session.epoch!==epoch) throw new Error('Asimov session changed during advance');
+      if(this.lastObservation.simulationTimeSeconds<=before+1e-12) throw new Error('Asimov simulation is paused; no time advanced');
+    }
+    return result;
   }
   async reset() {
     if(this.disposed || !this.session || !this.selectedScene) throw new Error('No live Asimov scene to reset');
@@ -164,7 +182,7 @@ export class AsimovPhysicalSimulator {
   getTelemetry() {return {backend:'browser-mujoco',authority:'physics-session',simulationTimeSeconds:this.lastObservation?.simulationTimeSeconds??0,
     rootMode:this.lastObservation?.root?.mode,totalMassKg:ASIMOV_SOURCE.totalMassKg,controllerId:this.lastObservation?.controller?.id,walking:'unsupported'};}
   getSensorObservation() {this.assertReady();if(!this.lastObservation.sensorObservation)throw new Error('No hardware-like profile in this reference scene');return structuredClone(this.lastObservation.sensorObservation);}
-  engageStand() {this.assertReady();return this.session.sendCommand({type:'engage_stand',controllerId:'asimov-stance-feedback-v1'},{maxSteps:8000});}
+  engageStand() {this.assertReady();const controllerId=this.selectedScene.controllers.find(id=>id==='asimov-stance-feedback-v1'||id==='asimov-sensor-stance-v2');if(!controllerId)throw new Error('No declared standing controller');return this.session.sendCommand({type:'engage_stand',controllerId},{maxSteps:8000});}
   getTaskEvaluation() {return this.lastObservation?.standingAssessment?.status !== 'not-started' && this.lastObservation?.standingAssessment ? structuredClone(this.lastObservation.standingAssessment) : {status:'observation-only',standing:null,walking:'unsupported',syntheticSuccessEvents:false};}
   getPresentationAudit() {return {sourceRevision:ASIMOV_SOURCE.revision,jointCount:23,meshCount:this.geometries.size,bodyCount:this.groups.size,drivesFromObservation:!!this.lastObservation};}
   getPresentationAlignment() {

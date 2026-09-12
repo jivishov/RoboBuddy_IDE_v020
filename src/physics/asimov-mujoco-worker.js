@@ -1,3 +1,6 @@
+import { asimovSensitivity, ASIMOV_BODY_SENSOR_PROFILE, ASIMOV_SENSOR_STANDING_CONTROLLER } from './asimov-sensitivity.js';
+import { AsimovBodySensors } from './asimov-body-sensors.js';
+import { AsimovSensorStanding } from './asimov-sensor-standing.js';
 import { ASIMOV_ACTUATOR_PROFILE, ASIMOV_SENSOR_PROFILE } from './asimov-actuator-profile.js';
 import { AsimovActuatorPlant } from './asimov-actuator-plant.js';
 import { AsimovSensorModel } from './asimov-sensor-model.js';
@@ -43,6 +46,7 @@ let setupLog = [];
 let commandProfile = ASIMOV_JOINT_HOLD_PROFILE;
 let actuatorPlant = null;
 let sensorModel = null;
+let sensorStanding = null;
 let standingEvaluator = new AsimovStandingEvaluator();
 
 function reply(id, ok, payload = null, error = null) { postMessage({ id, ok, payload, error }); }
@@ -158,7 +162,14 @@ function holdCommandsAt(positions, profile = ASIMOV_JOINT_HOLD_PROFILE) {
  */
 function applyControlLaw() {
   if (actuatorPlant) {
-    const feedback = controller?.kind === 'standing' ? stanceFeedback(rootObservation()) : null;
+    let feedback = null;
+    if (controller?.kind === 'standing') {
+      if (sensorStanding) {
+        // The sensor regulator never receives rootObservation or joint ground truth.
+        if (actuatorPlant.stepIndex % actuatorPlant.every === 0) sensorStanding.update(Number(data.time),sensorModel.observation(Number(data.time)));
+        feedback = sensorStanding.torques;
+      } else feedback = stanceFeedback(rootObservation());
+    }
     const output = actuatorPlant.step(accepted, ASIMOV_JOINT_ORDER.map((_,i)=>measured(i)), actuationEnabled, feedback);
     for (let i=0;i<ASIMOV_JOINT_ORDER.length;i++) {
       const id=ASIMOV_JOINT_ORDER[i];
@@ -324,7 +335,7 @@ function observation() {
       : { id: commandProfile.id, label: commandProfile.label, mode: commandProfile === ASIMOV_LOWLEVEL_COMMAND_PROFILE ? 'low-level' : 'joint-hold', engagedAtSeconds: null, claim: commandProfile.claim },
     actuationEnabled,
     setupLog: [...setupLog],
-    ...(actuatorPlant ? {actuatorModel: {...actuatorPlant.snapshot(),configurationSha256:modelInfo.actuatorProfileSha256,sensorConfigurationSha256:modelInfo.sensorProfileSha256}, sensorObservation: sensorModel.observation(Number(data.time)), standingAssessment: standingEvaluator.snapshot()} : {}),
+    ...(actuatorPlant ? {actuatorModel: {...actuatorPlant.snapshot(),configurationSha256:modelInfo.actuatorProfileSha256,sensorConfigurationSha256:modelInfo.sensorProfileSha256}, sensorObservation: sensorModel.observation(Number(data.time)), standingAssessment: {...standingEvaluator.snapshot(),...(sensorStanding?{controllerId:ASIMOV_SENSOR_STANDING_CONTROLLER.id,sensorFeedback:sensorStanding.snapshot(),sensitivityProfileId:descriptor.sensitivityProfileId,sensitivityConfigurationSha256:modelInfo.sensitivityProfileSha256}: {})}} : {}),
   };
 }
 
@@ -340,8 +351,10 @@ function applyDeclaredInitialState() {
   commandProfile = ASIMOV_JOINT_HOLD_PROFILE;
   actuationEnabled = true;
   setupLog = [];
-  actuatorPlant = descriptor.actuatorProfileId ? new AsimovActuatorPlant(modelInfo.timestepSeconds) : null;
-  sensorModel = actuatorPlant ? new AsimovSensorModel() : null;
+  const sensitivity=descriptor.sensitivityProfileId?asimovSensitivity(descriptor.sensitivityProfileId):null;
+  actuatorPlant = descriptor.actuatorProfileId ? new AsimovActuatorPlant(modelInfo.timestepSeconds,sensitivity?.actuator??{}) : null;
+  sensorModel = sensitivity ? new AsimovBodySensors(sensitivity.sensor) : actuatorPlant ? new AsimovSensorModel() : null;
+  sensorStanding = sensitivity ? new AsimovSensorStanding() : null;
   standingEvaluator.reset();
   if (!['joint-hold', 'passive'].includes(descriptor.initialCommand)) {
     throw new Error(`Model ${descriptor.id} declares an unknown initialCommand ${descriptor.initialCommand}`);
@@ -366,7 +379,7 @@ function disposeModel() {
   try { data?.delete?.(); } catch { /* disposal is best effort */ }
   try { model?.delete?.(); } catch { /* disposal is best effort */ }
   data = null; model = null; descriptor = null; modelInfo = null;
-  actuatorPlant=null; sensorModel=null; standingEvaluator.reset();
+  actuatorPlant=null; sensorModel=null; sensorStanding=null; standingEvaluator.reset();
   jointState = new Map(); actuatorState = new Map(); bodyState = new Map();
   accepted = []; controller = null; commandProfile = ASIMOV_JOINT_HOLD_PROFILE; actuationEnabled = true; paused = false; setupLog = [];
 }
@@ -391,8 +404,12 @@ async function load(modelPackage) {
     throw new Error('Worker requires a validated registered model package descriptor');
   }
   if (modelPackage.actuatorProfileId && modelPackage.actuatorProfileId !== ASIMOV_ACTUATOR_PROFILE.id) throw new Error('Unknown Asimov actuator profile');
-  if (modelPackage.sensorProfileId && modelPackage.sensorProfileId !== ASIMOV_SENSOR_PROFILE.id) throw new Error('Unknown Asimov sensor profile');
-  if (modelPackage.standingControllerId && (!modelPackage.actuatorProfileId || modelPackage.standingControllerId !== ASIMOV_STANDING_CONTROLLER.id || modelPackage.rootMode !== 'free-base')) throw new Error('Invalid standing model/controller pair');
+  const sensitivity=modelPackage.sensitivityProfileId?asimovSensitivity(modelPackage.sensitivityProfileId):null;
+  const sensorId=sensitivity?ASIMOV_BODY_SENSOR_PROFILE.id:ASIMOV_SENSOR_PROFILE.id;
+  const standingId=sensitivity?ASIMOV_SENSOR_STANDING_CONTROLLER.id:ASIMOV_STANDING_CONTROLLER.id;
+  if (modelPackage.sensorProfileId && modelPackage.sensorProfileId !== sensorId) throw new Error('Unknown Asimov sensor profile');
+  if (sensitivity && (!modelPackage.actuatorProfileId || modelPackage.sensorProfileId!==sensorId || modelPackage.standingControllerId!==standingId)) throw new Error('Incomplete sensor-standing profile');
+  if (modelPackage.standingControllerId && (!modelPackage.actuatorProfileId || modelPackage.standingControllerId !== standingId || modelPackage.rootMode !== 'free-base')) throw new Error('Invalid standing model/controller pair');
   const modelUrl = validatedModelUrl(modelPackage.asset);
   const mj = await ensureMuJoCo();
   disposeModel();
@@ -407,8 +424,9 @@ async function load(modelPackage) {
   descriptor = structuredClone(modelPackage);
   resolveModelAddresses(modelSha256);
   if (descriptor.actuatorProfileId) {
-    modelInfo.actuatorProfileSha256=await sha256Text(JSON.stringify(ASIMOV_ACTUATOR_PROFILE));
-    modelInfo.sensorProfileSha256=await sha256Text(JSON.stringify(ASIMOV_SENSOR_PROFILE));
+    modelInfo.actuatorProfileSha256=await sha256Text(JSON.stringify(sensitivity?{base:ASIMOV_ACTUATOR_PROFILE,sensitivity:sensitivity.actuator}:ASIMOV_ACTUATOR_PROFILE));
+    modelInfo.sensorProfileSha256=await sha256Text(JSON.stringify(sensitivity?.sensor??ASIMOV_SENSOR_PROFILE));
+    if (sensitivity) modelInfo.sensitivityProfileSha256=await sha256Text(JSON.stringify(sensitivity));
   }
   return applyDeclaredInitialState();
 }
@@ -425,7 +443,7 @@ function doPhysicsStep() {
     mujoco.mj_forward(model,data);
     if (![...data.qpos,...data.qvel].every(Number.isFinite)) throw new Error('Non-finite Asimov physical state');
     sampleSensors();
-    if (standingEvaluator.startedAt != null) standingEvaluator.update(Number(data.time),rootObservation(),readContacts(),actuationEnabled,controller?.kind==='standing');
+    if (standingEvaluator.startedAt != null) standingEvaluator.update(Number(data.time),rootObservation(),readContacts(),actuationEnabled,controller?.kind==='standing' && !sensorStanding?.fault);
   }
 }
 
@@ -455,17 +473,27 @@ function stepSampled(count = 1, sampleEverySteps = 1) {
 function command(payload = {}) {
   if (!model || !data || !descriptor || !modelInfo) throw new Error('No MuJoCo model is loaded');
   if (payload.type === 'engage_stand') {
-    if (!actuatorPlant || descriptor.standingControllerId !== ASIMOV_STANDING_CONTROLLER.id || payload.controllerId !== ASIMOV_STANDING_CONTROLLER.id) throw new Error('Standing controller is only declared in the experimental standing scene');
+    if (!actuatorPlant || !descriptor.standingControllerId || payload.controllerId !== descriptor.standingControllerId) throw new Error('Standing controller is only declared in its matching experimental scene');
     if (Object.keys(payload).some(k=>!['type','controllerId'].includes(k))) throw new Error('Unexpected standing command field');
     if (standingEvaluator.startedAt != null) throw new Error('Reset explicitly before starting a new standing trial');
     if (!actuationEnabled) throw new Error('Standing cannot engage with actuation disabled');
     accepted=holdCommandsAt(ASIMOV_SOURCE.joints.map(j=>j.referenceRad));
-    controller={kind:'standing',profile:ASIMOV_STANDING_CONTROLLER,startedAtSeconds:Number(data.time)};
+    controller={kind:'standing',profile:sensorStanding?ASIMOV_SENSOR_STANDING_CONTROLLER:ASIMOV_STANDING_CONTROLLER,startedAtSeconds:Number(data.time)};
+    sensorStanding?.reset(Number(data.time));
     standingEvaluator.start(Number(data.time),rootObservation());
   } else if (payload.type === 'release_stand') {
-    if (descriptor.standingControllerId !== ASIMOV_STANDING_CONTROLLER.id) throw new Error('No standing controller in this scene');
+    if (!descriptor.standingControllerId) throw new Error('No standing controller in this scene');
     accepted=holdCommandsAt(ASIMOV_JOINT_ORDER.map((_,i)=>measured(i).positionRad));
     controller=null; commandProfile=ASIMOV_JOINT_HOLD_PROFILE;
+  } else if (payload.type === 'set_standing_targets') {
+    if (controller?.kind!=='standing' || standingEvaluator.failure || sensorStanding?.fault) throw new Error('Upper-body targets require an active, nonfailed standing trial');
+    if(Object.keys(payload).some(k=>!['type','targetsRad'].includes(k)))throw new Error('Unexpected standing target field');
+    const targets=payload.targetsRad;
+    if(!targets||typeof targets!=='object'||Array.isArray(targets)||!Object.keys(targets).length)throw new Error('Nonempty upper-body targets required');
+    const allowed=new Set(ASIMOV_JOINT_ORDER.slice(12));
+    for(const [id,v] of Object.entries(targets))if(!allowed.has(id)||!Number.isFinite(v)||v<jointState.get(id).range[0]||v>jointState.get(id).range[1])throw new Error('Standing targets accept bounded waist/arm joints only');
+    const next=holdCommandsAt(ASIMOV_JOINT_ORDER.map((id,i)=>Object.hasOwn(targets,id)?targets[id]:accepted[i].positionRad));
+    accepted=next; // Keep balance regulator/evaluator; a subsequent fall remains a failure.
   } else if (payload.type === 'set_joint_targets') {
     const targets = payload.targetsRad;
     if (!targets || typeof targets !== 'object' || Array.isArray(targets) || !Object.keys(targets).length) throw new Error('set_joint_targets requires a non-empty targetsRad object');
@@ -501,7 +529,7 @@ function command(payload = {}) {
   } else {
     throw new Error(`Unsupported physical command: ${payload.type}`);
   }
-  if (standingEvaluator.startedAt != null) standingEvaluator.update(Number(data.time),rootObservation(),readContacts(),actuationEnabled,controller?.kind==='standing');
+  if (standingEvaluator.startedAt != null) standingEvaluator.update(Number(data.time),rootObservation(),readContacts(),actuationEnabled,controller?.kind==='standing' && !sensorStanding?.fault);
   return observation();
 }
 
@@ -518,7 +546,7 @@ function applySetup(payload = {}) {
   for (const actuator of actuatorState.values()) if (!enabled) data.ctrl[actuator.id] = 0;
   logSetup({ event: 'set_actuation', enabled, detail: enabled ? 'actuator effort re-enabled' : 'every actuator produces zero effort; the controller keeps running and keeps issuing bounded commands' });
   mujoco.mj_forward(model, data);
-  if (standingEvaluator.startedAt != null) standingEvaluator.update(Number(data.time),rootObservation(),readContacts(),actuationEnabled,controller?.kind==='standing');
+  if (standingEvaluator.startedAt != null) standingEvaluator.update(Number(data.time),rootObservation(),readContacts(),actuationEnabled,controller?.kind==='standing' && !sensorStanding?.fault);
   return observation();
 }
 
