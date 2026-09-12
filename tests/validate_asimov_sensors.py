@@ -39,7 +39,15 @@ class SensorNative(Native):
                 name=self.m.geom(gid).name or ''
                 if name=='floor' or name.startswith(('left_foot','right_foot')):self.m.geom_friction[gid,0]=floor_friction
         if contact_time is not None:self.m.geom_solref[:,0]=contact_time
-        mujoco.mj_setConst(self.m,self.d);mujoco.mj_forward(self.m,self.d)
+        # mj_setConst uses mjData as scratch and overwrites qpos with qpos0.
+        # Never let a test-only parameter change erase the declared elbow offsets.
+        if mass_scale != 1 or com_shift != 0:
+            scratch = mujoco.MjData(self.m)
+            mujoco.mj_setConst(self.m, scratch)
+        mujoco.mj_resetDataKeyframe(self.m, self.d, 0)
+        mujoco.mj_forward(self.m, self.d)
+        assert np.array_equal(self.d.qpos, self.m.key_qpos[0]), 'Declared initial keyframe lost'
+        assert np.array_equal(self.nom, self.d.qpos[self.q]), 'Native hold target differs from initial keyframe'
         self.sample()
     def noise(self,a):
         self.rng=(1664525*self.rng+1013904223)&0xffffffff
@@ -114,10 +122,15 @@ def validate(wasm_path,report):
     wasm=json.loads(Path(wasm_path).read_text());parity={}
     for key,w in wasm.items():
         n=SensorNative(key);errors={'jointRad':0.,'bodyM':0.,'motorNm':0.}
+        initial=w['initial']
+        expected_q=np.array([initial['joints'][j['id']]['positionRad'] for j in SOURCE['joints']])
+        expected_b=np.array([initial['bodies'][b]['positionM'] for b in SOURCE['bodies']])
+        assert np.max(np.abs(n.d.qpos[n.q]-expected_q))<1e-12, (key,'initial joint mismatch')
+        assert np.max(np.abs(n.d.xpos[n.body_ids]-expected_b))<1e-12, (key,'initial body mismatch')
         for o in w['trace']:
             while n.d.time<o['simulationTime']-1e-10:n.step()
             for label,a,b in [('jointRad',n.d.qpos[n.q],[o['joints'][j['id']]['positionRad'] for j in SOURCE['joints']]),('bodyM',n.d.xpos[n.body_ids],[o['bodies'][b]['positionM'] for b in SOURCE['bodies']]),('motorNm',n.motor,[j['motorNm'] for j in o['actuatorModel']['joints']])]:errors[label]=max(errors[label],float(np.max(np.abs(a-np.array(b)))))
-        assert errors['jointRad']<1e-6 and errors['bodyM']<1e-6 and errors['motorNm']<1e-4,errors
+        assert errors['jointRad']<1e-6 and errors['bodyM']<1e-6 and errors['motorNm']<1e-4,(key,errors)
         parity[key]=errors
     baseline=run('nominal');tight=run('tight-dt',dt=.00125)
     convergence={key:max(float(np.max(np.abs(np.array(a[field])-b[field]))) for a,b in zip(baseline['trace'],tight['trace'])) for key,field in [('jointRad','q'),('bodyM','b'),('velocityRadS','v'),('motorNm','motor')]}
