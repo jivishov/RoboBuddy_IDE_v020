@@ -213,18 +213,23 @@ async function load(modelPackage) {
 }
 function reset() { return applyDeclaredInitialState(); }
 function step(count = 1) { if (paused) return observation(); if (!Number.isInteger(count) || count < 1 || count > MAX_STEP_BATCH) throw new RangeError(`step count must be an integer from 1 to ${MAX_STEP_BATCH}`); for (let index = 0; index < count; index += 1) mujoco.mj_step(model, data); return observation(); }
+// One request advances many real MuJoCo steps and returns the ground-truth observations
+// captured at a declared step cadence. Sampling is a pure, deterministic function of the
+// requested step count: the worker never derives task state, and every returned entry is
+// an ordinary observation() of the actual MuJoCo state at that step.
 function stepSampled(count = 1, sampleEverySteps = 1) {
-  if (paused) return { observations: [observation()] };
+  if (!model || !data) throw new Error('No MuJoCo model is loaded');
   if (!Number.isInteger(count) || count < 1 || count > MAX_STEP_BATCH) throw new RangeError(`step count must be an integer from 1 to ${MAX_STEP_BATCH}`);
   if (!Number.isInteger(sampleEverySteps) || sampleEverySteps < 1) throw new RangeError('sampleEverySteps must be a positive integer');
-  const sampleCount = sampledObservationCount(count, sampleEverySteps);
-  if (sampleCount > MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE) throw new RangeError(`A ${count}-step advance sampled every ${sampleEverySteps} steps would return ${sampleCount} observations; maximum is ${MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE}`);
+  if (paused) return { observations: [observation()], executedSteps: 0, sampleEverySteps };
+  const expected = sampledObservationCount(count, sampleEverySteps);
+  if (expected > MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE) throw new RangeError(`A ${count}-step advance sampled every ${sampleEverySteps} steps needs ${expected} observations; this worker returns at most ${MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE}`);
   const observations = [];
   for (let index = 1; index <= count; index += 1) {
     mujoco.mj_step(model, data);
-    if (index % sampleEverySteps === 0 || index === count) observations.push(observation());
+    if (index === count || index % sampleEverySteps === 0) observations.push(observation());
   }
-  return { observations };
+  return { observations, executedSteps: count, sampleEverySteps };
 }
 function validatedJointTarget(jointId, targetValue) {
   if (!jointId || !jointState.has(jointId)) throw new Error(`Unknown declared joint ${jointId || '<missing>'}`);
