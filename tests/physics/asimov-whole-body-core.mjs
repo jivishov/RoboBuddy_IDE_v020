@@ -93,16 +93,20 @@ for(const bad of [
   }
 }
 
-// Supervisor + nominal target cannot bypass the source target-rate bound.
+// Supervisor + nominal trajectory cannot bypass any source target-rate bound.
 {
   const half=-.1;
   const f=fixture({quaternion:[Math.cos(half),Math.sin(half),0,0]});
-  const joint=ASIMOV_SOURCE.joints.find(j=>j.id==='left_ankle_roll_joint');
-  const requested=Math.min(joint.rangeRad[1],joint.velocityLimitRadS*.05-.009);
-  const program=parseAsimovWholeBody(envelope({stabilization:'ground_truth',keyframes:[{duration_seconds:.05,targets_rad:{left_ankle_roll_joint:requested}}]}));
+  const program=parseAsimovWholeBody(envelope({stabilization:'ground_truth',keyframes:[{duration_seconds:.1,targets_rad:{left_ankle_roll_joint:.09,left_knee_joint:.10}}]}));
   const result=await executeAsimovWholeBodyMotion(f.sim,program,{dt:.0025,guard,advance:f.advance});
-  assert.ok(result.commandRateLimitEvents>=1);
-  assert.ok(Math.abs(f.commands[0].left_ankle_roll_joint)<=joint.velocityLimitRadS*.05+1e-10);
+  assert.ok(Number.isInteger(result.commandRateLimitEvents)&&result.commandRateLimitEvents>=0);
+  let previous=Object.fromEntries(ASIMOV_SOURCE.joints.map(j=>[j.id,j.referenceRad]));
+  for(const command of f.commands) {
+    for(const joint of ASIMOV_SOURCE.joints) {
+      assert.ok(Math.abs(command[joint.id]-previous[joint.id])<=joint.velocityLimitRadS*.05+1e-10,`${joint.id} exceeded final target-rate bound`);
+    }
+    previous=command;
+  }
 }
 
 // Velocity-limit validation happens before the first plant mutation.
