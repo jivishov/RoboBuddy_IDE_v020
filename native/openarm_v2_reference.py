@@ -37,10 +37,14 @@ ACTUATORS = [
 ]
 INITIAL = {
     **{f'openarm_left_joint{i}': 0.0 for i in range(1, 8)},
-    'openarm_left_joint4': math.pi / 2,
+    'openarm_left_joint1': -0.004216999605119041,
+    'openarm_left_joint4': 1.6592956429571402,
+    'openarm_left_joint6': -0.09271631576736272,
     'openarm_left_finger_joint1': 0.65,
     **{f'openarm_right_joint{i}': 0.0 for i in range(1, 8)},
-    'openarm_right_joint4': math.pi / 2,
+    'openarm_right_joint1': 0.004216999605119041,
+    'openarm_right_joint4': 1.6592956429571402,
+    'openarm_right_joint6': 0.09271631576736272,
     'openarm_right_finger_joint1': -0.65,
 }
 
@@ -56,47 +60,28 @@ def arm(side, values, finger=None):
     return out
 
 
-LEFT_LIFT = [-0.545, 0, 0, 97.436, 0, -7.941, 0]
-RIGHT_LIFT = [0.545, 0, 0, 97.436, 0, 7.941, 0]
-LEFT_TRANSFER = [-26.7699, 0, 0, 64.934, 0, -1.6954, 0]
-RIGHT_TRANSFER = [26.7699, 0, 0, 64.934, 0, 1.6954, 0]
-LEFT_PLACE = [-27.1394, 0, 0, 56.4231, 0, 6.4055, 0]
-RIGHT_PLACE = [27.1394, 0, 0, 56.4231, 0, -6.4055, 0]
-STAGES = [
-    ('settle_initial', {}, 0.40),
-    ('left_close', {'openarm_left_finger_joint1': 0.05}, 0.50),
-    ('left_lift', arm('left', LEFT_LIFT, 0.05), 1.00),
-    ('left_transfer', arm('left', LEFT_TRANSFER, 0.05), 1.20),
-    ('left_lower', arm('left', LEFT_PLACE, 0.05), 0.90),
-    ('left_release', {'openarm_left_finger_joint1': 0.65}, 0.45),
-    ('left_settle', {}, 0.45),
-    ('left_retreat', arm('left', LEFT_LIFT, 0.65), 0.85),
-    ('right_close', {'openarm_right_finger_joint1': -0.33}, 0.50),
-    ('right_lift', arm('right', RIGHT_LIFT, -0.33), 1.00),
-    ('right_transfer', arm('right', RIGHT_TRANSFER, -0.33), 1.20),
-    ('right_lower', arm('right', RIGHT_PLACE, -0.33), 0.90),
-    ('right_release', {'openarm_right_finger_joint1': -0.65}, 0.45),
-    ('right_settle', {}, 0.45),
-    ('right_retreat', arm('right', RIGHT_LIFT, -0.65), 0.85),
-]
+# Shared reference trajectory specification; servo and evaluation below are native implementations.
+# This runner checks numerical conformance, not independent hardware truth.
+REFERENCE_PATH = ROOT / 'models' / 'openarm_v2' / 'reference-controller.json'
+STAGES = [(s['name'], s['targetsRad'], s['durationSeconds']) for s in json.loads(REFERENCE_PATH.read_text())['stages']]
 
 TARGETS = {
     'flask': {
-        'center': np.array([0.608, 0.1535]),
+        'center': np.array([0.67, 0.1535]),
         'half': np.array([0.017, 0.013]),
         'support': 'left_hotplate',
         'initial_z': 1.092,
         'geoms': {'flask_body_geom', 'flask_shoulder_geom', 'flask_grip_geom'},
-        'fingers': {'left_inner_fingertip', 'left_outer_fingertip'},
+        'fingers': {'finger_inner_left_collision_', 'finger_outer_left_collision_'},
         'side': 'left',
     },
     'beaker': {
-        'center': np.array([0.608, -0.1535]),
+        'center': np.array([0.67, -0.1535]),
         'half': np.array([0.021, 0.021]),
         'support': 'right_ring_gauze',
         'initial_z': 1.105,
         'geoms': {'beaker_grip_geom'},
-        'fingers': {'right_inner_fingertip', 'right_outer_fingertip'},
+        'fingers': {'finger_inner_right_collision_', 'finger_outer_right_collision_'},
         'side': 'right',
     },
 }
@@ -186,6 +171,9 @@ def contacts(model, data):
     out = []
     for index in range(data.ncon):
         contact = data.contact[index]
+        force = np.zeros(6)
+        mujoco.mj_contactForce(model, data, index, force)
+        if force[0] <= 0.01 or contact.dist < -0.002: continue
         out.append((
             name(model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1),
             name(model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2),
@@ -193,12 +181,14 @@ def contacts(model, data):
     return out
 
 
-def object_contact_state(model, data, obj):
+def object_contact_state(model, data, obj, pairs=None):
     spec = TARGETS[obj]
-    pairs = contacts(model, data)
+    pairs = contacts(model, data) if pairs is None else pairs
     touched = set()
     support = False
     for first, second in pairs:
+        first = next((prefix for prefix in spec['fingers'] if first.startswith(prefix)), first)
+        second = next((prefix for prefix in spec['fingers'] if second.startswith(prefix)), second)
         if first in spec['geoms'] and second in spec['fingers']:
             touched.add(second)
         if second in spec['geoms'] and first in spec['fingers']:
@@ -292,6 +282,10 @@ def run_trial(trial='nominal', timestep=None):
     trajectory = []
     contact_pairs_seen = set()
     next_sample_time = 0.0
+    references = dict(INITIAL)
+    maximum_penetration = 0.0
+    palm_contact_seen = False
+    grasp_since = {obj: None for obj in TARGETS}
 
     for stage_name, targets, seconds in STAGES:
         if trial == 'insufficient-budget' and stage_name == 'left_transfer':
@@ -299,14 +293,29 @@ def run_trial(trial='nominal', timestep=None):
         actual_targets = dict(targets)
         if trial == 'outside-left' and stage_name in ('left_transfer', 'left_lower', 'left_retreat'):
             actual_targets = arm('left', [-8.0, 0, 0, 80.0, 0, -2.0, 0], 0.05 if stage_name != 'left_retreat' else 0.65)
-        for joint, value in actual_targets.items():
-            data.ctrl[acts[joint]] = float(value)
+        start_references = dict(references)
+        references.update(actual_targets)
         command_sequence.append({'stage': stage_name, 'targetsRad': actual_targets, 'durationSeconds': seconds})
 
         step_count = int(round(seconds / model.opt.timestep))
         assert abs(step_count * model.opt.timestep - seconds) < 1e-9
-        for _ in range(step_count):
+        for step in range(step_count):
+            u = step * float(model.opt.timestep) / seconds
+            h = u ** 3 * (10 + u * (-15 + 6 * u))
+            for joint, value in references.items():
+                actuator_id = acts[joint]
+                ref = start_references[joint] + (value - start_references[joint]) * h
+                dof = int(model.jnt_dofadr[joints[joint]])
+                bias = 0.0 if 'finger' in joint else float(data.qfrc_bias[dof]) / float(model.actuator_gainprm[actuator_id, 0])
+                data.ctrl[actuator_id] = np.clip(ref + bias, *model.actuator_ctrlrange[actuator_id])
             mujoco.mj_step(model, data)
+            mujoco.mj_forward(model, data)
+            for contact in data.contact:
+                names = [name(model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom1), name(model, mujoco.mjtObj.mjOBJ_GEOM, contact.geom2)]
+                if any(n.startswith(('flask_', 'beaker_')) for n in names):
+                    maximum_penetration = max(maximum_penetration, -float(contact.dist))
+                    if any(n.startswith('ee_base_link_') for n in names) and contact.dist < 0:
+                        palm_contact_seen = True
             pair_list = contacts(model, data)
             contact_pairs_seen.update(tuple(sorted(pair)) for pair in pair_list)
 
@@ -314,7 +323,7 @@ def run_trial(trial='nominal', timestep=None):
                 st = state[obj]
                 spec = TARGETS[obj]
                 position = body_position(data, bodies[obj])
-                touched, support = object_contact_state(model, data, obj)
+                touched, support = object_contact_state(model, data, obj, pair_list)
                 bilateral = spec['fingers'].issubset(touched)
                 held = bool(touched)
                 st['max_z'] = max(st['max_z'], float(position[2]))
@@ -323,7 +332,10 @@ def run_trial(trial='nominal', timestep=None):
                 st['current_held'] = held
                 st['current_bilateral'] = bilateral
                 if bilateral:
-                    st['grasp'] = True
+                    if grasp_since[obj] is None: grasp_since[obj] = float(data.time)
+                    if float(data.time) - grasp_since[obj] >= 0.06 - 1e-9: st['grasp'] = True
+                else:
+                    grasp_since[obj] = None
 
                 if st['grasp'] and bilateral and position[2] > spec['initial_z'] + CRITERIA['lift_clearance_m']:
                     st['lift'] = True
@@ -464,7 +476,7 @@ def run_trial(trial='nominal', timestep=None):
     flask = metrics('flask')
     beaker = metrics('beaker')
     required = ('bilateralContact', 'lifted', 'carried', 'supportWhileHeld', 'released', 'support', 'settled', 'retreated', 'insideTarget')
-    success = all(flask[key] for key in required) and all(beaker[key] for key in required)
+    success = all(flask[key] for key in required) and all(beaker[key] for key in required) and maximum_penetration <= .002 and not palm_contact_seen
     blocked_actual = float(data.qpos[int(model.jnt_qposadr[joints['openarm_left_joint1']])])
     final_state = {
         'simulationTimeSeconds': float(data.time),
@@ -495,8 +507,8 @@ def run_trial(trial='nominal', timestep=None):
             'impratio': float(model.opt.impratio),
         },
         'model': {
-            'id': 'robobuddy-openarm-v2-phase5a-v2',
-            'packageId': 'openarm-v2-phase5a-a8c9796-v2',
+            'id': 'robobuddy-openarm-v2-phase5a-v3',
+            'packageId': 'openarm-v2-phase5a-a8c9796-v3',
             'asset': str(MODEL_PATH.relative_to(ROOT)).replace('\\', '/'),
             'sha256': sha256_bytes(MODEL_PATH.read_bytes()),
             'nq': int(model.nq),
@@ -506,7 +518,7 @@ def run_trial(trial='nominal', timestep=None):
             'hasObjectWeld': False,
         },
         'controller': {
-            'id': 'openarm-v2-bimanual-stack-v2',
+            'id': 'openarm-v2-bimanual-stack-v3',
             'sha256': canonical_json_hash(descriptor),
             'descriptor': descriptor,
         },
@@ -518,6 +530,8 @@ def run_trial(trial='nominal', timestep=None):
         'finalState': final_state,
         'metrics': {
             'success': bool(success),
+            'maximumPenetrationM': maximum_penetration,
+            'palmContactSeen': palm_contact_seen,
             'flask': flask,
             'beaker': beaker,
             'blockedLeftJoint1ActualRad': blocked_actual,

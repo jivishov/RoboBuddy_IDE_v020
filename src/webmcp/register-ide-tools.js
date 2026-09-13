@@ -1,3 +1,4 @@
+import { getOpenArmWorkcellDefinitions, inspectOpenArmWorkcell, manageOpenArmWorkcell, runOpenArmProgram } from './openarm-workcell.js';
 import { executeAsimovPhysicalControl, getAsimovPhysicalControlDefinition } from './asimov-physical-control.js';
 import { cancelledResult, domainErrorResult } from './agent-facade.js';
 import { createMicroDuckControlSchema } from './microduck-control.js';
@@ -97,6 +98,10 @@ function createTools(facade, epoch) {
   }
   const openarmControl = getOpenArmPhysicalControlDefinition(facade);
   if (openarmControl) tools.push({ ...openarmControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeOpenArmPhysicalControl(facade, input, signal, epoch)) });
+  for (const { readOnly, ...definition } of getOpenArmWorkcellDefinitions(facade)) {
+    const execute = definition.name === 'inspect_openarm_workcell' ? (input, signal) => inspectOpenArmWorkcell(facade, input, epoch) : definition.name === 'manage_openarm_workcell' ? (input, signal) => manageOpenArmWorkcell(facade, input, signal, epoch) : (input, signal) => runOpenArmProgram(facade, input, signal, epoch);
+    tools.push({ ...definition, annotations: readOnly ? READ_ONLY_ANNOTATIONS : RUN_ANNOTATIONS, execute: safeHandler(execute) });
+  }
   const lekiwiControl = getLeKiwiPhysicalControlDefinition(facade);
   if (lekiwiControl) tools.push({ ...lekiwiControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeLeKiwiPhysicalControl(facade, input, signal, epoch)) });
   // Present only for the ready Unitree G1 PHYSICAL workspace. The retained kinematic pose

@@ -178,7 +178,7 @@ export class PhysicalPythonRuntime {
         return active.bridge.disconnect();
       case 'send_action':
         this.#assertConnected(active);
-        return active.bridge.sendAction(args.targets, { maxSteps: Number(args.max_steps) });
+        return active.bridge.sendAction(args.targets, { maxSteps: Number(args.max_steps), ...(args.duration_seconds === undefined ? {} : { durationSeconds: args.duration_seconds }) });
       case 'advance':
         this.#assertConnected(active);
         return active.bridge.advance(Number(args.seconds));

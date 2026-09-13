@@ -24,7 +24,7 @@ export const PHYSICS_PREVIEW_CAPABILITIES = Object.freeze({
     capability: 'single-authority OpenArm V2 bimanual dry-stack workspace with shared free-body objects, live async Python and causal task evaluation',
     evidence: MODEL_EVIDENCE.NUMERICALLY_VERIFIED,
     limitations: [
-      'Kinematics, mirrored V2 joint frames, link inertias and source simulation actuator semantics are pinned to enactic/openarm_mujoco V2; browser collision meshes are explicit primitive surrogates rather than upstream mesh collisions.',
+      'Kinematics, mirrored V2 joint frames, link inertias and source simulation actuator semantics are pinned to enactic/openarm_mujoco V2; decomposed collision meshes and their rendered geometry now share the pinned source components; servo reference limits and the conservative gripper cap are declared simulation estimates.',
       'The hotplate, ring stand/gauze, staging supports, flask and beaker are dry benchmark geometry rather than measured laboratory hardware.',
       'No thermal, liquid, tactile/force-sensor, CAN timing or hardware-safety validation is claimed.',
     ],

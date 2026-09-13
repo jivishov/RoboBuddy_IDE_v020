@@ -90,7 +90,8 @@ const OPENARM_PHYSICAL_SCENARIO = Object.freeze({
   schema: 'robobuddy.physical-workspace.v1',
   schemaVersion: 1,
   simulationMode: 'physical_mujoco',
-  workspaceRevision: 'openarm-v2-physical-bimanual-stack-v2',
+  workspaceRevision: 'openarm-v2-physical-bimanual-stack-v3',
+  executionBudget: Object.freeze({ pythonWallTimeMs: 120000 }),
   id: 'openarm-04-filtration-workcell',
   title: 'Bimanual Heater and Ring-Stand Stack',
   brief: 'Program both OpenArm V2 arms in one MuJoCo world. The left gripper must physically grasp, lift, carry, support, release and retreat from an empty flask on an unpowered hotplate; only then may the right gripper do the same with an empty beaker on the ring-stand gauze. Task success is based on observed contact, free-body motion and stable support, not legacy attachment state.',
@@ -108,7 +109,7 @@ const OPENARM_PHYSICAL_SCENARIO = Object.freeze({
     legacyTaskRepository: TASK_PATCH_SOURCE,
     legacyTaskRevision: TASK_PATCH_REVISION,
     legacyTaskPath: 'missions/lab-assistant/v2/definitions/openarm/openarm-04-filtration-workcell.json',
-    authority: 'MuJoCo PhysicsSession; canonical OpenArm arm mesh and dry-workcell presentation consume MuJoCo observations only',
+    authority: 'MuJoCo PhysicsSession; shared source collision surfaces and workcell presentation consume MuJoCo body transforms only',
   }),
   frames: Object.freeze({
     physics: 'MuJoCo right-handed Z-up world, metres/radians; OpenArm mount origin follows the pinned V2 cell relationship',

@@ -262,6 +262,7 @@ export class BrowserMuJoCoBackend {
       appliedServoKp: raw.appliedServoKp === undefined ? null : Number(raw.appliedServoKp),
       actuatorForceTotalNm: raw.actuatorForceTotalNm === undefined ? null : Number(raw.actuatorForceTotalNm),
       ...(raw.actuatorModel ? {actuatorModel:structuredClone(raw.actuatorModel),sensorObservation:structuredClone(raw.sensorObservation),standingAssessment:structuredClone(raw.standingAssessment)} : {}),
+      ...(raw.openarm ? { openarm: structuredClone(raw.openarm) } : {}),
       setupLog: Array.isArray(raw.setupLog) ? structuredClone(raw.setupLog) : [] };
   }
 

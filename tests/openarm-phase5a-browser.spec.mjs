@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { OPENARM_MODEL_SHA256 } from '../src/physics/openarm-generated.js';
 import { writeFile } from 'node:fs/promises';
 
 test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels, Python, renderer, evaluator, and WebMCP', async ({ page }, testInfo) => {
@@ -44,7 +45,7 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   await expect(page.locator('#physicsBackendBadge')).toContainText('browser-mujoco');
   await expect(page.locator('#stepBtn')).toBeDisabled();
   await expect(page.locator('#cursorBtn')).toBeDisabled();
-  await expect(page.locator('#simCanvas')).toHaveAttribute('data-openarm-visual-source', 'canonical-v2-arm-mesh-source-aligned');
+  await expect(page.locator('#simCanvas')).toHaveAttribute('data-openarm-visual-source', 'shared-source-collision-geometry-v3');
   await expect(page.locator('#simCanvas')).toHaveAttribute('data-openarm-legacy-base-yaw-rendered', 'false');
 
   const initial = await page.evaluate(() => {
@@ -69,28 +70,19 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   await writeFile(initialPath, JSON.stringify({ ...initial, pageErrors }, null, 2));
   await testInfo.attach('openarm-initial-state.json', { path: initialPath, contentType: 'application/json' });
   expect(initial.backend).toBe('OpenArmPhysicalSimulator');
-  expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v2' });
-  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v2', asset: 'models/openarm_v2/manipulation.xml' });
-  expect(initial.model.sha256).toBe('960ecf32c0aa7c8b2b016c6f28a7a8afe8147ce6cb1cdfd9b91f550cd4fc27dc');
+  expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v3' });
+  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v3', asset: 'models/openarm_v2/manipulation.xml' });
+  expect(initial.model.sha256).toBe(OPENARM_MODEL_SHA256);
   expect(initial.presentation).toMatchObject({
     physicalAuthority: 'MuJoCo PhysicsSession only',
-    jointPresentationSource: 'observed MuJoCo joint positions',
-    mountTranslationMm: [185, 790, 0],
+    jointPresentationSource: 'observed MuJoCo body transforms, including each passive finger',
+    sharedCollisionGeometry: true,
     legacyBaseYawControlled: false,
     legacyBaseYawRendered: false,
     observationBatchSteps: 2,
     observationPeriodSeconds: 0.002,
   });
-  expect(initial.presentation.hiddenNonphysicalParts).toEqual([
-    'openarm_body_link0_low_stand',
-    'turntable_bearing',
-    'turntable_disc',
-    'turntable_heading',
-    'turntable_pedestal',
-  ]);
-  expect(initial.presentation.source.robotId).toBe('openarm_v2_bimanual');
-  expect(initial.presentation.canonicalMountPositionsMm.left).toEqual([185, 1340, -31]);
-  expect(initial.presentation.canonicalMountPositionsMm.right).toEqual([185, 1340, 31]);
+  expect(initial.presentation.geometryCount).toBeGreaterThan(50);
   expect(initial.leftBase).toEqual([0.185, 0.031, 1.34]);
   expect(initial.rightBase).toEqual([0.185, -0.031, 1.34]);
   expect(initial.source).toContain('from robobuddy.sim import connect');
@@ -104,13 +96,17 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(initial.beaker.positionM[2]).toBeCloseTo(1.105, 3);
   expect(initial.leftEe[0]).toBeCloseTo(0.401, 3);
   expect(initial.leftEe[1]).toBeCloseTo(0.1535, 3);
-  expect(initial.leftEe[2]).toBeCloseTo(1.12, 3);
+  expect(initial.leftEe[2]).toBeCloseTo(1.14, 3);
   expect(initial.rightEe[0]).toBeCloseTo(0.401, 3);
   expect(initial.rightEe[1]).toBeCloseTo(-0.1535, 3);
-  expect(initial.rightEe[2]).toBeCloseTo(1.12, 3);
+  expect(initial.rightEe[2]).toBeCloseTo(1.14, 3);
 
+  await page.screenshot({path:testInfo.outputPath('openarm-workcell.png')});
   await page.locator('#runBtn').click();
-  await expect(page.locator('#statusMessage')).toContainText('Run complete', { timeout: 180_000 });
+  await page.waitForFunction(() => /Run complete|run failed/i.test(document.querySelector('#statusMessage').textContent), null, { timeout: 180_000 });
+  const runStatus = await page.locator('#statusMessage').textContent();
+  if (!runStatus.includes('Run complete')) await writeFile(testInfo.outputPath('python-run-failure.txt'), await page.locator('body').innerText());
+  expect(runStatus).toContain('Run complete');
 
   const completed = await page.evaluate(() => {
     const app = window.__robobuddyCi.app;
@@ -140,6 +136,9 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   await writeFile(completedPath, JSON.stringify({ ...completed, pageErrors }, null, 2));
   await testInfo.attach('openarm-completed-state.json', { path: completedPath, contentType: 'application/json' });
 
+  await page.screenshot({path:testInfo.outputPath('openarm-transfer-completed.png')});
+  expect(completed.evaluation.maximumPenetrationM).toBeLessThan(.002);
+  expect(completed.evaluation.palmContactSeen).toBe(false);
   expect(completed.canvasTaskSuccess).toBe('true');
   expect(completed.evaluation.success).toBe(true);
   expect(completed.evaluation.orderViolation).toBe(false);
