@@ -32,27 +32,27 @@ Start with `inspect_capability`. It reports all 23 named joint ranges, the selec
 | `set_standing_targets` | Bounded waist/arm targets while keeping an already active nonfailed standing controller |
 | `advance` | At most 2 simulation seconds per call |
 | `run_sequence` | 1–32 prevalidated segments, at most 2 s each and 12 s total |
-| `run_whole_body_motion` | Execute 1–32 agent-generated whole-body keyframes in a free-base scene, at most 2 s each and 12 s total |
+| `run_whole_body_motion` | Execute 1–32 agent-generated whole-body keyframes in an actuated free-base scene, at most 2 s each and 12 s total |
 | `wait_for_joint` | Observe existing control until a measured position remains within tolerance, or timeout |
 | `stop` | Bounded measured-position hold; not a velocity reset |
 | `reset` | New initial condition and trial; not task success |
 
-Waist/arm `set_standing_targets` remains deliberately separate from whole-body programming. The 12 leg joints cannot be overridden while preserving the existing standing regulator through that command. `run_whole_body_motion` instead executes a complete, bounded full-body target trajectory against the free-base MuJoCo plant. It does not retain the existing standing trial. Motion and failure arise from joint actuation, gravity and contact.
+Waist/arm `set_standing_targets` remains deliberately separate from whole-body programming. The 12 leg joints cannot be overridden while preserving the existing standing regulator through that command. `run_whole_body_motion` instead executes a complete, bounded full-body target trajectory against an actuated free-base MuJoCo plant. It does not retain the existing standing trial. Motion and failure arise from joint actuation, gravity and contact. **Passive Gravity Drop remains observation-only** and rejects whole-body motion before issuing any target.
 
 ## Agent-generated whole-body movement
 
 `run_whole_body_motion` is intended for motions such as stepping, walking attempts, turning, squatting, reaching, gesturing and other coordinated full-body sequences. The `motion_intent` value is descriptive only. Labeling a trajectory `walk` does not make it a successful walk.
 
-Each keyframe contains a duration and one or more named joint targets in radians. Missing joints retain the previous trajectory target. Before the first plant mutation, the complete request is checked for schema validity, source joint ranges, total duration, timestep alignment and source velocity-limit feasibility. The executor then linearly interpolates all 23 joint targets at 20 Hz and sends them through the existing bounded joint controller. The root pose, root velocity and external forces are never commanded.
+Each keyframe contains a duration and one or more named joint targets in radians. Missing joints retain the previous trajectory target. Before the first plant mutation, the complete request is checked for schema validity, source joint ranges, total duration, timestep alignment and source velocity-limit feasibility. The executor then linearly interpolates all 23 joint targets at 20 Hz and sends them through the existing bounded joint controller. The final issued target stream is rate-limited against the source joint velocity limits as well, so optional stabilization cannot bypass the trajectory rate bound. The root pose, root velocity and external forces are never commanded.
 
 Two stabilization modes are available:
 
-- `none`: execute the agent's full-body target trajectory without an added whole-body supervisor.
-- `ground_truth` (default): apply a small, bounded 20 Hz ankle-target correction from measured pelvis roll/pitch and angular velocity. This is explicit simulator-only supervisory feedback. It is not the synthetic hardware-like sensor stack, a trained locomotion policy, or a hardware controller.
+- `none` (**default**): execute the agent's full-body target trajectory without an added whole-body supervisor.
+- `ground_truth`: apply a small, bounded 20 Hz ankle-target correction from measured pelvis roll/pitch and angular velocity. This must be explicitly requested. It is simulator-only supervisory feedback, not the synthetic hardware-like sensor stack, a trained locomotion policy, or a hardware controller.
 
-The supervisor is intentionally limited to ankle target offsets and remains inside source joint ranges. It cannot set the root upright, cancel gravity, teleport the robot, create foot contact or reset a failed run. Unless `abort_on_instability` is set to `false`, execution stops when the pelvis becomes too low, tilt becomes excessive, actuation is disabled, or a non-foot body reaches the ground.
+The supervisor is intentionally limited to ankle target offsets and remains inside source joint ranges and target-rate limits. It cannot set the root upright, cancel gravity, teleport the robot, create foot contact or reset a failed run. Unless `abort_on_instability` is set to `false`, execution stops when the pelvis becomes too low, tilt becomes excessive, actuation is disabled, or a non-foot body reaches the ground.
 
-The result reports measured root displacement, yaw change, maximum tilt, minimum pelvis height, observed support state at each keyframe and support-state transitions. A returned `executionStatus: "completed"` means all requested keyframes executed. It does **not** mean a requested step, walk or turn succeeded. Agents should inspect those measured outcomes and revise their next trajectory if needed.
+The result reports measured root displacement, yaw change, maximum tilt, minimum pelvis height, observed support state at each keyframe, support-state transitions and any final-command target-rate limiting events. A returned `executionStatus: "completed"` means all requested keyframes executed. It does **not** mean a requested step, walk or turn succeeded. Agents should inspect those measured outcomes and revise their next trajectory if needed.
 
 Example exploratory full-body sequence in a free-base actuator scene:
 
@@ -88,7 +88,7 @@ Example exploratory full-body sequence in a free-base actuator scene:
 }
 ```
 
-This example demonstrates the programming surface, not a validated gait. A model should use the returned measured state/contact evidence to determine whether the attempted motion produced useful translation or a stable support transition before extending it into additional steps.
+This example explicitly opts into the simulator-only stabilizer to demonstrate that option. Omitting `stabilization` uses `none`. The example demonstrates the programming surface, not a validated gait. A model should use the returned measured state/contact evidence to determine whether the attempted motion produced useful translation or a stable support transition before extending it into additional steps.
 
 ## Example: stand, then move the elbows without releasing balance
 
@@ -134,9 +134,9 @@ The wait does not send a target. It uses ground-truth joint position, checked ev
 
 ## Bounds and cancellation
 
-Inputs and the complete sequence or whole-body trajectory are validated before any mutation, including joint ranges and timestep alignment. Whole-body programs additionally reject target-rate requests that exceed the source joint velocity limits. Durations must be multiples of 5 ms in original reference scenes or 2.5 ms in actuator/sensor scenes. A single call has a fixed 120 s wall deadline, never extended by progress. Physics advancement checks cancellation, access, workspace and session ownership between at-most-50-ms simulation batches. An already submitted batch cannot be undone. The normal UI Stop remains available; a second concurrent robot-control call is rejected.
+Inputs and the complete sequence or whole-body trajectory are validated before any mutation, including joint ranges and timestep alignment. Whole-body programs reject keyframe target-rate requests that exceed the source joint velocity limits; the interpolated final target stream is independently rate-limited as well. Durations must be multiples of 5 ms in original reference scenes or 2.5 ms in actuator/sensor scenes. A single call has a fixed 120 s wall deadline, never extended by progress. Physics advancement checks cancellation, access, workspace and session ownership between at-most-50-ms simulation batches. An already submitted batch cannot be undone. The normal UI Stop remains available; a second concurrent robot-control call is rejected.
 
-No command sets root pose/velocity, applies external force, changes model mass/contact properties, silently resets after failure, creates synthetic foot contact, or connects to hardware. Agent-generated stepping/walking is expressed only as bounded joint trajectories; whether locomotion occurs is decided by the physical plant. Model sensitivity variations are explicit test-runner cases or separately selected immutable workspaces, not hidden changes from an agent.
+No command sets root pose/velocity, applies external force, changes model mass/contact properties, silently resets after failure, creates synthetic foot contact, or connects to hardware. Agent-generated stepping/walking is expressed only as bounded joint trajectories; whether locomotion occurs is decided by the physical plant. Passive Gravity Drop is excluded rather than silently converted into an actuated scene. Model sensitivity variations are explicit test-runner cases or separately selected immutable workspaces, not hidden changes from an agent.
 
 ## Verification and evidence
 
