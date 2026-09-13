@@ -129,10 +129,16 @@ function clamp(value, minimum, maximum) { return Math.min(maximum, Math.max(mini
 function boundedJoint(jointId, value) { return clamp(value, RANGES[jointId][0], RANGES[jointId][1]); }
 function stabilizedTargets(nominal, state, mode) {
   if (mode !== 'ground_truth') return nominal;
-  const { roll, pitch } = rollPitchOf(state?.root?.quaternion_wxyz);
-  const angular = state?.root?.angular_velocity_rad_s || [0, 0, 0];
-  const pitchCorrection = clamp(0.35 * pitch + 0.03 * Number(angular[1] || 0), -ASIMOV_WHOLE_BODY_LIMITS.maxPitchCorrectionRad, ASIMOV_WHOLE_BODY_LIMITS.maxPitchCorrectionRad);
-  const rollCorrection = clamp(-0.35 * roll - 0.03 * Number(angular[0] || 0), -ASIMOV_WHOLE_BODY_LIMITS.maxRollCorrectionRad, ASIMOV_WHOLE_BODY_LIMITS.maxRollCorrectionRad);
+  const quaternion=state?.root?.quaternion_wxyz;
+  const { roll, pitch } = rollPitchOf(quaternion);
+  const yaw=yawOf(quaternion);
+  const [wx=0,wy=0]=state?.root?.angular_velocity_rad_s || [];
+  // Match the standing controller's yaw-aware world-to-body horizontal rate projection.
+  const c=Math.cos(yaw),s=Math.sin(yaw);
+  const pitchRate=-s*wx+c*wy;
+  const rollRate=c*wx+s*wy;
+  const pitchCorrection = clamp(0.35 * pitch + 0.03 * pitchRate, -ASIMOV_WHOLE_BODY_LIMITS.maxPitchCorrectionRad, ASIMOV_WHOLE_BODY_LIMITS.maxPitchCorrectionRad);
+  const rollCorrection = clamp(-0.35 * roll - 0.03 * rollRate, -ASIMOV_WHOLE_BODY_LIMITS.maxRollCorrectionRad, ASIMOV_WHOLE_BODY_LIMITS.maxRollCorrectionRad);
   return {
     ...nominal,
     left_ankle_pitch_joint: boundedJoint('left_ankle_pitch_joint', nominal.left_ankle_pitch_joint + pitchCorrection),
