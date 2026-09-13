@@ -10,7 +10,10 @@ function contactPair(observation, first, second) {
   return (observation?.contacts || []).some((contact) => {
     const a = contact?.geom1Name;
     const b = contact?.geom2Name;
-    return (a === first && b === second) || (a === second && b === first);
+    const matches = (name, spec) => typeof name === 'string' && (spec.endsWith('_') ? name.startsWith(spec) : name === spec);
+    const force = contact.normalForceN;
+    const valid = Number.isFinite(force) && force > 0.01 && Number.isFinite(contact.distanceM) && contact.distanceM >= -0.002;
+    return valid && ((matches(a, first) && matches(b, second)) || (matches(a, second) && matches(b, first)));
   });
 }
 function objectTouchesGeom(observation, objectGeoms, otherGeom) {
@@ -42,6 +45,8 @@ function newObjectState(spec) {
     innerContactSeen: false,
     outerContactSeen: false,
     graspSeen: false,
+    graspCandidateTimeSeconds: null,
+    maximumBilateralDurationSeconds: 0,
     liftSeen: false,
     carrySeen: false,
     supportWhileHeldSeen: false,
@@ -94,6 +99,9 @@ export class OpenArmBimanualStackEvaluator {
       beaker: newObjectState(this.goal.beaker),
     };
     this.orderViolation = false;
+    this.maximumPenetrationM = 0;
+    this.excessivePenetrationSeen = false;
+    this.palmContactSeen = false;
     this.lastSimulationTimeSeconds = null;
     this.lastObservation = null;
     if (initialObservation) this.observe(initialObservation);
@@ -103,6 +111,18 @@ export class OpenArmBimanualStackEvaluator {
   observe(observation) {
     const simulationTimeSeconds = Number(observation?.simulationTimeSeconds);
     if (!Number.isFinite(simulationTimeSeconds)) return this.snapshot();
+    // Re-reading the same state cannot manufacture dwell evidence.
+    if (this.lastSimulationTimeSeconds != null && simulationTimeSeconds <= this.lastSimulationTimeSeconds) return this.snapshot();
+    if (this.lastSimulationTimeSeconds != null && simulationTimeSeconds - this.lastSimulationTimeSeconds > 0.08) {
+      for (const state of Object.values(this.objects)) { state.graspCandidateTimeSeconds = null; state.settleCandidateTimeSeconds = null; }
+    }
+    for (const contact of observation.contacts || []) {
+      const names = [contact.geom1Name || '', contact.geom2Name || ''];
+      if (!names.some(n => /^(?:flask_|beaker_)/.test(n))) continue;
+      this.maximumPenetrationM = Math.max(this.maximumPenetrationM, -(Number(contact.distanceM) || 0));
+      if (Number(contact.distanceM) < -Number(this.goal.maximumPenetrationM || .002)) this.excessivePenetrationSeen = true;
+      if (names.some(n => n.startsWith('ee_base_link_')) && contact.normalForceN > .01) this.palmContactSeen = true;
+    }
     this.#observeObject('flask', observation, simulationTimeSeconds);
     this.#observeObject('beaker', observation, simulationTimeSeconds);
 
@@ -140,8 +160,12 @@ export class OpenArmBimanualStackEvaluator {
     if (gripperContact) state.contactObservationCount += 1;
     if (bilateralContact) {
       state.bilateralContactObservationCount += 1;
-      state.graspSeen = true;
+      state.graspCandidateTimeSeconds ??= simulationTimeSeconds;
+      const duration = simulationTimeSeconds - state.graspCandidateTimeSeconds;
+      state.maximumBilateralDurationSeconds = Math.max(state.maximumBilateralDurationSeconds, duration);
+      if (duration + 1e-9 >= Number(this.goal.minimumGraspSeconds || .06)) state.graspSeen = true;
     }
+    if (!bilateralContact) state.graspCandidateTimeSeconds = null;
     if (supportContact) state.supportObservationCount += 1;
 
     const liftThreshold = Number(spec.initialBodyZM) + Number(this.goal.liftClearanceM);
@@ -192,7 +216,10 @@ export class OpenArmBimanualStackEvaluator {
 
     const linearSpeed = norm3(bodyVelocity(observation, spec.objectId, 'linearVelocityMS'));
     const angularSpeed = norm3(bodyVelocity(observation, spec.objectId, 'angularVelocityRadS'));
-    const settleEligible = state.releaseSeen
+    const quat = observation?.bodies?.[spec.objectId]?.quaternionWxyz;
+    const upright = Array.isArray(quat) && quat.length === 4 && quat.every(Number.isFinite)
+      && (1 - 2 * (quat[1] ** 2 + quat[2] ** 2)) >= Math.cos(Math.PI / 12);
+    const settleEligible = upright && state.releaseSeen
       && supportContact
       && !gripperContact
       && inTarget
@@ -253,6 +280,7 @@ export class OpenArmBimanualStackEvaluator {
       objectId: state.spec.objectId,
       side: state.spec.side,
       graspSeen: state.graspSeen,
+      maximumBilateralDurationSeconds: state.maximumBilateralDurationSeconds,
       innerContactSeen: state.innerContactSeen,
       outerContactSeen: state.outerContactSeen,
       currentBilateralContact: state.currentBilateralContact,
@@ -285,13 +313,16 @@ export class OpenArmBimanualStackEvaluator {
     const flask = snapshotObject(this.objects.flask);
     const beaker = snapshotObject(this.objects.beaker);
     const success = Boolean(
-      !this.orderViolation
+      !this.orderViolation && !this.excessivePenetrationSeen && !this.palmContactSeen
       && flask.graspSeen && flask.liftSeen && flask.carrySeen && flask.supportWhileHeldSeen && flask.releaseSeen && flask.settled && flask.retreated
       && beaker.graspSeen && beaker.liftSeen && beaker.carrySeen && beaker.supportWhileHeldSeen && beaker.releaseSeen && beaker.settled && beaker.retreated
       && flask.currentSupportContact && beaker.currentSupportContact
       && !flask.currentGripperContact && !beaker.currentGripperContact
     );
     return Object.freeze({
+      maximumPenetrationM: this.maximumPenetrationM,
+      excessivePenetrationSeen: this.excessivePenetrationSeen,
+      palmContactSeen: this.palmContactSeen,
       task: 'OpenArm V2 Physical Bimanual Heater and Ring-Stand Stack',
       physical: true,
       success,

@@ -102,8 +102,11 @@ class PhysicalRobot:
         self.robot_id = robot_id
         self.connection = connection
 
-    async def send_action(self, targets, max_steps=1000):
-        return await _call("send_action", targets=dict(targets), max_steps=int(max_steps))
+    async def send_action(self, targets, max_steps=1000, duration_seconds=None):
+        args = dict(targets=dict(targets), max_steps=int(max_steps))
+        if duration_seconds is not None:
+            args["duration_seconds"] = float(duration_seconds)
+        return await _call("send_action", **args)
 
     async def advance(self, seconds):
         return await _call("advance", seconds=float(seconds))

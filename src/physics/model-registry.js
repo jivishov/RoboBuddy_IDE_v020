@@ -191,3 +191,11 @@ export function capabilityRecord({ backend, capability, evidence, limitations = 
   if (!Object.values(MODEL_EVIDENCE).includes(evidence)) throw new TypeError(`Unknown evidence label: ${evidence}`);
   return Object.freeze({ backend, capability, evidence, limitations: [...limitations] });
 }
+
+// Only disposable in-memory workcells may leave the registry. Bundled packages are immutable.
+export function unregisterTransientModelPackage(id) {
+  const entry = registry.get(id);
+  if (!entry) return false;
+  if (entry.transient !== true) throw new Error('Bundled model packages cannot be unregistered');
+  return registry.delete(id);
+}

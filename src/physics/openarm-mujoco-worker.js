@@ -1,3 +1,6 @@
+import { OpenArmServo, OPENARM_CONTROL_PROFILE } from './openarm-servo.js';
+import { validateOpenArmEquipment, appendEquipmentXml } from './openarm-equipment.js';
+import { solveOpenArmIK } from './openarm-ik.js';
 import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
 import { MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, sampledObservationCount } from './backend-contract.js';
 
@@ -18,6 +21,9 @@ let couplingState = new Map();
 let actuatorState = new Map();
 let bodyState = new Map();
 let modelInfo = null;
+let servo = null;
+let equipment = null;
+let motionPlan = null;
 
 function reply(id, ok, payload = null, error = null) { postMessage({ id, ok, payload, error }); }
 async function ensureMuJoCo() { if (mujoco) return mujoco; mujoco = await loadMujoco({ locateFile: (path) => new URL(path, MUJOCO_BASE_URL).href }); return mujoco; }
@@ -84,10 +90,12 @@ function resolveModelAddresses(modelSha256) {
 
 function readContacts() {
   const count = Number(data?.ncon || 0);
+  if (count > 512) throw new RangeError('OpenArm contact budget exceeded');
   const contacts = [];
   let readable = true;
   const collection = data?.contact;
   if (!collection) return { count, readable: count === 0, contacts };
+  const force = new mujoco.DoubleBuffer(6);
   try {
     const available = typeof collection.size === 'function' ? Number(collection.size()) : count;
     if (available < count) readable = false;
@@ -97,10 +105,11 @@ function readContacts() {
       try {
         const geom1 = Number(contact.geom?.[0] ?? contact.geom1 ?? -1);
         const geom2 = Number(contact.geom?.[1] ?? contact.geom2 ?? -1);
-        contacts.push({ geom1, geom2, geom1Name: nameForGeom(geom1), geom2Name: nameForGeom(geom2), distanceM: Number(contact.dist ?? 0) });
+        mujoco.mj_contactForce(model, data, index, force);
+        contacts.push({ geom1, geom2, geom1Name: nameForGeom(geom1), geom2Name: nameForGeom(geom2), distanceM: Number(contact.dist ?? 0), normalForceN: Math.max(0, Number(force.GetView()[0])), positionM: Array.from(contact.pos || []).slice(0, 3) });
       } finally { contact.delete?.(); }
     }
-  } finally { collection.delete?.(); }
+  } finally { force.delete(); collection.delete?.(); }
   return { count, readable, contacts };
 }
 
@@ -116,7 +125,7 @@ function observation() {
   const joints = {};
   for (const [name, joint] of jointState) {
     const actuator = positionActuatorForJoint(name);
-    joints[name] = { positionRad: Number(data.qpos[joint.qpos]), velocityRadS: Number(data.qvel[joint.dof]), targetRad: actuator ? Number(data.ctrl[actuator.id]) : null, effortNm: actuator ? actuatorEffortNm(actuator) : null, controlRangeRad: actuator ? [...actuator.controlRange] : null, jointRangeRad: [...joint.range] };
+    joints[name] = { positionRad: Number(data.qpos[joint.qpos]), velocityRadS: Number(data.qvel[joint.dof]), targetRad: actuator ? servo?.target(name) ?? Number(data.ctrl[actuator.id]) : null, referenceRad: actuator ? servo?.reference(name) ?? Number(data.ctrl[actuator.id]) : null, actuatorTargetRad: actuator ? Number(data.ctrl[actuator.id]) : null, effortNm: actuator ? actuatorEffortNm(actuator) : null, controlRangeRad: actuator ? [...actuator.controlRange] : null, jointRangeRad: [...joint.range] };
   }
   const bodies = {};
   for (const [name, body] of bodyState) {
@@ -128,13 +137,14 @@ function observation() {
       quaternionWxyz: [Number(data.xquat[quatOffset]), Number(data.xquat[quatOffset + 1]), Number(data.xquat[quatOffset + 2]), Number(data.xquat[quatOffset + 3])],
     };
     if (body.freeDof != null) {
+      record.linearVelocityFrame = 'mujoco_world'; record.angularVelocityFrame = 'body_local';
       record.linearVelocityMS = [Number(data.qvel[body.freeDof]), Number(data.qvel[body.freeDof + 1]), Number(data.qvel[body.freeDof + 2])];
       record.angularVelocityRadS = [Number(data.qvel[body.freeDof + 3]), Number(data.qvel[body.freeDof + 4]), Number(data.qvel[body.freeDof + 5])];
     }
     bodies[name] = record;
   }
   const contactState = readContacts();
-  return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts };
+  return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts, openarm: { pinchReferences: Object.fromEntries(['left', 'right'].map(side => { const site = idFor('mjOBJ_SITE', `${side}_pinch_reference`); const ee = bodies[`openarm_${side}_ee_base_link`]; return [side, { frame: 'mujoco_world', positionM: Array.from(data.site_xpos.slice(site * 3, site * 3 + 3)), quaternionWxyz: ee.quaternionWxyz }]; })), observationPhase: 'post-step forward dynamics; all quantities at simulationTime', controlProfile: OPENARM_CONTROL_PROFILE, motionPlan, equipment: equipment?.records || [], equipmentJoints: (equipment?.passiveJoints || []).map(j => { const id = idFor('mjOBJ_JOINT', j.id); const q = Number(data.qpos[model.jnt_qposadr[id]]); return { ...j, position: q, velocity: Number(data.qvel[model.jnt_dofadr[id]]), pressed: q >= j.pressedThresholdM }; }) }, setupLog: descriptor.equipment?.length ? [{ type: 'explicit-workcell-compile-and-reset', simulationTimeSeconds: 0, equipmentIds: descriptor.equipment.map(e => e.id), modelSha256: modelInfo.modelSha256 }] : [] };
 }
 
 function applyDeclaredInitialState() {
@@ -160,15 +170,26 @@ function applyDeclaredInitialState() {
   }
   paused = false;
   mujoco.mj_forward(model, data);
+  servo = new OpenArmServo(model, data, actuatorState, jointState);
+  servo.apply();
+  mujoco.mj_forward(model, data);
+  motionPlan = null;
   return observation();
 }
-function disposeModel() { try { data?.delete?.(); } catch {} try { model?.delete?.(); } catch {} data = null; model = null; descriptor = null; jointState = new Map(); couplingState = new Map(); actuatorState = new Map(); bodyState = new Map(); modelInfo = null; paused = false; }
+function disposeModel() { try { data?.delete?.(); } catch {} try { model?.delete?.(); } catch {} data = null; model = null; descriptor = null; jointState = new Map(); couplingState = new Map(); actuatorState = new Map(); bodyState = new Map(); modelInfo = null; paused = false; servo = null; equipment = null; motionPlan = null; }
 async function load(modelPackage) {
   if (!modelPackage?.id || !modelPackage?.asset || !modelPackage?.sha256 || !Array.isArray(modelPackage.joints) || !Array.isArray(modelPackage.actuators)) throw new Error('Worker requires a validated registered model package descriptor');
   const modelUrl = validatedModelUrl(modelPackage.asset);
   const mj = await ensureMuJoCo();
   disposeModel();
-  const xml = await fetch(modelUrl, { cache: 'no-store' }).then((response) => { if (!response.ok) throw new Error(`MuJoCo model returned HTTP ${response.status}`); return response.text(); });
+  let xml = await fetch(modelUrl, { cache: 'no-store' }).then((response) => { if (!response.ok) throw new Error(`MuJoCo model returned HTTP ${response.status}`); return response.text(); });
+  const baseHash = await sha256Text(xml);
+  if (baseHash !== (modelPackage.baseSha256 || modelPackage.sha256)) throw new Error(`Base model SHA-256 mismatch for ${modelPackage.id}`);
+  if (modelPackage.equipment?.length) {
+    const normalized = validateOpenArmEquipment(modelPackage.equipment);
+    equipment = appendEquipmentXml(xml, normalized);
+    xml = equipment.xml;
+  }
   const modelSha256 = await sha256Text(xml);
   if (modelSha256 !== modelPackage.sha256) throw new Error(`Model SHA-256 mismatch for ${modelPackage.id}`);
   model = mj.from_xml_string(xml);
@@ -176,10 +197,37 @@ async function load(modelPackage) {
   data = new mj.MjData(model);
   descriptor = structuredClone(modelPackage);
   resolveModelAddresses(modelSha256);
-  return applyDeclaredInitialState();
+  const initial = applyDeclaredInitialState();
+  if (equipment) validateInitialEquipmentClearance();
+  return initial;
 }
 function reset() { return applyDeclaredInitialState(); }
-function step(count = 1) { if (paused) return observation(); if (!Number.isInteger(count) || count < 1 || count > MAX_STEP_BATCH) throw new RangeError(`step count must be an integer from 1 to ${MAX_STEP_BATCH}`); for (let index = 0; index < count; index += 1) mujoco.mj_step(model, data); return observation(); }
+function integrateStep() {
+  servo.apply();
+  mujoco.mj_step(model, data);
+  // Refresh on EVERY physics step, not only when sampled. Observation cadence
+  // cannot change the controller/solver update sequence.
+  mujoco.mj_forward(model, data);
+  if (!Array.from(data.qpos).every(Number.isFinite) || !Array.from(data.qvel).every(Number.isFinite)) throw new Error('OpenArm numerical state is non-finite');
+}
+function step(count = 1) {
+  if (!model || !data) throw new Error('No MuJoCo model is loaded');
+  if (!Number.isInteger(count) || count < 1 || count > MAX_STEP_BATCH) throw new RangeError(`step count must be an integer from 1 to ${MAX_STEP_BATCH}`);
+  if (!paused) for (let index = 0; index < count; index += 1) integrateStep();
+  return observation();
+}
+function validateInitialEquipmentClearance() {
+  const names = Array.from({ length: Number(model.ngeom) }, (_, i) => nameForGeom(i));
+  const owner = name => equipment.records.find(e => e.geometryIds.includes(name))?.id;
+  for (let a = 0; a < names.length; a++) {
+    const ownA = owner(names[a]); if (!ownA) continue;
+    for (let b = 0; b < names.length; b++) {
+      if (a === b || owner(names[b]) === ownA || (owner(names[b]) && b < a)) continue;
+      const distance = Number(mujoco.mj_geomDistance(model, data, a, b, .001, new Float64Array(6)));
+      if (distance < -.0005) throw new RangeError(`Initial equipment overlaps ${names[a]} / ${names[b]} by ${(-distance * 1000).toFixed(2)} mm. The existing workcell was not changed.`);
+    }
+  }
+}
 // One request advances many real MuJoCo steps and returns the ground-truth observations
 // captured at a declared step cadence. Sampling is a pure, deterministic function of the
 // requested step count: the worker never derives task state, and every returned entry is
@@ -193,7 +241,7 @@ function stepSampled(count = 1, sampleEverySteps = 1) {
   if (expected > MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE) throw new RangeError(`A ${count}-step advance sampled every ${sampleEverySteps} steps needs ${expected} observations; this worker returns at most ${MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE}`);
   const observations = [];
   for (let index = 1; index <= count; index += 1) {
-    mujoco.mj_step(model, data);
+    integrateStep();
     if (index === count || index % sampleEverySteps === 0) observations.push(observation());
   }
   return { observations, executedSteps: count, sampleEverySteps };
@@ -201,8 +249,8 @@ function stepSampled(count = 1, sampleEverySteps = 1) {
 function validatedJointTarget(jointId, targetValue) {
   if (!jointId || !jointState.has(jointId)) throw new Error(`Unknown declared joint ${jointId || '<missing>'}`);
   const actuator = actuatorForJoint(jointId);
-  const target = Number(targetValue);
-  if (!Number.isFinite(target)) throw new TypeError(`targetRad for ${jointId} must be finite`);
+  const target = targetValue;
+  if (typeof target !== 'number' || !Number.isFinite(target)) throw new TypeError(`targetRad for ${jointId} must be finite`);
   const [minimum, maximum] = actuator.controlRange;
   if (target < minimum || target > maximum) throw new RangeError(`targetRad ${target} is outside the actuator control range ${minimum}..${maximum}`);
   const jointRange = jointState.get(jointId).range;
@@ -215,12 +263,20 @@ function command(payload = {}) {
     const jointId = payload.jointId || (descriptor.joints.length === 1 ? descriptor.joints[0].id : null);
     if (!jointId) throw new Error('set_joint_target requires a declared jointId for this model');
     targets = { [jointId]: payload.targetRad };
-  } else if (payload.type === 'set_joint_targets') {
+  } else if (payload.type === 'set_joint_targets' || payload.type === 'move_joint_targets') {
     if (!payload.targetsRad || typeof payload.targetsRad !== 'object' || Array.isArray(payload.targetsRad) || !Object.keys(payload.targetsRad).length) throw new Error('set_joint_targets requires a non-empty targetsRad object');
     targets = payload.targetsRad;
+  } else if (payload.type === 'set_tool_target') {
+    const solution = solveOpenArmIK(mujoco, model, data, jointState, payload);
+    targets = solution.targetsRad;
+    const validated = Object.fromEntries(Object.entries(targets).map(([id, value]) => [id, validatedJointTarget(id, value).target]));
+    const timing = servo.request(validated, payload.durationSeconds ?? null);
+    motionPlan = { ...solution, ...timing };
+    return observation();
   } else throw new Error(`Unsupported physical command: ${payload.type}`);
   const validated = Object.entries(targets).map(([jointId, targetRad]) => [jointId, validatedJointTarget(jointId, targetRad)]);
-  for (const [, { actuator, target }] of validated) data.ctrl[actuator.id] = target;
+  const timing = servo.request(Object.fromEntries(validated.map(([id, { target }]) => [id, target])), payload.type === 'move_joint_targets' ? payload.durationSeconds : null);
+  motionPlan = { type: payload.type, ...timing, collisionFreePath: false }; 
   return observation();
 }
 

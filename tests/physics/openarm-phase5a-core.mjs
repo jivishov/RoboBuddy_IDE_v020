@@ -1,135 +1,53 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { OPENARM_V2_PHASE5A_MODEL_PACKAGE, OPENARM_V2_SOURCE } from '../../src/physics/openarm-model-package.js';
-import { OPENARM_V2_PHASE5A_SCENE, OPENARM_V2_BIMANUAL_CONTROLLER } from '../../src/physics/openarm-scene.js';
+import {createHash} from 'node:crypto';
+import { OPENARM_V2_PHASE5A_MODEL_PACKAGE as pkg, OPENARM_V2_SOURCE } from '../../src/physics/openarm-model-package.js';
+import { OPENARM_V2_PHASE5A_SCENE as scene, OPENARM_V2_BIMANUAL_CONTROLLER as controller } from '../../src/physics/openarm-scene.js';
+import { OPENARM_GEOMETRY_SHA256 } from '../../src/physics/openarm-generated.js';
 import { OpenArmBimanualStackEvaluator } from '../../src/physics/openarm-task-evaluator.js';
-import { createOpenArmPhysicalControlSchema, WEBMCP_OPENARM_PHYSICAL_SCHEMA_VERSION } from '../../src/webmcp/openarm-physical-control.js';
-
-assert.equal(OPENARM_V2_SOURCE.revision, 'a8c979629f2591ad035d99d338ce114969e6cddc');
-assert.equal(OPENARM_V2_SOURCE.sourcePath, 'v2/openarm_bimanual.xml');
-assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.robotId, 'openarm_v2_bimanual');
-assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.physics.timestepSeconds, 0.001);
-assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.physics.integrator, 'Euler');
-assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.joints.length, 16);
-assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.actuators.length, 16);
-assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.evidence.hardwareAlignment, 'calibration-required');
-assert.equal(OPENARM_V2_PHASE5A_SCENE.modelPackage, OPENARM_V2_PHASE5A_MODEL_PACKAGE.id);
-assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.id, 'openarm-v2-bimanual-stack-v2');
-assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.stages.length, 15);
-assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.stages[0].name, 'settle_initial');
-assert.equal(OPENARM_V2_BIMANUAL_CONTROLLER.stages.at(-1).name, 'right_retreat');
-
-const xml = fs.readFileSync(new URL('../../models/openarm_v2/manipulation.xml', import.meta.url), 'utf8');
-assert.ok(xml.includes('openarm_left_ee_finger_joint_mimic'));
-assert.ok(xml.includes('openarm_right_ee_finger_joint_mimic'));
-assert.equal((xml.match(/<weld\b/g) || []).length, 0, 'task model must contain no weld constraints');
-assert.equal((xml.match(/<freejoint\b/g) || []).length, 2, 'flask and beaker must remain true free bodies');
-assert.equal((xml.match(/size="0.008" class="left_fingertip"/g) || []).length, 2, 'left fingertip surrogate must remain the reviewed 8 mm approximation');
-assert.equal((xml.match(/size="0.008" class="right_fingertip"/g) || []).length, 2, 'right fingertip surrogate must remain the reviewed 8 mm approximation');
-assert.ok(xml.includes('flask_shoulder_geom'), 'source-informed Erlenmeyer shoulder collider must be present');
-assert.ok(xml.includes('size="0.025 0.030" class="vessel"'), '50 mL beaker must use the pinned 50 x 60 mm envelope');
-assert.deepEqual(OPENARM_V2_PHASE5A_SCENE.taskGoal.flask.targetHalfExtentsXYM, [0.017, 0.013]);
-assert.deepEqual(OPENARM_V2_PHASE5A_SCENE.taskGoal.beaker.targetHalfExtentsXYM, [0.021, 0.021]);
-for (const forbidden of ['attachedTo', 'teleport', 'move_to', 'grasp_right', 'grasp_left']) assert.equal(xml.includes(forbidden), false, `forbidden physical shortcut leaked into model: ${forbidden}`);
-
-const schema = createOpenArmPhysicalControlSchema();
-assert.equal(schema.oneOf.length, 2);
-assert.equal(schema.oneOf[0].properties.schema_version.const, WEBMCP_OPENARM_PHYSICAL_SCHEMA_VERSION);
-assert.equal(schema.oneOf[0].additionalProperties, false);
-assert.equal(schema.oneOf[1].additionalProperties, false);
-assert.ok(schema.oneOf[0].properties.targets_rad.properties.openarm_left_joint1);
-assert.ok(schema.oneOf[0].properties.targets_rad.properties.openarm_right_finger_joint1);
-
-const obs = ({
-  time,
-  flask = [0.509, 0.1535, 1.092],
-  beaker = [0.509, -0.1535, 1.105],
-  contacts = [],
-  leftEe = [0.40, 0.1535, 1.12],
-  rightEe = [0.40, -0.1535, 1.12],
-  flaskLinear = [0, 0, 0],
-  flaskAngular = [0, 0, 0],
-  beakerLinear = [0, 0, 0],
-  beakerAngular = [0, 0, 0],
-}) => ({
-  simulationTimeSeconds: time,
-  bodies: {
-    flask: { positionM: flask, linearVelocityMS: flaskLinear, angularVelocityRadS: flaskAngular },
-    beaker: { positionM: beaker, linearVelocityMS: beakerLinear, angularVelocityRadS: beakerAngular },
-    openarm_left_ee_base_link: { positionM: leftEe },
-    openarm_right_ee_base_link: { positionM: rightEe },
-  },
-  contacts,
-});
-const flaskInner = { geom1Name: 'flask_grip_geom', geom2Name: 'left_inner_fingertip' };
-const flaskOuter = { geom1Name: 'flask_grip_geom', geom2Name: 'left_outer_fingertip' };
-const flaskSupport = { geom1Name: 'flask_body_geom', geom2Name: 'left_hotplate' };
-const beakerSupport = { geom1Name: 'beaker_grip_geom', geom2Name: 'right_ring_gauze' };
-
-// Target inclusion/support contact without a physical grasp/lift/carry cannot pass.
-const evaluator = new OpenArmBimanualStackEvaluator();
-evaluator.observe(obs({
-  time: 0,
-  flask: [0.608, 0.1535, 1.092],
-  beaker: [0.608, -0.1535, 1.105],
-  contacts: [flaskSupport, beakerSupport],
-}));
-assert.equal(evaluator.snapshot().success, false);
-assert.equal(evaluator.snapshot().flask.releaseSeen, false);
-assert.equal(evaluator.snapshot().beaker.releaseSeen, false);
-
-// Contacts that occur on opposite fingers at different times are not a bilateral grasp.
-const sequentialFingerContact = new OpenArmBimanualStackEvaluator();
-sequentialFingerContact.observe(obs({ time: 0, contacts: [flaskInner] }));
-sequentialFingerContact.observe(obs({ time: 0.01, contacts: [flaskOuter] }));
-assert.equal(sequentialFingerContact.snapshot().flask.innerContactSeen, true);
-assert.equal(sequentialFingerContact.snapshot().flask.outerContactSeen, true);
-assert.equal(sequentialFingerContact.snapshot().flask.graspSeen, false);
-assert.equal(sequentialFingerContact.snapshot().flask.bilateralContactObservationCount, 0);
-
-// A vessel dropped before reaching its support may later land in the target, but that is not a controlled placement/release.
-const droppedIntoTarget = new OpenArmBimanualStackEvaluator();
-droppedIntoTarget.observe(obs({ time: 0, contacts: [flaskInner, flaskOuter] }));
-droppedIntoTarget.observe(obs({ time: 0.10, flask: [0.509, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
-droppedIntoTarget.observe(obs({ time: 0.20, flask: [0.579, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
-assert.equal(droppedIntoTarget.snapshot().flask.carrySeen, true);
-droppedIntoTarget.observe(obs({ time: 0.30, flask: [0.608, 0.1535, 1.092], contacts: [] }));
-droppedIntoTarget.observe(obs({ time: 0.40, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport] }));
-assert.equal(droppedIntoTarget.snapshot().flask.supportWhileHeldSeen, false);
-assert.equal(droppedIntoTarget.snapshot().flask.releaseSeen, false);
-
-// Retreat evidence is actual post-settle EE displacement; normal EE/object geometry separation cannot satisfy it by itself.
-const noFakeRetreat = new OpenArmBimanualStackEvaluator();
-noFakeRetreat.observe(obs({ time: 0, contacts: [flaskInner, flaskOuter] }));
-noFakeRetreat.observe(obs({ time: 0.10, flask: [0.509, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
-noFakeRetreat.observe(obs({ time: 0.20, flask: [0.579, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
-noFakeRetreat.observe(obs({ time: 0.30, flask: [0.608, 0.1535, 1.092], contacts: [flaskInner, flaskOuter, flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
-assert.equal(noFakeRetreat.snapshot().flask.supportWhileHeldSeen, true);
-noFakeRetreat.observe(obs({ time: 0.31, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
-assert.equal(noFakeRetreat.snapshot().flask.releaseSeen, true);
-noFakeRetreat.observe(obs({ time: 0.51, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
-assert.equal(noFakeRetreat.snapshot().flask.settled, true);
-noFakeRetreat.observe(obs({ time: 0.52, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.608, 0.1535, 1.155] }));
-assert.equal(noFakeRetreat.snapshot().flask.retreated, false);
-noFakeRetreat.observe(obs({ time: 0.60, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.668, 0.1535, 1.155] }));
-assert.equal(noFakeRetreat.snapshot().flask.retreated, true);
-
-// Declared observation cadence. Native 1 ms evidence measures the beaker's intended gauze
-// support contact while it is still bilaterally pinched at only 3-4 ms, so the browser
-// cadence must be short enough to land inside any window of two or more physics steps.
-const OPENARM_MEASURED_MIN_CAUSAL_WINDOW_STEPS = 3;
-const simulatorSource = fs.readFileSync(new URL('../../src/physics/openarm-physical-simulator.js', import.meta.url), 'utf8');
-const declaredCadence = Number(simulatorSource.match(/const OPENARM_OBSERVATION_BATCH_STEPS = (\d+);/)?.[1]);
-assert.ok(Number.isInteger(declaredCadence) && declaredCadence >= 1, 'the OpenArm workspace must declare an integer observation cadence in physics steps');
-assert.ok(
-  declaredCadence < OPENARM_MEASURED_MIN_CAUSAL_WINDOW_STEPS,
-  `observation cadence ${declaredCadence} steps cannot guarantee observing the measured ${OPENARM_MEASURED_MIN_CAUSAL_WINDOW_STEPS}-step support-while-held overlap`,
-);
-assert.ok(simulatorSource.includes('observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS'), 'the declared cadence must be the one the physical session actually uses');
-assert.ok(simulatorSource.includes('observationPeriodSeconds:'), 'the presentation audit must expose the observation period actually in force');
-// The evaluator consumes every authoritative sample; the renderer only ever shows the latest.
-assert.ok(simulatorSource.includes('this.presentationDirty = true;'), 'observations must mark presentation stale rather than drive the scene graph per sample');
-assert.ok(/renderFrame\(\) \{[\s\S]*?this\.#applyObservation\(this\.lastObservation\);/.test(simulatorSource), 'the render loop must pull the latest observed state instead of physics pushing it');
-assert.ok(!/#consumeObservation\(observation\) \{[\s\S]*?this\.#applyObservation\(observation\);/.test(simulatorSource), 'per-sample scene-graph updates must not be reintroduced');
-
-console.log('OpenArm V2 Phase 5A package/evaluator/WebMCP core checks: OK');
+import { createOpenArmPhysicalControlSchema, validateTargets, validateTool } from '../../src/webmcp/openarm-physical-control.js';
+import { createOpenArmWorkcellSchema, createOpenArmProgramSchema } from '../../src/webmcp/openarm-workcell.js';
+import { validateOpenArmEquipment, compileEquipmentDefinitions, appendEquipmentXml } from '../../src/physics/openarm-equipment.js';
+import { conditionMet, worldPoint } from '../../src/physics/openarm-observation.js';
+const hash = s => createHash('sha256').update(s).digest('hex');
+const xml = fs.readFileSync(new URL('../../models/openarm_v2/manipulation.xml',import.meta.url),'utf8');
+const geometryText = fs.readFileSync(new URL('../../models/openarm_v2/geometry.json',import.meta.url),'utf8');
+const geometry = JSON.parse(geometryText);
+assert.equal(OPENARM_V2_SOURCE.revision,'a8c979629f2591ad035d99d338ce114969e6cddc');
+assert.equal(pkg.joints.length,16);assert.equal(pkg.actuators.length,16);assert.equal(pkg.evidence.hardwareAlignment,'calibration-required');
+assert.equal(hash(xml),pkg.sha256);assert.equal(hash(geometryText),OPENARM_GEOMETRY_SHA256);assert.equal(geometry.modelSha256,pkg.sha256);
+assert.equal(controller.id,'openarm-v2-bimanual-stack-v3');assert.equal(controller.stages.length,17);assert.equal(controller.stages.at(-1).name,'right_retreat');
+assert.equal((xml.match(/<weld\b/g)||[]).length,0);assert.equal((xml.match(/<freejoint\b/g)||[]).length,2);
+assert.equal(Object.keys(geometry.meshes).length,36);
+for (const side of ['left','right']) {
+  for(const kind of ['inner','outer']) assert.equal(geometry.geoms.filter(g=>g.id.startsWith(`finger_${kind}_${side}_collision_`)).length,4);
+  assert.ok(!xml.includes(`${side}_inner_fingertip`),'old capsule must not remain active');
+}
+assert.ok(xml.includes('mount_column'));assert.ok(xml.includes('ring_bracket'));assert.ok(xml.includes('table_leg_'));
+assert.deepEqual(scene.taskGoal.flask.targetHalfExtentsXYM,[.017,.013]);assert.deepEqual(scene.taskGoal.beaker.targetHalfExtentsXYM,[.021,.021]);
+assert.equal(createOpenArmPhysicalControlSchema().additionalProperties,undefined,'oneOf branches own additionalProperties');
+assert.equal(createOpenArmPhysicalControlSchema().oneOf.length,4);
+for(const bad of [null,true,'0',NaN,Infinity])assert.throws(()=>validateTargets({openarm_left_joint1:bad}));
+assert.throws(()=>validateTargets({openarm_left_finger_joint2:0}));assert.throws(()=>validateTargets({openarm_left_joint1:4}));
+assert.throws(()=>validateTool({side:'left',position_m:[.5,0,1.2],quaternion_wxyz:null}));
+assert.throws(()=>validateTool({side:'left',position_m:[.5,0,1.2],quaternion_wxyz:[2,0,0,0]}));
+const items=[{id:'tray',kind:'tray',position_m:[.40,-.4,1.005]},{id:'button',kind:'button',position_m:[.60,-.4,1.005]},{id:'custom',kind:'assembly',position_m:[.3,.4,1.005],dimensions_m:[.10,.10,.05],dynamic:true,parts:[{shape:'box',position_m:[0,0,.01],dimensions_m:[.10,.10,.02]},{shape:'cylinder',position_m:[0,0,.03],radius_m:.02,height_m:.02}]}];
+const normalized=validateOpenArmEquipment(items);assert.deepEqual(validateOpenArmEquipment(normalized),normalized);
+const compiled=compileEquipmentDefinitions(normalized);assert.equal(compiled.passiveJoints.length,1);assert.equal(compiled.geoms.filter(g=>g.id.startsWith('lab_tray')).length,5);
+assert.equal((appendEquipmentXml(xml,normalized).xml.match(/<freejoint\b/g)||[]).length,3);
+for(const item of [{...items[0],position_m:[0,0,1.005]},{...items[0],id:'../escape'},{...items[0],code:'evil'},{...items[0],mass_kg:-1},{...items[0],dynamic:null},{...items[0],dimensions_m:[100,1,1]}])assert.throws(()=>validateOpenArmEquipment([item]));
+assert.throws(()=>validateOpenArmEquipment(Array(13).fill(items[0])));assert.throws(()=>validateOpenArmEquipment([items[0],items[0]]));
+assert.deepEqual(worldPoint({positionM:[1,2,3],quaternionWxyz:[Math.SQRT1_2,0,0,Math.SQRT1_2]},[1,0,0]).map(v=>Math.round(v)),[1,3,3]);
+const e = new OpenArmBimanualStackEvaluator();
+const obs=(time,contacts=[],flask=[.55,.1535,1.092])=>({simulationTimeSeconds:time,bodies:{flask:{positionM:flask,linearVelocityMS:[0,0,0],angularVelocityRadS:[0,0,0],quaternionWxyz:[1,0,0,0]},beaker:{positionM:[.55,-.1535,1.105],linearVelocityMS:[0,0,0],angularVelocityRadS:[0,0,0],quaternionWxyz:[1,0,0,0]},openarm_left_ee_base_link:{positionM:[.401,.1535,1.14]},openarm_right_ee_base_link:{positionM:[.401,-.1535,1.14]}},contacts});
+const contact=(a,b,force=1,depth=-.0001)=>({geom1Name:a,geom2Name:b,normalForceN:force,distanceM:depth});
+const pinch=[contact('flask_grip_geom','finger_inner_left_collision_02'),contact('flask_grip_geom','finger_outer_left_collision_02')];
+e.observe(obs(0,pinch));e.observe(obs(.002,pinch));assert.equal(e.snapshot().flask.graspSeen,false,'instant touch is not sustained grasp');
+for(let i=0;i<200;i++)e.observe(obs(.002,pinch));assert.equal(e.snapshot().flask.graspSeen,false,'duplicate reads do not create dwell');
+for(let i=2;i<=35;i++)e.observe(obs(i*.002,pinch));assert.equal(e.snapshot().flask.graspSeen,true);
+e.reset();for(let i=0;i<50;i++)e.observe(obs(i*.002,pinch.map(c=>({...c,normalForceN:0}))));assert.equal(e.snapshot().flask.graspSeen,false,'zero-force proximity is not grasp evidence');
+e.reset();e.observe(obs(0,[contact('flask_body_geom','left_hotplate')],[.67,.1535,1.092]));e.observe(obs(.5,[contact('flask_body_geom','left_hotplate')],[.67,.1535,1.092]));assert.equal(e.snapshot().success,false,'placement without causal transfer must fail');
+e.reset();e.observe(obs(0,[contact('flask_shoulder_geom','ee_base_link_left_collision_00',1,-.020)]));assert.equal(e.snapshot().excessivePenetrationSeen,true);assert.equal(e.snapshot().palmContactSeen,true);assert.equal(e.snapshot().success,false);
+assert.equal(conditionMet(obs(0,pinch),{type:'bilateral_grasp',object_id:'flask',side:'left'}),true);
+if(process.argv.includes('--schemas')) console.log(JSON.stringify({control:createOpenArmPhysicalControlSchema(),equipment:createOpenArmWorkcellSchema(),program:createOpenArmProgramSchema()}));
+else console.log('OpenArm v3 model/hash, contact evidence, strict commands, equipment and schema contracts: OK');

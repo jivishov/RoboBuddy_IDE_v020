@@ -116,7 +116,7 @@ export class LivePythonBridge {
     return this.#descriptor();
   }
 
-  async sendAction(action, { commandId, maxSteps = DEFAULT_ACTION_STEP_BUDGET } = {}) {
+  async sendAction(action, { commandId, maxSteps = DEFAULT_ACTION_STEP_BUDGET, durationSeconds = null } = {}) {
     await this.#assertOwner();
     if (!Number.isInteger(maxSteps) || maxSteps < 1) throw new RangeError('maxSteps must be a positive integer');
     const { targetsRad, chassis, hasChassis } = boundedTargets(action);
@@ -124,6 +124,11 @@ export class LivePythonBridge {
     const command = hasChassis
       ? { type: 'set_mixed_targets', targetsRad, targetsRadS: wheels.targetsRadS }
       : { type: 'set_joint_targets', targetsRad };
+    if (durationSeconds != null) {
+      if (this.owner.robotId !== 'openarm_v2_bimanual' || hasChassis) throw new Error('duration_seconds is supported only by the OpenArm trajectory controller');
+      if (typeof durationSeconds !== 'number' || !Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new RangeError('duration_seconds must be positive finite seconds');
+      command.type = 'move_joint_targets'; command.durationSeconds = durationSeconds;
+    }
     const accepted = await this.#withTimeout(this.session.sendCommand(
       command,
       { ...(commandId ? { commandId: String(commandId) } : {}), maxSteps },

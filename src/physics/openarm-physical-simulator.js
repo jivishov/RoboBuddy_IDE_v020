@@ -1,420 +1,228 @@
+import { worldPoint, graspState } from './openarm-observation.js';
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js';
 import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/controls/OrbitControls.js';
-import { CanonicalRobotRig, canonicalVisualProvenance } from '../canonical-rig.js';
 import { BrowserMuJoCoBackend } from './browser-mujoco-backend.js';
 import { PhysicsSession } from './session.js';
-import { OPENARM_V2_PHASE5A_MODEL_PACKAGE } from './openarm-model-package.js';
-import { OPENARM_V2_PHASE5A_SCENE } from './openarm-scene.js';
+import { registerModelPackage, unregisterTransientModelPackage } from './model-registry.js';
+import { OPENARM_V2_PHASE5A_MODEL_PACKAGE as BASE_PACKAGE } from './openarm-model-package.js';
+import { OPENARM_V2_PHASE5A_SCENE as BASE_SCENE } from './openarm-scene.js';
+import { OPENARM_GEOMETRY_SHA256, OPENARM_MODEL_SHA256 } from './openarm-generated.js';
 import { OpenArmBimanualStackEvaluator } from './openarm-task-evaluator.js';
+import { OpenArmPresentation, toThreePosition } from './openarm-presentation.js';
+import { validateOpenArmEquipment, compileEquipmentDefinitions, appendEquipmentXml, OPENARM_EQUIPMENT_VERSION, EQUIPMENT_LIMITS, EQUIPMENT_KINDS } from './openarm-equipment.js';
+import { OPENARM_CONTROL_PROFILE } from './openarm-servo.js';
 
-const MAX_WEBMCP_ADVANCE_SECONDS = 2;
-const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
-// Declared observation cadence, in authoritative MuJoCo steps. The narrowest causal event
-// this task depends on is the beaker's intended gauze support contact while the vessel is
-// still bilaterally pinched; native 1 ms evidence measures that overlap at only 3-4 ms, so a
-// sampling period of two physics steps (2 ms at the pinned 0.001 s timestep) is guaranteed to
-// land inside any window of two or more steps. Sampling happens inside the MuJoCo worker, so
-// this resolution costs one cross-thread request per advance rather than one per sample.
-const OPENARM_OBSERVATION_BATCH_STEPS = 2;
-const PRESENTATION_GROUND_COLOR = 0x687378;
-const CANONICAL_OPENARM_MOUNT_TRANSLATION_MM = Object.freeze([185, 790, 0]);
-const NONPHYSICAL_CANONICAL_PARTS = new Set([
-  'turntable_pedestal',
-  'turntable_bearing',
-  'turntable_disc',
-  'turntable_heading',
-  'openarm_body_link0_low_stand',
-]);
-const PHYSICAL_GRIPPER_MAX_RAD = Math.PI / 4;
-
-function toThreePosition(positionM = [0, 0, 0]) {
-  return new THREE.Vector3(Number(positionM[0]) * 1000, Number(positionM[2]) * 1000, -Number(positionM[1]) * 1000);
+const OBSERVATION_BATCH_STEPS = 2;
+const hashText = async text => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(x => x.toString(16).padStart(2, '0')).join('');
+async function fetchVerified(url, hash) {
+  const response = await fetch(url, { cache: 'no-store' });
+  if (!response.ok) throw new Error(`OpenArm asset HTTP ${response.status}`);
+  const text = await response.text();
+  if (await hashText(text) !== hash) throw new Error('OpenArm asset checksum mismatch');
+  return text;
 }
-function toThreeQuaternion(quaternionWxyz = [1, 0, 0, 0]) {
-  const [w, x, y, z] = quaternionWxyz.map(Number);
-  const physical = new THREE.Quaternion(x, y, z, w).normalize();
-  const basis = new THREE.Matrix4().makeRotationX(-Math.PI / 2);
-  const inverse = basis.clone().invert();
-  const physicalRotation = new THREE.Matrix4().makeRotationFromQuaternion(physical);
-  const converted = basis.clone().multiply(physicalRotation).multiply(inverse);
-  return new THREE.Quaternion().setFromRotationMatrix(converted).normalize();
-}
-function finiteTargetMap(targetsRad) {
-  if (!targetsRad || typeof targetsRad !== 'object' || Array.isArray(targetsRad)) throw new TypeError('targetsRad must be an object');
-  const entries = Object.entries(targetsRad);
-  if (!entries.length) throw new TypeError('targetsRad must contain at least one joint target');
-  const allowed = new Set(OPENARM_V2_PHASE5A_MODEL_PACKAGE.actuators.map((item) => item.jointId));
-  const clean = {};
-  for (const [jointId, raw] of entries) {
-    if (!allowed.has(jointId)) throw new Error(`Unknown physical OpenArm V2 joint ${jointId}`);
-    const value = Number(raw);
-    if (!Number.isFinite(value)) throw new TypeError(`Physical OpenArm target ${jointId} must be finite radians`);
-    clean[jointId] = value;
-  }
-  return clean;
-}
-function box(widthM, heightM, depthM, material) {
-  return new THREE.Mesh(new THREE.BoxGeometry(widthM * 1000, heightM * 1000, depthM * 1000), material);
-}
-function cylinder(radiusM, heightM, material) {
-  return new THREE.Mesh(new THREE.CylinderGeometry(radiusM * 1000, radiusM * 1000, heightM * 1000, 32), material);
-}
-function canonicalStateFromObservation(observation) {
-  const state = {};
-  for (const side of ['left', 'right']) {
-    for (let index = 1; index <= 7; index += 1) {
-      const joint = observation?.joints?.[`openarm_${side}_joint${index}`];
-      const positionRad = Number(joint?.positionRad);
-      if (Number.isFinite(positionRad)) state[`${side}_joint_${index}.pos`] = THREE.MathUtils.radToDeg(positionRad);
-    }
-    const fingerRad = Math.abs(Number(observation?.joints?.[`openarm_${side}_finger_joint1`]?.positionRad));
-    if (Number.isFinite(fingerRad)) {
-      // Canonical presentation adapter uses the legacy public gripper scale only as
-      // a visual conversion. It is not a physical command or hardware claim.
-      state[`${side}_gripper.pos`] = -Math.min(65, (fingerRad / PHYSICAL_GRIPPER_MAX_RAD) * 65);
-    }
-  }
-  return state;
-}
+const number = (x, min, max, label) => { if (typeof x !== 'number' || !Number.isFinite(x) || x < min || x > max) throw new RangeError(`${label} must be ${min}..${max}`); return x; };
+const clone = x => structuredClone(x);
+let sessionSequence = 0;
 
 export class OpenArmPhysicalSimulator {
   constructor(canvas) {
-    this.canvas = canvas;
-    this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0xb9c1c4);
-    this.camera = new THREE.PerspectiveCamera(42, 1, 1, 6000);
-    this.camera.position.set(1900, 1500, 0);
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
+    this.canvas = canvas; this.disposed = false; this.ready = false; this.generation = 0;
+    this.session = null; this.unsubscribeSession = null; this.lastObservation = null; this.presentationDirty = false;
+    this.selectedScene = clone(BASE_SCENE); this.selectedPackage = BASE_PACKAGE; this.equipment = [];
+    this.staged = null; this.workcellMutation = false; this.candidate = null; this.baseGeometry = null;
+    this.presentation = null; this.preview = null; this.objectMeshes = new Map(); this.highContrast = true;
+    this.evaluator = new OpenArmBimanualStackEvaluator();
+    this.scene = new THREE.Scene(); this.scene.background = new THREE.Color(0xd7dfe2);
+    this.camera = new THREE.PerspectiveCamera(42, 1, 1, 8000);
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
-    this.controls = new OrbitControls(this.camera, this.canvas);
-    this.controls.enableDamping = true;
-    this.controls.target.set(420, 1160, 0);
-
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.35));
-    const key = new THREE.DirectionalLight(0xffffff, 2.0);
-    key.position.set(650, 1500, 850);
-    key.castShadow = true;
-    this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0x93c5fd, 0.4);
-    fill.position.set(-500, 900, -900);
-    this.scene.add(fill);
-    const grid = new THREE.GridHelper(1800, 36, 0x334155, 0x4b5563);
-    grid.userData.presentationOnly = true;
-    this.scene.add(grid);
-
-    this.workcellRoot = new THREE.Group();
-    this.workcellRoot.name = 'openarm-v2-physical-workcell-presentation';
-    this.scene.add(this.workcellRoot);
-    this.robotRoot = new THREE.Group();
-    this.robotRoot.name = 'openarm-v2-source-aligned-canonical-arm-presentation';
-    this.scene.add(this.robotRoot);
-    this.canonicalRig = null;
-    this.hiddenCanonicalParts = [];
-    this.objectMeshes = new Map();
+    this.controls = new OrbitControls(this.camera, canvas); this.controls.enableDamping = true;
+    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x475569, 2));
+    const key = new THREE.DirectionalLight(0xffffff, 2.5); key.position.set(700, 2000, 900); key.castShadow = true;
+    key.shadow.camera.left = -1000; key.shadow.camera.right = 1000; key.shadow.camera.top = 1800; key.shadow.camera.bottom = -1000; key.shadow.mapSize.set(2048, 2048); this.scene.add(key);
+    const grid = new THREE.GridHelper(1800, 36, 0x6a7982, 0xa7b1b7); grid.position.set(400, .5, 0); grid.userData.presentationOnly = true; this.scene.add(grid); this.grid = grid;
     this.targetMarkers = [];
-    this.session = null;
-    this.unsubscribeSession = null;
-    this.evaluator = null;
-    this.lastObservation = null;
-    this.presentationDirty = false;
-    this.ready = false;
-    this.disposed = false;
-    this.highContrast = true;
-    this.sessionSequence = 0;
-    this.#buildPresentation();
-    this.setHighContrastScene(true);
-    this.resize();
+    for (const [x, y, z, w, d] of [[.67, .1535, 1.0355, .034, .026], [.67, -.1535, 1.0755, .042, .042]]) {
+      const marker = new THREE.Mesh(new THREE.PlaneGeometry(w * 1000, d * 1000), new THREE.MeshBasicMaterial({ color: 0x28a86b, transparent: true, opacity: .5, depthWrite: false, side: THREE.DoubleSide }));
+      marker.rotation.x = -Math.PI / 2; marker.position.copy(toThreePosition([x, y, z])); marker.userData.presentationOnly = true; this.scene.add(marker); this.targetMarkers.push(marker);
+    }
+    this.statusPanel = document.createElement('div'); this.statusPanel.className = 'openarm-workcell-status';
+    Object.assign(this.statusPanel.style, { position: 'absolute', right: '8px', top: '48px', maxWidth: '320px', padding: '6px 9px', background: '#ffffffeb', color: '#23313a', font: '12px/1.4 sans-serif', borderRadius: '5px', pointerEvents: 'none' });
+    canvas.parentElement?.append(this.statusPanel); this.#updateStatus(); this.resize(); this.fit();
   }
 
   async setScenario(profileId, scenario) {
-    if (profileId !== 'openarm') throw new Error('OpenArm physical simulator only accepts the openarm profile');
-    if (scenario?.simulationMode !== 'physical_mujoco' || scenario?.physicalSceneId !== OPENARM_V2_PHASE5A_SCENE.id) {
-      throw new Error('OpenArm physical simulator requires the Phase 5A V2 bimanual scene');
-    }
-    await this.#ensureCanonicalPresentation();
-    await this.#disposeSession();
-    this.evaluator = new OpenArmBimanualStackEvaluator();
-    await this.#createSession();
-    this.ready = true;
-    this.canvas.dataset.simulatorBackend = 'browser-mujoco';
-    this.canvas.dataset.simulationAuthority = 'physics-session';
-    this.canvas.dataset.physicalSceneId = OPENARM_V2_PHASE5A_SCENE.id;
-    this.canvas.dataset.modelPackageId = OPENARM_V2_PHASE5A_SCENE.modelPackage;
-    this.canvas.dataset.presentationGroundColor = '#687378';
-    this.canvas.dataset.openarmVisualSource = 'canonical-v2-arm-mesh-source-aligned';
-    this.canvas.dataset.openarmLegacyBaseYawRendered = 'false';
-    this.fit();
-    return true;
+    if (profileId !== 'openarm' || scenario?.simulationMode !== 'physical_mujoco' || scenario?.physicalSceneId !== BASE_SCENE.id) throw new Error('OpenArm requires its physical MuJoCo workspace');
+    const token = ++this.generation; this.ready = false;
+    const geometry = JSON.parse(await fetchVerified(new URL('../../models/openarm_v2/geometry.json', import.meta.url), OPENARM_GEOMETRY_SHA256));
+    this.#assertGeneration(token);
+    if (geometry.modelSha256 !== OPENARM_MODEL_SHA256) throw new Error('OpenArm visual/physical model identity mismatch');
+    this.baseGeometry = geometry; this.#disposeSession(); this.selectedPackage = BASE_PACKAGE; this.selectedScene = clone(BASE_SCENE); this.equipment = [];
+    await this.#createSession(token); this.#rebuildPresentation(); this.ready = true;
+    Object.assign(this.canvas.dataset, { simulatorBackend: 'browser-mujoco', simulationAuthority: 'physics-session', physicalSceneId: this.selectedScene.id, modelPackageId: this.selectedPackage.id, openarmVisualSource: 'shared-source-collision-geometry-v3', openarmLegacyBaseYawRendered: 'false', presentationGroundColor: '#687378' });
+    this.fit(); this.#updateStatus(); return true;
   }
-
   async reset() {
-    this.#assertNotDisposed();
-    this.ready = false;
-    this.evaluator = new OpenArmBimanualStackEvaluator();
-    if (!this.session) await this.#createSession();
-    else {
-      let diagnostics = null;
-      try { diagnostics = await this.session.getDiagnostics(); } catch {}
-      if (!diagnostics?.loaded) {
-        await this.#disposeSession();
-        await this.#createSession();
-      } else await this.session.reset({ reason: 'explicit-user-reset' });
-    }
-    this.ready = true;
-    return true;
+    this.#assertLive(); const token = ++this.generation; this.ready = false; this.workcellMutation = false;
+    this.candidate?.dispose(); this.candidate = null;
+    this.evaluator = new OpenArmBimanualStackEvaluator(); this.programProgress = null;
+    const diagnostics = this.session ? await this.session.getDiagnostics().catch(() => null) : null;
+    this.#assertGeneration(token);
+    if (diagnostics?.loaded) await this.session.reset({ reason: 'explicit-user-reset' });
+    else { this.session?.dispose(); this.session = null; await this.#createSession(token); }
+    this.#assertGeneration(token); this.ready = true; this.#updateStatus(); return true;
   }
-
   renderFrame() {
     if (this.disposed) return;
-    if (this.presentationDirty && this.lastObservation) {
-      this.#applyObservation(this.lastObservation);
-      this.presentationDirty = false;
-    }
-    this.controls.update();
-    this.renderer.render(this.scene, this.camera);
+    if (this.presentationDirty && this.lastObservation && this.presentation) { this.presentation.applyObservation(this.lastObservation); this.presentationDirty = false; }
+    this.controls.update(); this.renderer.render(this.scene, this.camera);
   }
   resize() {
     if (this.disposed) return false;
-    const width = Math.max(1, this.canvas.clientWidth || this.canvas.width || 640);
-    const height = Math.max(1, this.canvas.clientHeight || this.canvas.height || 480);
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    if (this.canvas.width !== Math.floor(width * dpr) || this.canvas.height !== Math.floor(height * dpr)) this.renderer.setSize(width, height, false);
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
-    return true;
+    const w = Math.max(1, this.canvas.clientWidth || 640), h = Math.max(1, this.canvas.clientHeight || 480);
+    this.renderer.setSize(w, h, false); this.camera.aspect = w/h; this.camera.updateProjectionMatrix(); return true;
   }
-  fit() {
-    this.controls.target.set(420, 1160, 0);
-    this.camera.position.set(1900, 1500, 0);
-    this.camera.near = 1;
-    this.camera.far = 6000;
-    this.camera.updateProjectionMatrix();
-    this.controls.update();
-    return true;
-  }
-  setHighContrastScene(value) {
-    this.highContrast = Boolean(value);
-    for (const marker of this.targetMarkers) marker.visible = this.highContrast;
-    this.canvas.dataset.highContrastScene = String(this.highContrast);
-    this.canvas.dataset.highContrastPerimeterCount = this.highContrast ? String(this.targetMarkers.length) : '0';
-    this.canvas.dataset.presentationGroundColor = '#687378';
-    return this.highContrast;
-  }
+  fit() { this.controls.target.set(415, 1050, 0); this.camera.position.set(1590, 1620, 1130); this.camera.updateProjectionMatrix(); this.controls.update(); return true; }
+  setHighContrastScene(value) { this.highContrast = Boolean(value); this.targetMarkers.forEach(m => { m.visible = this.highContrast; }); this.canvas.dataset.highContrastScene = String(this.highContrast); return this.highContrast; }
   isHighContrastSceneEnabled() { return this.highContrast; }
-  isReady() { return Boolean(this.ready && this.session && this.lastObservation && this.session.sceneRevision && this.session.robotId); }
+  isReady() { return Boolean(this.ready && !this.disposed && this.session?.robotId && this.lastObservation); }
   getPhysicalSession() { return this.session; }
-  getPhysicalAuthorityToken() {
-    if (!this.isReady()) return null;
-    return Object.freeze({ sessionId: this.session.sessionId, epoch: this.session.epoch, sceneRevision: this.session.sceneRevision, robotId: this.session.robotId, simulationTimeSeconds: this.lastObservation.simulationTimeSeconds });
-  }
-  getTaskEvaluation() { return this.evaluator?.snapshot?.() || null; }
+  getPhysicalAuthorityToken() { return this.isReady() ? { sessionId: this.session.sessionId, epoch: this.session.epoch, sceneRevision: this.session.sceneRevision, robotId: this.session.robotId, simulationTimeSeconds: this.lastObservation.simulationTimeSeconds } : null; }
+  getTaskEvaluation() { return { ...this.evaluator.snapshot(), scope: this.equipment.length ? 'baseline flask/beaker task in an extended workcell; does not evaluate custom goals' : 'default flask/beaker transfer task', hardwareValidated: false }; }
   getPresentationAudit() {
-    const mountPositionsMm = {};
-    for (const side of ['left', 'right']) {
-      const position = this.canonicalRig?.getWorldPosition?.(`${side}_mount`);
-      mountPositionsMm[side] = position ? position.toArray() : null;
-    }
-    return Object.freeze({
-      source: canonicalVisualProvenance('openarm'),
-      physicalAuthority: 'MuJoCo PhysicsSession only',
-      jointPresentationSource: 'observed MuJoCo joint positions',
-      mountTranslationMm: [...CANONICAL_OPENARM_MOUNT_TRANSLATION_MM],
-      canonicalMountPositionsMm: mountPositionsMm,
-      hiddenNonphysicalParts: [...this.hiddenCanonicalParts],
-      legacyBaseYawControlled: false,
-      legacyBaseYawRendered: false,
-      observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS,
-      observationPeriodSeconds: OPENARM_OBSERVATION_BATCH_STEPS * Number(this.lastObservation?.engine?.timestepSeconds || 0.001),
-    });
+    return { source: this.baseGeometry?.source, geometrySha256: OPENARM_GEOMETRY_SHA256, physicalAuthority: 'MuJoCo PhysicsSession only', jointPresentationSource: 'observed MuJoCo body transforms, including each passive finger', sharedCollisionGeometry: true, geometryCount: this.presentation?.geomMeshes.size ?? 0, legacyBaseYawControlled: false, legacyBaseYawRendered: false, observationBatchSteps: OBSERVATION_BATCH_STEPS, observationPeriodSeconds: .002, observationPhase: this.lastObservation?.openarm?.observationPhase, workcellRevision: this.session?.sceneRevision };
   }
   getTelemetry() {
-    const observation = this.lastObservation;
-    if (!observation) return {};
-    const out = { simulation_time_s: Number(observation.simulationTimeSeconds) };
-    for (const [jointId, state] of Object.entries(observation.joints || {})) out[`${jointId}_rad`] = Number(state.positionRad);
-    for (const objectId of ['flask', 'beaker']) {
-      const body = observation.bodies?.[objectId];
-      if (!body?.positionM) continue;
-      out[`${objectId}_x_m`] = Number(body.positionM[0]);
-      out[`${objectId}_y_m`] = Number(body.positionM[1]);
-      out[`${objectId}_z_m`] = Number(body.positionM[2]);
-      out[`${objectId}_linear_speed_m_s`] = Math.hypot(...(body.linearVelocityMS || [0, 0, 0]).map(Number));
+    const o = this.lastObservation; if (!o) return {};
+    const result = { simulation_time_s: o.simulationTimeSeconds, maximum_task_penetration_mm: this.evaluator.snapshot().maximumPenetrationM * 1000 };
+    for (const [id, j] of Object.entries(o.joints)) result[`${id}_rad`] = j.positionRad;
+    for (const id of ['flask', 'beaker']) o.bodies[id]?.positionM.forEach((v, i) => { result[`${id}_${'xyz'[i]}_m`] = v; });
+    return result;
+  }
+  getContacts() { const e = this.evaluator.snapshot(); return { contact_count: this.lastObservation?.contactCount || 0, flask_grasp_seen: e.flask.graspSeen, beaker_grasp_seen: e.beaker.graspSeen, flask_support_contact: e.flask.currentSupportContact, beaker_support_contact: e.beaker.currentSupportContact, maximum_penetration_m: e.maximumPenetrationM, excessive_penetration: e.excessivePenetrationSeen, task_success: e.success }; }
+  getState() { return this.lastObservation ? { observation: clone(this.lastObservation), evaluation: this.getTaskEvaluation(), authority: this.getPhysicalAuthorityToken() } : null; }
+  setProgramProgress(progress) { this.programProgress = clone(progress); this.#updateStatus(); }
+  getWorkcellState() {
+    return { schemaVersion: OPENARM_EQUIPMENT_VERSION, program: clone(this.programProgress || null), authority: this.getPhysicalAuthorityToken(), frame: 'mujoco_world', units: { length: 'm', angle: 'rad', time: 's', force: 'N' }, controlProfile: OPENARM_CONTROL_PROFILE, limits: EQUIPMENT_LIMITS, kinds: EQUIPMENT_KINDS, pinchReferences: clone(this.lastObservation?.openarm?.pinchReferences || {}), grasp: this.lastObservation ? { flask: graspState(this.lastObservation, 'left', 'flask'), beaker: graspState(this.lastObservation, 'right', 'beaker') } : {}, equipment: (this.lastObservation?.openarm?.equipment || []).map(e => ({ ...clone(e), referencePointsWorldM: Object.fromEntries(Object.entries(e.affordances).filter(([key, v]) => Array.isArray(v) && v.length === 3).map(([key, v]) => [key, worldPoint(this.lastObservation.bodies[e.bodyId], v)])) })), equipmentJoints: clone(this.lastObservation?.openarm?.equipmentJoints || []), staged: this.staged ? { id: this.staged.id, equipment: clone(this.staged.equipment), status: 'preview-only; apply explicitly resets the physical scene' } : null, bodies: clone(this.lastObservation?.bodies || {}), joints: clone(this.lastObservation?.joints || {}), contacts: clone(this.lastObservation?.contacts || []), taskEvaluation: this.getTaskEvaluation(), geometryIds: [...(this.presentation?.geomMeshes.keys() || [])], hardwareValidated: false, collisionFreePlanning: false };
+  }
+  async applyAction() { throw new Error('Use the live OpenArm SI/radian simulation API, not legacy .pos replay'); }
+  #validateAdvance(seconds, maxSteps) {
+    number(seconds, 0, 2, 'advanceSeconds');
+    if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 20000) throw new RangeError('maxSteps must be 1..20000');
+    const steps = Math.round(seconds / .001);
+    if (Math.abs(steps * .001 - seconds) > 1e-9 || steps > maxSteps) throw new RangeError('Advance must align to 1 ms and fit the command step budget');
+  }
+  async applyPhysicalTargets(targetsRad, { maxSteps = 2000, advanceSeconds = 0, durationSeconds = null } = {}) {
+    this.#assertReady(); this.#validateAdvance(advanceSeconds, maxSteps);
+    if (!targetsRad || typeof targetsRad !== 'object' || Array.isArray(targetsRad) || !Object.keys(targetsRad).length) throw new TypeError('targetsRad must be nonempty');
+    for (const [id, value] of Object.entries(targetsRad)) {
+      const j = BASE_PACKAGE.joints.find(j => j.id === id), a = BASE_PACKAGE.actuators.find(a => a.jointId === id);
+      if (!j || !a) throw new Error(`Unknown controllable OpenArm joint ${id}`);
+      number(value, Math.max(j.rangeRad[0], a.controlRangeRad[0]), Math.min(j.rangeRad[1], a.controlRangeRad[1]), id);
     }
-    return out;
+    if (durationSeconds != null) number(durationSeconds, .04, 12, 'durationSeconds');
+    const accepted = await this.session.sendCommand({ type: durationSeconds == null ? 'set_joint_targets' : 'move_joint_targets', targetsRad: clone(targetsRad), ...(durationSeconds == null ? {} : { durationSeconds }) }, { maxSteps });
+    const observation = advanceSeconds ? await this.advanceTime(advanceSeconds) : accepted.observation;
+    return { ...accepted, acceptedTargetsRad: clone(targetsRad), observation, taskEvaluation: this.getTaskEvaluation() };
   }
-  getContacts() {
-    const observation = this.lastObservation;
-    const evaluation = this.getTaskEvaluation();
-    if (!observation || !evaluation) return {};
-    return {
-      contact_count: Number(observation.contactCount || 0),
-      flask_grasp_seen: evaluation.flask.graspSeen,
-      flask_support_while_held_seen: evaluation.flask.supportWhileHeldSeen,
-      flask_support_contact: evaluation.flask.currentSupportContact,
-      beaker_grasp_seen: evaluation.beaker.graspSeen,
-      beaker_support_while_held_seen: evaluation.beaker.supportWhileHeldSeen,
-      beaker_support_contact: evaluation.beaker.currentSupportContact,
-      order_violation: evaluation.orderViolation,
-      task_success: evaluation.success,
-    };
-  }
-  getState() {
-    return this.lastObservation ? { observation: structuredClone(this.lastObservation), evaluation: this.getTaskEvaluation(), authority: this.getPhysicalAuthorityToken() } : null;
-  }
-  async applyAction() {
-    throw new Error('Legacy OpenArm .pos/source-plant replay is disabled in the physical workspace. Use robobuddy.sim.v1 radians or the bounded OpenArm physical WebMCP schema.');
-  }
-  async applyPhysicalTargets(targetsRad, { maxSteps = 1000, advanceSeconds = 0 } = {}) {
-    this.#assertReady();
-    const cleanTargets = finiteTargetMap(targetsRad);
-    if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 5000) throw new RangeError('maxSteps must be an integer from 1 to 5000');
-    const advance = Number(advanceSeconds);
-    if (!Number.isFinite(advance) || advance < 0 || advance > MAX_WEBMCP_ADVANCE_SECONDS) throw new RangeError(`advanceSeconds must be between 0 and ${MAX_WEBMCP_ADVANCE_SECONDS}`);
-    const accepted = await this.session.sendCommand({ type: 'set_joint_targets', targetsRad: cleanTargets }, { maxSteps });
-    let observation = accepted.observation;
-    if (advance > 0) observation = await this.advanceTime(advance);
-    return { schemaVersion: 'robobuddy.openarm.physical.v1', status: accepted.status, commandId: accepted.commandId, acceptedTargetsRad: cleanTargets, observation: structuredClone(observation), taskEvaluation: this.getTaskEvaluation() };
+  async applyToolTarget(request, { maxSteps = 15000, advanceSeconds = 0 } = {}) {
+    this.#assertReady(); this.#validateAdvance(advanceSeconds, maxSteps);
+    const accepted = await this.session.sendCommand({ type: 'set_tool_target', ...clone(request) }, { maxSteps });
+    const observation = advanceSeconds ? await this.advanceTime(advanceSeconds) : accepted.observation;
+    return { ...accepted, observation, motionPlan: observation.openarm?.motionPlan, taskEvaluation: this.getTaskEvaluation() };
   }
   async advanceTime(seconds) {
-    this.#assertReady();
-    const duration = Number(seconds);
-    if (!Number.isFinite(duration) || duration < 0) throw new RangeError('Physical advance duration must be finite and non-negative');
-    if (duration === 0) return this.session.getObservation({ view: 'ground_truth' });
-    const dt = Number(this.lastObservation?.engine?.timestepSeconds);
-    const steps = Math.round(duration / dt);
-    if (steps < 1 || Math.abs(duration - steps * dt) > STEP_ALIGNMENT_TOLERANCE_SECONDS) throw new RangeError(`Physical advance duration ${duration}s must align to the ${dt}s MuJoCo timestep`);
-    return this.session.advanceSteps(steps);
+    this.#assertReady(); number(seconds, 0, 15, 'advance seconds');
+    const steps = Math.round(seconds/.001);
+    if (Math.abs(steps * .001 - seconds) > 1e-9) throw new RangeError('Advance must align to the 1 ms physics timestep');
+    return steps ? this.session.advanceSteps(steps) : this.session.getObservation();
   }
-  pause() { return this.session?.pause?.() ?? false; }
-  resume() { return this.session?.resume?.() ?? false; }
+  pause() { return this.session?.pause() ?? false; }
+  resume() { return this.session?.resume() ?? false; }
   async stop() {
+    ++this.generation; this.ready = false; this.workcellMutation = false; this.candidate?.dispose(); this.candidate = null;
     if (!this.session) return false;
-    this.ready = false;
+    try { await this.session.cancelRun('human-stop'); return true; } catch { return false; }
+  }
+  stageEquipment(items) {
+    this.#assertReady(); const equipment = validateOpenArmEquipment(items);
+    const compiled = compileEquipmentDefinitions(equipment);
+    this.preview?.dispose(); this.preview = new OpenArmPresentation({ meshes: {}, geoms: compiled.geoms }, { preview: true });
+    const bodies = {};
+    for (const e of equipment) {
+      const q = [Math.cos(e.yaw_rad/2), 0, 0, Math.sin(e.yaw_rad/2)];
+      bodies[`lab_${e.id}`] = { positionM: e.position_m, quaternionWxyz: q };
+      if (e.kind === 'button') bodies[`lab_${e.id}_cap`] = { positionM: [e.position_m[0], e.position_m[1], e.position_m[2] + .020], quaternionWxyz: q };
+    }
+    this.preview.applyObservation({ bodies }); this.scene.add(this.preview.root);
+    this.staged = { id: crypto.randomUUID(), equipment, expectedRevision: this.session.sceneRevision, expectedEpoch: this.session.epoch };
+    this.#updateStatus(); return this.getWorkcellState().staged;
+  }
+  discardStagedEquipment() { this.preview?.dispose(); this.preview = null; this.staged = null; this.#updateStatus(); return true; }
+  async applyStagedEquipment(stageId, acknowledgeReset, guard = () => {}) {
+    this.#assertReady();
+    if (acknowledgeReset !== true || !this.staged || stageId !== this.staged.id) throw new Error('A matching stage_id and acknowledge_reset:true are required');
+    if (this.staged.expectedRevision !== this.session.sceneRevision || this.staged.expectedEpoch !== this.session.epoch) throw new Error('Staged scene is stale; stage it again after reset or scene changes');
+    const token = ++this.generation, staged = clone(this.staged); this.workcellMutation = true; this.#updateStatus();
+    let candidate = null, candidatePackage = null;
     try {
-      const diagnostics = await this.session.getDiagnostics();
-      if (!diagnostics?.loaded) return false;
-      await this.session.cancelRun('human-stop');
-      return true;
-    } catch { return false; }
+      guard(); const baseXml = await fetchVerified(new URL('../../models/openarm_v2/manipulation.xml', import.meta.url), OPENARM_MODEL_SHA256);
+      this.#assertGeneration(token); guard();
+      const compiled = appendEquipmentXml(baseXml, staged.equipment);
+      const sha256 = await hashText(compiled.xml);
+      const sequence = ++sessionSequence;
+      const packageId = `openarm-custom-${sha256.slice(0, 12)}-${sequence}`;
+      candidatePackage = registerModelPackage({ ...clone(BASE_PACKAGE), id: packageId, modelId: packageId, transient: true, baseSha256: OPENARM_MODEL_SHA256, sha256, equipment: staged.equipment, bodies: [...clone(BASE_PACKAGE.bodies), ...compiled.bodies] });
+      const scene = { ...clone(BASE_SCENE), modelPackage: packageId, revision: `${BASE_SCENE.revision}-equipment-${sha256.slice(0, 16)}` };
+      candidate = this.#newSession(); this.candidate = candidate;
+      const loaded = await candidate.loadScene(scene); this.#assertGeneration(token); guard();
+      // Commit only after model compilation AND all initial penetration checks succeed.
+      this.#disposeSession(); this.session = candidate; this.candidate = null; candidate = null;
+      this.selectedPackage = candidatePackage; candidatePackage = null; this.selectedScene = scene; this.equipment = staged.equipment;
+      this.evaluator = new OpenArmBimanualStackEvaluator(); this.#subscribe(); this.#consumeObservation(loaded.observation);
+      this.#rebuildPresentation(); this.discardStagedEquipment(); this.ready = true;
+      this.canvas.dataset.modelPackageId = this.selectedPackage.id;
+      return { status: 'applied', reset: true, authority: this.getPhysicalAuthorityToken(), equipment: clone(compiled.records) };
+    } finally {
+      candidate?.dispose(); if (candidatePackage) unregisterTransientModelPackage(candidatePackage.id);
+      if (token === this.generation) { this.workcellMutation = false; this.candidate = null; this.#updateStatus(); }
+    }
   }
   dispose() {
-    if (this.disposed) return;
-    this.disposed = true;
-    this.ready = false;
-    void this.#disposeSession();
-    if (this.canonicalRig) {
-      this.robotRoot.remove(this.canonicalRig.root);
-      this.canonicalRig.dispose();
-      this.canonicalRig = null;
-    }
-    this.controls?.dispose?.();
-    this.renderer?.dispose?.();
+    if (this.disposed) return; this.disposed = true; ++this.generation; this.ready = false;
+    this.candidate?.dispose(); this.candidate = null; this.#disposeSession(); this.preview?.dispose(); this.presentation?.dispose();
+    this.targetMarkers.forEach(m => { m.geometry.dispose(); m.material.dispose(); }); this.grid.geometry.dispose();
+    for (const m of Array.isArray(this.grid.material) ? this.grid.material : [this.grid.material]) m.dispose();
+    this.statusPanel.remove(); this.controls.dispose(); this.renderer.dispose();
   }
-
-  async #ensureCanonicalPresentation() {
-    if (this.canonicalRig) return this.canonicalRig;
-    const rig = await CanonicalRobotRig.load('openarm');
-    const hidden = [];
-    rig.root.traverse((node) => {
-      if (node.isMesh && NONPHYSICAL_CANONICAL_PARTS.has(node.name)) {
-        node.visible = false;
-        hidden.push(node.name);
-      }
-    });
-    rig.root.position.fromArray(CANONICAL_OPENARM_MOUNT_TRANSLATION_MM);
-    rig.root.userData.presentationAuthority = 'observed MuJoCo joints only';
-    rig.root.userData.legacyBaseYawPhysical = false;
-    this.robotRoot.add(rig.root);
-    this.canonicalRig = rig;
-    this.hiddenCanonicalParts = hidden.sort();
-    return rig;
-  }
-  async #createSession() {
-    const session = new PhysicsSession(
-      new BrowserMuJoCoBackend({ workerUrl: new URL('./openarm-mujoco-worker.js', import.meta.url) }),
-      { sessionId: `ide-openarm-v2-${++this.sessionSequence}`, observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS },
-    );
-    this.session = session;
-    this.unsubscribeSession = session.subscribe(({ observation }) => this.#consumeObservation(observation));
-    await session.loadScene(structuredClone(OPENARM_V2_PHASE5A_SCENE));
-  }
-  async #disposeSession() {
-    this.unsubscribeSession?.();
-    this.unsubscribeSession = null;
-    if (this.session) this.session.dispose();
-    this.session = null;
+  #newSession() { return new PhysicsSession(new BrowserMuJoCoBackend({ workerUrl: new URL('./openarm-mujoco-worker.js', import.meta.url) }), { sessionId: `ide-openarm-v3-${++sessionSequence}`, observationBatchSteps: OBSERVATION_BATCH_STEPS }); }
+  async #createSession(token) { this.session = this.#newSession(); this.#subscribe(); await this.session.loadScene(this.selectedScene); this.#assertGeneration(token); }
+  #subscribe() { this.unsubscribeSession?.(); this.unsubscribeSession = this.session.subscribe(({ observation }) => this.#consumeObservation(observation)); }
+  #disposeSession() {
+    this.unsubscribeSession?.(); this.unsubscribeSession = null; this.session?.dispose(); this.session = null;
+    if (this.selectedPackage?.transient) unregisterTransientModelPackage(this.selectedPackage.id);
     this.lastObservation = null;
-    this.presentationDirty = false;
   }
   #consumeObservation(observation) {
-    if (!observation || this.disposed) return;
-    this.lastObservation = structuredClone(observation);
-    this.evaluator?.observe(observation);
-    // The evaluator consumes every authoritative sample; the scene graph only ever shows the
-    // latest one, so presentation is pulled by the render loop instead of pushed per sample.
-    // Rendering still never advances physics.
-    this.presentationDirty = true;
-    this.canvas.dataset.simulationClockS = String(Number(observation.simulationTimeSeconds || 0));
-    const evaluation = this.getTaskEvaluation();
-    this.canvas.dataset.physicalTaskSuccess = String(Boolean(evaluation?.success));
-    this.canvas.dataset.physicalTaskContact = String(Boolean(evaluation?.flask?.graspSeen || evaluation?.beaker?.graspSeen));
-    this.canvas.dataset.physicalTaskLift = String(Boolean(evaluation?.flask?.liftSeen || evaluation?.beaker?.liftSeen));
-    this.canvas.dataset.physicalTaskCarry = String(Boolean(evaluation?.flask?.carrySeen || evaluation?.beaker?.carrySeen));
-    this.canvas.dataset.physicalTaskRelease = String(Boolean(evaluation?.flask?.releaseSeen || evaluation?.beaker?.releaseSeen));
-    this.canvas.dataset.physicalTaskSettled = String(Boolean(evaluation?.flask?.settled && evaluation?.beaker?.settled));
+    if (this.disposed || !observation) return;
+    this.lastObservation = observation; this.evaluator.observe(observation); this.presentationDirty = true;
+    const e = this.evaluator.snapshot();
+    Object.assign(this.canvas.dataset, { simulationClockS: String(observation.simulationTimeSeconds), physicalTaskSuccess: String(e.success), physicalTaskContact: String(e.flask.graspSeen || e.beaker.graspSeen), physicalTaskLift: String(e.flask.liftSeen || e.beaker.liftSeen), physicalTaskCarry: String(e.flask.carrySeen || e.beaker.carrySeen), physicalTaskRelease: String(e.flask.releaseSeen || e.beaker.releaseSeen), physicalTaskSettled: String(e.flask.settled && e.beaker.settled) });
   }
-  #applyObservation(observation) {
-    if (this.canonicalRig) {
-      this.canonicalRig.applyPhysicalState(canonicalStateFromObservation(observation));
-      this.canonicalRig.root.position.fromArray(CANONICAL_OPENARM_MOUNT_TRANSLATION_MM);
-      this.canonicalRig.root.updateMatrixWorld(true);
-    }
-    for (const [objectId, mesh] of this.objectMeshes) {
-      const body = observation.bodies?.[objectId];
-      if (!body?.positionM) continue;
-      mesh.position.copy(toThreePosition(body.positionM));
-      if (body.quaternionWxyz) mesh.quaternion.copy(toThreeQuaternion(body.quaternionWxyz));
-    }
+  #rebuildPresentation() {
+    this.presentation?.dispose();
+    const equipmentGeoms = compileEquipmentDefinitions(this.equipment).geoms;
+    this.presentation = new OpenArmPresentation({ meshes: this.baseGeometry.meshes, geoms: [...this.baseGeometry.geoms, ...equipmentGeoms] });
+    this.objectMeshes = this.presentation.bodyGroups; this.scene.add(this.presentation.root);
+    if (this.lastObservation) this.presentation.applyObservation(this.lastObservation);
   }
-
-  #buildPresentation() {
-    const supportMaterial = new THREE.MeshStandardMaterial({ color: PRESENTATION_GROUND_COLOR, roughness: 0.76, metalness: 0.03 });
-    const darkMaterial = new THREE.MeshStandardMaterial({ color: 0x30343a, roughness: 0.62, metalness: 0.12 });
-    const table = box(0.82, 0.01, 1.10, supportMaterial);
-    table.position.copy(toThreePosition([0.41, 0, 1.0]));
-    table.name = 'visual-cell-table';
-    this.workcellRoot.add(table);
-
-    const mount = box(0.08, 0.08, 0.12, darkMaterial);
-    mount.position.copy(toThreePosition([0.185, 0, 1.31]));
-    mount.name = 'visual-openarm-source-mount';
-    this.workcellRoot.add(mount);
-
-    const fixtures = [
-      ['left-source', box(0.09, 0.03, 0.09, supportMaterial), [0.509, 0.1535, 1.020]],
-      ['left-hotplate', box(0.116, 0.03, 0.108, darkMaterial), [0.608, 0.1535, 1.020]],
-      ['right-source', box(0.07, 0.07, 0.07, supportMaterial), [0.509, -0.1535, 1.040]],
-    ];
-    for (const [name, mesh, position] of fixtures) { mesh.name = `visual-${name}`; mesh.position.copy(toThreePosition(position)); this.workcellRoot.add(mesh); }
-    const post = cylinder(0.006, 0.07, darkMaterial); post.position.copy(toThreePosition([0.608, -0.235, 1.040])); post.name = 'visual-ring-post'; this.workcellRoot.add(post);
-    const gauze = cylinder(0.048, 0.006, supportMaterial); gauze.position.copy(toThreePosition([0.608, -0.1535, 1.072])); gauze.name = 'visual-ring-gauze'; this.workcellRoot.add(gauze);
-
-    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0x22c55e, transparent: true, opacity: 0.40, depthWrite: false });
-    for (const [center, size] of [[[0.608, 0.1535, 1.036], [0.034, 0.001, 0.026]], [[0.608, -0.1535, 1.076], [0.042, 0.001, 0.042]]]) {
-      const marker = box(size[0], size[1], size[2], markerMaterial); marker.position.copy(toThreePosition(center)); marker.userData.presentationOnly = true; this.targetMarkers.push(marker); this.workcellRoot.add(marker);
-    }
-
-    const flaskGroup = new THREE.Group();
-    const flaskMaterial = new THREE.MeshStandardMaterial({ color: 0x69b8d8, transparent: true, opacity: 0.80, roughness: 0.28 });
-    const flaskBody = cylinder(0.039, 0.055, flaskMaterial); flaskBody.position.y = -29.5;
-    const flaskShoulder = cylinder(0.031, 0.028, flaskMaterial); flaskShoulder.position.y = 12;
-    const flaskNeck = cylinder(0.015, 0.028, flaskMaterial); flaskNeck.position.y = 40;
-    flaskGroup.add(flaskBody, flaskShoulder, flaskNeck); this.objectMeshes.set('flask', flaskGroup); this.workcellRoot.add(flaskGroup);
-    const beakerMaterial = new THREE.MeshStandardMaterial({ color: 0x8dc8e3, transparent: true, opacity: 0.76, roughness: 0.30 });
-    const beaker = cylinder(0.025, 0.060, beakerMaterial); this.objectMeshes.set('beaker', beaker); this.workcellRoot.add(beaker);
-    this.setHighContrastScene(this.highContrast);
+  #updateStatus() {
+    if (!this.statusPanel) return;
+    this.statusPanel.textContent = this.programProgress?.status === 'running' ? `OpenArm program ${this.programProgress.index}/${this.programProgress.segments}: ${this.programProgress.label}` : this.workcellMutation ? 'Compiling physical workcell; existing scene retained until checks pass.' : this.staged ? `Staged ${this.staged.equipment.length} equipment items (wireframe preview). Applying explicitly resets the scene.` : `OpenArm · contact-aligned geometry · ${this.equipment.length} custom equipment items · simulation only`;
   }
-  #assertReady() { this.#assertNotDisposed(); if (!this.isReady()) throw new Error('OpenArm physical session is not ready'); }
-  #assertNotDisposed() { if (this.disposed) throw new Error('OpenArm physical simulator is disposed'); }
+  #assertLive() { if (this.disposed) throw new Error('OpenArm simulator is disposed'); }
+  #assertReady() { this.#assertLive(); if (!this.isReady() || this.workcellMutation) throw new Error('OpenArm physical session is not ready or is compiling a workcell'); }
+  #assertGeneration(token) { this.#assertLive(); if (token !== this.generation) throw new Error('Stale OpenArm workcell operation'); }
 }

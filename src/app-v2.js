@@ -456,6 +456,7 @@ class App {
   }
 
   cancelExecution(reason = 'OPERATION_CANCELLED') {
+    this.openarmAgentProgramActive = false;
     this.runToken++;
     if (this.microduckRuntime.isActive()) void this.microduckRuntime.cancel(reason);
     if (this.physicalRuntime.isActive()) void this.physicalRuntime.cancel(reason);
@@ -477,7 +478,7 @@ class App {
   }
 
   togglePause() {
-    if (this.workspaceStatus === 'ready' && this.isPhysicalWorkspace()) {
+    if (this.workspaceStatus === 'ready' && this.isPhysicalWorkspace() && !this.openarmAgentProgramActive) {
       if (!this.physicalRuntime.isActive()) return;
       if (this.executionState === 'paused') {
         this.executionState = 'running';

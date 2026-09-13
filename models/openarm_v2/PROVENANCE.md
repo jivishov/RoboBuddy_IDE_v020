@@ -1,3 +1,35 @@
+# OpenArm V2 contact and workcell package — revision 3
+
+## Current implementation
+
+The robot kinematics, source inertials, joint axes/ranges, mechanical finger coupling, damping/armature/friction loss and arm effort limits originate from `enactic/openarm_mujoco`, revision `a8c979629f2591ad035d99d338ce114969e6cddc`, `v2/openarm_bimanual.xml` (Git blob `0bd77d3bf7e0a5f3d2361fdf5e8328d00d0b2cc9`). The derived robot remains Apache-2.0; the repository-authored workcell and controller code retain their repository license. See `licenses/openarm-v2-apache-2.0.txt`.
+
+`scripts/prepare_openarm_contact_model.py` replaces the old primitive robot proxies with a separate convex hull for each of 36 upstream collision components. Mirrored source scaling is baked into the vertices. MJCF and Three.js receive identical component vertices and triangles. The geometry manifest records source-file SHA-256 values and the model digest; `src/physics/openarm-generated.js` pins the emitted model and geometry digests. No runtime upstream download is required for OpenArm geometry.
+
+The baseline file `source/primitive-baseline.xml` is a hash-verified historical generation input, not a selectable physical workspace. It must retain SHA-256 `960ecf32c0aa7c8b2b016c6f28a7a8afe8147ce6cb1cdfd9b91f550cd4fc27dc`. The earlier provenance below describes that historical revision and must not be read as current validation evidence.
+
+## Declared changes and assumptions
+
+- Nonadjacent same-arm collisions are enabled; standard MuJoCo connected-body filtering is retained.
+- Source and destination X coordinates are now 0.55 and 0.67 m. The shoulder mounting origin remains [0.185, 0, 1.34] m. The tabletop top remains 1.005 m. Added legs, a mounting column/foot and the ring bracket have matching physical/render geometry.
+- The 1.2 Nm gripper **operating** cap is an intentionally tighter simulation setting; it is not a source-rated hardware maximum. The source arm caps remain 40/27/7 Nm as applicable.
+- Quintic reference speed bounds (0.75 rad/s arm, 0.60 rad/s finger), trajectory timings and the bias-assisted position-servo mapping are repository-designed, uncalibrated settings. Feedforward is delivered through the existing effort-limited actuators, not an external force or object state write.
+- Vessel mass, inertia, friction and supports are benchmark assumptions. Flask and beaker are solid dry exterior envelopes, not hollow liquid containers. Grasp success is scoped to this declared task and parameterization.
+- Observations follow `mj_forward` after every actual step and do not change with rendering cadence. Contact-force diagnostics come from MuJoCo, not tactile hardware sensors.
+- Custom equipment is bounded declarative geometry, compiled into the same MuJoCo world only through a staged, explicit reset. The spring-button cap is a passive joint moved by contact; it is not commanded by an equipment-state setter.
+
+Regenerate with Python, NumPy 2.3.5 and SciPy 1.17.0:
+
+```sh
+python scripts/prepare_openarm_contact_model.py --upstream-dir /path/to/pinned/openarm_mujoco/v2
+```
+
+Validation commands and supported operations are documented in `docs/physics/OPENARM_REFINEMENT.md`. Software/native-WASM verification is not hardware validation. No real robot connection, calibrated motor dynamics, collision-free trajectory guarantee, fluids, heating, pumping, chemistry or glass deformation is supplied.
+
+---
+
+# Historical revision 2 provenance (retained for lineage)
+
 # OpenArm V2 Phase 5A model provenance
 
 ## Governing scope
