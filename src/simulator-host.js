@@ -92,6 +92,11 @@ export class SimulatorHost {
   isHighContrastSceneEnabled() { return this.backend?.isHighContrastSceneEnabled?.() ?? this.highContrast; }
   applyAction(...args) { return this.backend?.applyAction?.(...args); }
   applyPhysicalTargets(...args) { return this.backend?.applyPhysicalTargets?.(...args); }
+  configureLabEquipment(...args) {
+    if (typeof this.backend?.configureLabEquipment !== 'function') throw new Error('The active simulator backend has no bounded lab-equipment configuration path.');
+    return this.backend.configureLabEquipment(...args);
+  }
+  getLabEquipmentState() { return this.backend?.getLabEquipmentState?.() || null; }
   // Physical mobile-manipulation paths. These fail loudly rather than returning undefined:
   // the WebMCP and live-Python callers treat the result as an accepted command, so a missing
   // backend method must surface as an error instead of a silent no-op.
