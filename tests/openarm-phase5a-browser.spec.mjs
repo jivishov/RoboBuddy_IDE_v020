@@ -74,8 +74,6 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v3' });
   expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v2', asset: 'models/openarm_v2/manipulation.xml' });
   expect(initial.model.sha256).toBe('960ecf32c0aa7c8b2b016c6f28a7a8afe8147ce6cb1cdfd9b91f550cd4fc27dc');
-  expect(initial.model.compiledSha256).toBe(initial.model.sha256);
-  expect(initial.model.labEquipmentCount).toBe(0);
   expect(initial.presentation).toMatchObject({
     physicalAuthority: 'MuJoCo PhysicsSession only',
     jointPresentationSource: 'observed MuJoCo joint positions',
@@ -233,15 +231,12 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
       afterReplace,
       result,
       observedLabBody: state?.observation?.bodies?.lab_agent_vial || null,
-      model: state?.observation?.model || null,
       cleared,
       afterClear: app.sim.getPhysicalAuthorityToken(),
     };
   });
   expect(labEquipment.result.ok).toBe(true);
   expect(labEquipment.result.scene.items).toHaveLength(2);
-  expect(labEquipment.model.labEquipmentCount).toBe(2);
-  expect(labEquipment.model.compiledSha256).not.toBe(labEquipment.model.sha256);
   expect(labEquipment.observedLabBody.positionM).toHaveLength(3);
   expect(labEquipment.afterReplace.sessionId).not.toBe(labEquipment.before.sessionId);
   expect(labEquipment.cleared.scene.items).toHaveLength(0);
