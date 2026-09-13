@@ -22,7 +22,7 @@ const RIGHT_PLACE = [27.1394, 0, 0, 56.4231, 0, -6.4055, 0];
 export const OPENARM_V2_PHASE5A_SCENE = Object.freeze({
   schemaVersion: PHYSICS_BACKEND_API_VERSION,
   id: 'phase5a-openarm-v2-bimanual-stack',
-  revision: 'phase5a-openarm-v2-bimanual-stack-v2',
+  revision: 'phase5a-openarm-v2-bimanual-stack-v3',
   robotId: OPENARM_V2_PHASE5A_MODEL_PACKAGE.robotId,
   modelPackage: OPENARM_V2_PHASE5A_MODEL_PACKAGE.id,
   legacyTaskId: 'openarm-04-filtration-workcell',
@@ -40,6 +40,7 @@ export const OPENARM_V2_PHASE5A_SCENE = Object.freeze({
       objectId: 'flask',
       side: 'left',
       gripperGeoms: Object.freeze(['left_inner_fingertip', 'left_outer_fingertip']),
+      forbiddenRobotGeoms: Object.freeze(['left_ee_proxy']),
       objectGeoms: Object.freeze(['flask_body_geom', 'flask_shoulder_geom', 'flask_grip_geom']),
       supportGeom: 'left_hotplate',
       targetCenterXYM: Object.freeze([0.608, 0.1535]),
@@ -50,6 +51,7 @@ export const OPENARM_V2_PHASE5A_SCENE = Object.freeze({
       objectId: 'beaker',
       side: 'right',
       gripperGeoms: Object.freeze(['right_inner_fingertip', 'right_outer_fingertip']),
+      forbiddenRobotGeoms: Object.freeze(['right_ee_proxy']),
       objectGeoms: Object.freeze(['beaker_grip_geom']),
       supportGeom: 'right_ring_gauze',
       targetCenterXYM: Object.freeze([0.608, -0.1535]),
@@ -63,6 +65,7 @@ export const OPENARM_V2_PHASE5A_SCENE = Object.freeze({
     maxSettleLinearSpeedMS: 0.035,
     maxSettleAngularSpeedRadS: 0.8,
     retreatDistanceM: 0.050,
+    maxGripPenetrationM: 0.004,
   }),
 });
 

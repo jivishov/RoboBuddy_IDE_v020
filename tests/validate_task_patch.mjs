@@ -42,7 +42,7 @@ if (OPENARM_PHYSICAL_TASKS[0].physicalSceneId !== 'phase5a-openarm-v2-bimanual-s
 const openarmScenario = await loadPatchedScenario('openarm', 'openarm-04-filtration-workcell');
 if (openarmScenario.modelPackage !== 'openarm-v2-phase5a-a8c9796-v2') throw new Error('OpenArm refined physical model package drifted');
 if (openarmScenario.workspaceRevision !== 'openarm-v2-physical-bimanual-stack-v2') throw new Error('OpenArm refined workspace revision drifted');
-if (openarmScenario.physicalSceneRevision !== 'phase5a-openarm-v2-bimanual-stack-v2') throw new Error('OpenArm refined physical scene revision drifted');
+if (openarmScenario.physicalSceneRevision !== 'phase5a-openarm-v2-bimanual-stack-v3') throw new Error('OpenArm refined physical scene revision drifted');
 if (openarmScenario.robotId !== 'openarm_v2_bimanual') throw new Error('OpenArm physical robot identity drifted');
 const openarmWorkspace = buildPatchedWorkspace('openarm', openarmScenario);
 for (const token of ['from robobuddy.sim import connect', 'await connect(', 'await robot.send_action(', 'await robot.advance(', 'await robot.get_observation()']) if (!openarmWorkspace['main.py'].includes(token)) throw new Error(`OpenArm live physical starter missing ${token}`);
@@ -69,7 +69,7 @@ for (const token of ['from robobuddy.sim import connect', 'await connect(', 'awa
 }
 for (const forbidden of ['time.sleep(', 'lerobot', '.grasp(', '.attach(', '.teleport(', '.move_to(', 'LeKiwiClient']) if (lekiwiWorkspace['main.py'].includes(forbidden)) throw new Error(`LeKiwi physical starter exposes forbidden/legacy behavior ${forbidden}`);
 if (!lekiwiWorkspace['trajectories.py'].includes('lekiwi_base')) throw new Error('LeKiwi starter must read the authoritative base body');
-if (!lekiwiWorkspace['workcell.py'].includes('calibration')) throw new Error('LeKiwi workcell must preserve the calibration boundary');
+if (!lekiwiWorkspace['workcell.py'].includes('calibration')) throw new Error('LeKiwi workcell must preserve calibration boundary');
 const lekiwiLegacyScenario = await loadPatchedScenario('lekiwi', 'lekiwi-01-beaker-courier');
 if (lekiwiLegacyScenario !== null) throw new Error('the retired legacy LeKiwi task id must no longer resolve as a workspace');
 

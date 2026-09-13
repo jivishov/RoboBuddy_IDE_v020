@@ -30,13 +30,19 @@ jobs:
           node --check src/physics/mujoco-worker.js
           node --check src/physics/openarm-model-package.js
           node --check src/physics/openarm-scene.js
+          node --check src/physics/openarm-lab-equipment.js
           node --check src/physics/openarm-task-evaluator.js
           node --check src/physics/openarm-mujoco-worker.js
           node --check src/physics/openarm-physical-simulator.js
           node --check src/webmcp/openarm-physical-control.js
+          node --check src/webmcp/openarm-physical-program.js
+          node --check src/webmcp/openarm-lab-equipment.js
+          node --check src/webmcp/register-ide-tools.js
           node --check tests/physics/openarm-phase5a-core.mjs
           node --check tests/openarm-phase5a-browser.spec.mjs
           python -m py_compile native/openarm_v2_reference.py
+          echo "OpenArm manipulation.xml SHA-256:"
+          sha256sum models/openarm_v2/manipulation.xml
 
       - name: Shared physics session, backend and sampled-observation contracts
         run: node tests/physics/vertical-slice-core.mjs

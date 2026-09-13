@@ -4,6 +4,8 @@ import { createMicroDuckControlSchema } from './microduck-control.js';
 import { createMicroduckVisualCueSchema } from './microduck-visual-cues.js';
 import { executeProfileControl, getProfileControlDefinition } from './robot-controls.js';
 import { executeOpenArmPhysicalControl, getOpenArmPhysicalControlDefinition } from './openarm-physical-control.js';
+import { executeOpenArmLabEquipment, getOpenArmLabEquipmentDefinition } from './openarm-lab-equipment.js';
+import { executeOpenArmPhysicalProgram, getOpenArmPhysicalProgramDefinition } from './openarm-physical-program.js';
 import { executeLeKiwiPhysicalControl, getLeKiwiPhysicalControlDefinition } from './lekiwi-physical-control.js';
 import { executeMicroDuckPhysicalControl, getMicroDuckPhysicalControlDefinition } from './microduck-physical-control.js';
 import { executeUnitreeG1PhysicalControl, getUnitreeG1PhysicalControlDefinition } from './unitree-g1-physical-control.js';
@@ -97,6 +99,10 @@ function createTools(facade, epoch) {
   }
   const openarmControl = getOpenArmPhysicalControlDefinition(facade);
   if (openarmControl) tools.push({ ...openarmControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeOpenArmPhysicalControl(facade, input, signal, epoch)) });
+  const openarmProgram = getOpenArmPhysicalProgramDefinition(facade);
+  if (openarmProgram) tools.push({ ...openarmProgram, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeOpenArmPhysicalProgram(facade, input, signal, epoch)) });
+  const openarmLabEquipment = getOpenArmLabEquipmentDefinition(facade);
+  if (openarmLabEquipment) tools.push({ ...openarmLabEquipment, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeOpenArmLabEquipment(facade, input, signal, epoch)) });
   const lekiwiControl = getLeKiwiPhysicalControlDefinition(facade);
   if (lekiwiControl) tools.push({ ...lekiwiControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeLeKiwiPhysicalControl(facade, input, signal, epoch)) });
   // Present only for the ready Unitree G1 PHYSICAL workspace. The retained kinematic pose

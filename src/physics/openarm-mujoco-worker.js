@@ -1,5 +1,6 @@
 import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
 import { MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, sampledObservationCount } from './backend-contract.js';
+import { normalizeOpenArmLabEquipment, openArmLabBodyName, openArmLabFreeJointName, openArmLabGeomName } from './openarm-lab-equipment.js';
 
 const MUJOCO_BASE_URL = new URL('../../assets/microduck/runtime/mujoco/', import.meta.url);
 const EXPECTED_MUJOCO_VERSION = '3.11.0';
@@ -18,6 +19,7 @@ let couplingState = new Map();
 let actuatorState = new Map();
 let bodyState = new Map();
 let modelInfo = null;
+let labEquipment = Object.freeze([]);
 
 function reply(id, ok, payload = null, error = null) { postMessage({ id, ok, payload, error }); }
 async function ensureMuJoCo() { if (mujoco) return mujoco; mujoco = await loadMujoco({ locateFile: (path) => new URL(path, MUJOCO_BASE_URL).href }); return mujoco; }
@@ -28,8 +30,34 @@ function nameForGeom(id) { if (!Number.isInteger(id) || id < 0 || typeof mujoco?
 function runtimeVersionEvidence() { const version = typeof mujoco?.mj_versionString === 'function' ? String(mujoco.mj_versionString()) : EXPECTED_MUJOCO_VERSION; if (version !== EXPECTED_MUJOCO_VERSION) throw new Error(`Bundled MuJoCo runtime reports ${version}; expected ${EXPECTED_MUJOCO_VERSION}`); return { version, evidence: typeof mujoco?.mj_versionString === 'function' ? 'mj_versionString runtime introspection' : 'bundled asset manifest and repository hash gate' }; }
 function validatedModelUrl(asset) { if (!MODEL_ASSET_RE.test(asset || '') || String(asset).includes('..')) throw new Error('Worker rejected non-registry model asset path'); const url = new URL(`../../${asset}`, import.meta.url); if (url.origin !== self.location.origin) throw new Error('Worker model asset must be same-origin'); return url.href; }
 function assertNumericArrayClose(actual, expected, label, tolerance = MODEL_VALUE_TOLERANCE) { if (!Array.isArray(expected) || actual.length !== expected.length) throw new Error(`${label} descriptor shape mismatch`); for (let index = 0; index < actual.length; index += 1) { const delta = Math.abs(Number(actual[index]) - Number(expected[index])); if (!Number.isFinite(delta) || delta > tolerance) throw new Error(`${label} mismatch at index ${index}: compiled ${actual[index]}, descriptor ${expected[index]}`); } }
+function configuredLabEquipment() {
+  const raw = new URL(self.location.href).searchParams.get('lab');
+  if (!raw) return Object.freeze([]);
+  let parsed;
+  try { parsed = JSON.parse(raw); } catch { throw new Error('OpenArm worker rejected malformed lab equipment configuration'); }
+  return normalizeOpenArmLabEquipment(parsed);
+}
+function numberList(values) { return values.map((value) => Number(value).toFixed(9).replace(/0+$/, '').replace(/\.$/, '') || '0').join(' '); }
+function labEquipmentXml(items) {
+  return items.map((item) => {
+    const geomName = openArmLabGeomName(item.id);
+    const geomSize = item.shape === 'box'
+      ? item.sizeM.map((value) => Number(value) / 2)
+      : [Number(item.sizeM[0]), Number(item.sizeM[1]) / 2];
+    const geom = `<geom name="${geomName}" type="${item.shape}" size="${numberList(geomSize)}" class="${item.mobility === 'free' ? 'vessel' : 'fixture'}"${item.mobility === 'free' ? ` mass="${Number(item.massKg)}"` : ''} rgba="0.50 0.66 0.72 0.92"/>`;
+    if (item.mobility === 'fixed') return `    <geom name="${geomName}" type="${item.shape}" pos="${numberList(item.positionM)}" size="${numberList(geomSize)}" class="fixture" rgba="0.40 0.52 0.57 0.96"/>`;
+    return `    <body name="${openArmLabBodyName(item.id)}" pos="${numberList(item.positionM)}">\n      <freejoint name="${openArmLabFreeJointName(item.id)}"/>\n      ${geom}\n    </body>`;
+  }).join('\n');
+}
+function compileLabEquipment(baseXml, items) {
+  if (!items.length) return baseXml;
+  const marker = '  </worldbody>';
+  if (!baseXml.includes(marker)) throw new Error('OpenArm model has no worldbody insertion point');
+  const generated = `\n    <!-- RoboBuddy validated temporary lab equipment: rigid primitives only. -->\n${labEquipmentXml(items)}\n`;
+  return baseXml.replace(marker, `${generated}${marker}`);
+}
 
-function resolveModelAddresses(modelSha256) {
+function resolveModelAddresses(modelSha256, compiledSha256) {
   jointState = new Map(); couplingState = new Map(); actuatorState = new Map(); bodyState = new Map();
   for (const joint of descriptor.joints) {
     const id = idFor('mjOBJ_JOINT', joint.id);
@@ -63,7 +91,9 @@ function resolveModelAddresses(modelSha256) {
     if (actuator.controlRangeRad) assertNumericArrayClose(controlRange, actuator.controlRangeRad, `Actuator ${actuator.id} control range`);
     actuatorState.set(actuator.id, { ...actuator, id, controlRange });
   }
-  for (const body of descriptor.bodies || []) {
+  const declaredBodies = [...(descriptor.bodies || [])];
+  for (const item of labEquipment) if (item.mobility === 'free') declaredBodies.push({ id: openArmLabBodyName(item.id), freeJointId: openArmLabFreeJointName(item.id) });
+  for (const body of declaredBodies) {
     const id = idFor('mjOBJ_BODY', body.id);
     let freeDof = null;
     if (body.freeJointId) {
@@ -79,7 +109,7 @@ function resolveModelAddresses(modelSha256) {
   const compiledIntegrator = Number(model.opt?.integrator);
   if (!Number.isInteger(expectedIntegrator) || compiledIntegrator !== expectedIntegrator) throw new Error(`Unexpected integrator ${compiledIntegrator}; expected ${descriptor.physics.integrator} (${expectedIntegrator})`);
   const version = runtimeVersionEvidence();
-  modelInfo = { modelSha256, engineVersion: version.version, engineVersionEvidence: version.evidence, timestepSeconds };
+  modelInfo = { modelSha256, compiledSha256, engineVersion: version.version, engineVersionEvidence: version.evidence, timestepSeconds };
 }
 
 function readContacts() {
@@ -134,7 +164,7 @@ function observation() {
     bodies[name] = record;
   }
   const contactState = readContacts();
-  return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts };
+  return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256, compiledSha256: modelInfo.compiledSha256, labEquipmentCount: labEquipment.length }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts };
 }
 
 function applyDeclaredInitialState() {
@@ -162,20 +192,23 @@ function applyDeclaredInitialState() {
   mujoco.mj_forward(model, data);
   return observation();
 }
-function disposeModel() { try { data?.delete?.(); } catch {} try { model?.delete?.(); } catch {} data = null; model = null; descriptor = null; jointState = new Map(); couplingState = new Map(); actuatorState = new Map(); bodyState = new Map(); modelInfo = null; paused = false; }
+function disposeModel() { try { data?.delete?.(); } catch {} try { model?.delete?.(); } catch {} data = null; model = null; descriptor = null; jointState = new Map(); couplingState = new Map(); actuatorState = new Map(); bodyState = new Map(); modelInfo = null; labEquipment = Object.freeze([]); paused = false; }
 async function load(modelPackage) {
   if (!modelPackage?.id || !modelPackage?.asset || !modelPackage?.sha256 || !Array.isArray(modelPackage.joints) || !Array.isArray(modelPackage.actuators)) throw new Error('Worker requires a validated registered model package descriptor');
   const modelUrl = validatedModelUrl(modelPackage.asset);
   const mj = await ensureMuJoCo();
   disposeModel();
-  const xml = await fetch(modelUrl, { cache: 'no-store' }).then((response) => { if (!response.ok) throw new Error(`MuJoCo model returned HTTP ${response.status}`); return response.text(); });
-  const modelSha256 = await sha256Text(xml);
+  const baseXml = await fetch(modelUrl, { cache: 'no-store' }).then((response) => { if (!response.ok) throw new Error(`MuJoCo model returned HTTP ${response.status}`); return response.text(); });
+  const modelSha256 = await sha256Text(baseXml);
   if (modelSha256 !== modelPackage.sha256) throw new Error(`Model SHA-256 mismatch for ${modelPackage.id}`);
+  labEquipment = configuredLabEquipment();
+  const xml = compileLabEquipment(baseXml, labEquipment);
+  const compiledSha256 = await sha256Text(xml);
   model = mj.from_xml_string(xml);
   if (!model) throw new Error(`MuJoCo failed to compile ${modelPackage.id}`);
   data = new mj.MjData(model);
   descriptor = structuredClone(modelPackage);
-  resolveModelAddresses(modelSha256);
+  resolveModelAddresses(modelSha256, compiledSha256);
   return applyDeclaredInitialState();
 }
 function reset() { return applyDeclaredInitialState(); }
