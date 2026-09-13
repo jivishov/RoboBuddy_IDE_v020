@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
 import { PhysicalPythonRuntime } from '../../src/runtime/physical-python-runtime.js';
-import { ASIMOV_WORKSPACES, asimovWorkspaceFiles } from '../../src/physics/asimov-workspaces.js';
+import { ASIMOV_TASKS, ASIMOV_WORKSPACES, asimovWorkspaceFiles } from '../../src/physics/asimov-workspaces.js';
 import { executeAsimovPhysicalControl as execute, WEBMCP_ASIMOV_SCHEMA_VERSION as version } from '../../src/webmcp/asimov-physical-control.js';
+
+// User catalog cleanup must not delete or mutate the three source/reference fixtures.
+assert.deepEqual(ASIMOV_TASKS.map(task=>task.id),[
+  'asimov-actuator-mounted','asimov-actuator-freebase','asimov-standing',
+  'asimov-sensor-standing','asimov-sensor-standing-delay','asimov-sensor-standing-ankle-stress',
+]);
+assert.equal(ASIMOV_TASKS[0].title,'Asimov 1 — Actuator Lab (experimental)');
+assert.equal(ASIMOV_TASKS[1].title,'Asimov 1 — Whole-Body Dynamics (experimental)');
+for(const id of ['asimov-mounted','asimov-freebase','asimov-drop']) {
+  assert.ok(ASIMOV_WORKSPACES[id],`${id} reference fixture must remain registered`);
+  assert.equal(ASIMOV_WORKSPACES[id].catalogVisibility,'internal-reference');
+  assert.equal(ASIMOV_TASKS.some(task=>task.id===id),false,`${id} must stay out of the normal task catalog`);
+}
+for(const task of ASIMOV_TASKS) assert.equal(task.catalogVisibility,'user');
 
 // The longer, declared standing deadline must not change the default or weaken Stop.
 let worker;
@@ -55,4 +69,4 @@ for (const command of ['read_state','engage_stand','stop']) {
   assert.notEqual(result.observedState.actuator_model,actuator);
   assert.notEqual(result.observedState.standing_assessment,assessment);
 }
-console.log('Asimov browser boundaries: bounded per-trial deadlines, immediate Stop, coarse Python polling, and WebMCP evidence metadata: OK');
+console.log('Asimov browser boundaries: six-task user catalog, retained reference fixtures, bounded per-trial deadlines, immediate Stop, coarse Python polling, and WebMCP evidence metadata: OK');
