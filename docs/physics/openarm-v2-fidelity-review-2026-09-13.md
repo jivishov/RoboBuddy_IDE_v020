@@ -8,14 +8,16 @@ This review covers the browser MuJoCo OpenArm V2 bimanual workspace in RoboBuddy
 
 ### 1. Grasp contact geometry
 
-The pinned upstream `enactic/openarm_mujoco` V2 model uses four collision meshes per finger and source finger bodies whose inertial/visual geometry is longitudinally offset from the finger joint axis. RoboBuddy intentionally uses repository-local primitive collision surrogates, but the previous 8 mm fingertip capsules were centered on local `x=0`. That placed the contact proxy closer to the finger joint axis than the source finger body/visual geometry and could make a physically contacted vessel look embedded in the canonical palm/fingers.
+The pinned upstream `enactic/openarm_mujoco` V2 model uses four collision mesh parts per finger (`finger_inner_part_00..03.stl` and `finger_outer_part_00..03.stl`). RoboBuddy currently uses repository-local 8 mm capsule surrogates instead of those meshes, so exact finger/palm clearance is not yet represented.
 
-This revision keeps the primitive-surrogate limitation but shifts each capsule to the source-informed finger longitudinal offsets (`x=-0.0125 m` inner, `x=-0.0128 m` outer). It also adds two task-level physical gates:
+An experimental revision attempted to shift the capsule centerline using the finger body's inertial center-of-mass offset. Native MuJoCo regression testing showed that this destabilized the nominal flask manipulation. That experiment was reverted: an inertial COM is not a justified substitute for collision-mesh geometry. The physical model therefore remains on the previously validated primitive-proxy baseline until the pinned upstream collision meshes can be bundled and audited properly.
+
+This revision improves fidelity without inventing a new geometry calibration by adding two independent task-level physical gates:
 
 - signed fingertip/vessel contact distance is tracked and task success rejects a grasp whose maximum penetration exceeds 4 mm;
 - any vessel contact with the corresponding `*_ee_proxy` palm/end-effector collider invalidates grasp clearance and task success.
 
-These are physical-state checks from MuJoCo contact pairs. They do not alter object transforms or manufacture successful grasps.
+These are physical-state checks from MuJoCo contact pairs. They do not alter object transforms, attach objects to the gripper, or manufacture successful grasps. They make the current approximation fail visibly when it produces an obviously embedded/invalid contact instead of counting that contact as a valid manipulation.
 
 ### 2. Scene layering
 
@@ -28,16 +30,16 @@ The grid is presentation-only and now sits 1 mm above the actual tabletop (`1006
 #### Stronger / source-derived parts
 
 - V2 bimanual kinematic tree, mirrored joint axes and ranges.
-- Source transcribed link inertials.
+- Source-transcribed link inertials.
 - Source-simulation position-controller gains/limits and legitimate mechanical finger couplings.
 - One MuJoCo `PhysicsSession` is authoritative for both arms and all free rigid bodies.
 - Flask and beaker are free bodies. Task execution does not write their qpos/qvel, parent them to fingers, weld them, snap them to targets, or advance them in presentation code.
-- Task evaluation uses observed contact, lift, carried motion, support-while-held, release, settling, and retreat evidence.
+- Task evaluation uses observed bilateral contact, lift, carried motion, support-while-held, release, settling, retreat, contact penetration, and palm-clearance evidence.
 
 #### Still estimated / not hardware-calibrated
 
-- Link and gripper collision geometry remains primitive rather than the upstream mesh collision set. Same-arm self-collision therefore remains deliberately conservative/limited rather than being advertised as exact.
-- Flask, beaker, hotplate, ring stand, table, material friction, dry mass/inertia and contact parameters are benchmark values, not measurements from Emil's installed workcell.
+- Link and gripper collision geometry remains primitive rather than the upstream mesh collision set. Same-arm self-collision and finger/palm clearance therefore remain approximate rather than being advertised as exact.
+- Flask, beaker, hotplate, ring stand, table, material friction, dry mass/inertia and contact parameters are benchmark values, not measurements from an installed workcell.
 - Position actuators model the published simulator interface; they do not reproduce motor firmware, backlash, structural compliance, fingertip material compliance, electrical limits, thermal limits, encoder noise, communication delay, or a calibrated force-control loop.
 - No tactile sensor or measured grasp force exists. A bilateral contact is a simulator contact condition, not proof of a safe real-world grasp.
 - No liquid, filtration, heating, glass deformation/breakage, or thermochemical process is simulated. This remains a rigid-body dry manipulation task.
@@ -51,7 +53,7 @@ Two bounded OpenArm-specific WebMCP capabilities are added:
    - accepts only validated box/cylinder rigid-body primitives;
    - each item is either a fixed fixture or a free rigid body;
    - maximum 12 items / 6 free bodies;
-   - positions, dimensions and masses are bounded to the OpenArm workcell;
+   - positions, full extents, dimensions and masses are bounded to the OpenArm tabletop/workcell;
    - configuration recompiles a new temporary MuJoCo scene and resets the physical session;
    - no arbitrary XML, mesh URL, script, plugin, weld, source write, save/publish path, or hardware transport is exposed.
 
@@ -66,7 +68,7 @@ This provides a practical WebMCP path for an agent to construct simple lab fixtu
 
 ## Highest-value next fidelity steps
 
-1. Bundle the pinned upstream OpenArm V2 collision meshes and replace the finger/link primitive proxies after browser performance and asset-license review. This is the clearest next improvement for finger/palm clearance and self-collision fidelity.
+1. Bundle the pinned upstream OpenArm V2 collision meshes and replace the finger/link primitive proxies after browser performance and asset-license review. The browser MuJoCo backend already has a precedent for loading repository assets through a virtual filesystem in other robot integrations; applying that approach to the pinned OpenArm collision parts is the clearest next improvement for finger/palm clearance and self-collision fidelity.
 2. Add a measured OpenArm V2 hardware calibration profile: joint-zero/tool-frame checks, slow reference trajectories, grasp opening/closing response, payload and end-effector pose error.
 3. Replace the current timed reference manipulation sequence with a contact-aware grasp routine that approaches, closes in small bounded increments, stops tightening after stable bilateral contact, then verifies object motion before lift.
 4. Add collision-aware Cartesian planning/IK as a controller layer. Planning must generate actuator targets; it must not become a second state authority.
