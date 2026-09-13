@@ -1,0 +1,43 @@
+name: OpenArm refinement verification
+on:
+  push:
+    branches: [fix/openarm-contact-workcell-webmcp]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prepare:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Fetch pinned upstream OpenArm sources (read-only)
+        uses: actions/checkout@v4
+        with:
+          repository: enactic/openarm_mujoco
+          ref: a8c979629f2591ad035d99d338ce114969e6cddc
+          path: .openarm-upstream
+          persist-credentials: false
+      - name: Prepare verification bundle
+        run: |
+          mkdir -p /tmp/openarm-verification/wheels /tmp/openarm-verification/npm
+          python -m pip download 'mujoco==3.11.0' -d /tmp/openarm-verification/wheels
+          cd /tmp/openarm-verification/npm
+          npm pack three@0.180.0
+          npm pack @playwright/test@1.55.0
+          npm pack playwright@1.55.0
+          npm pack playwright-core@1.55.0
+          cd "$GITHUB_WORKSPACE"
+          tar --exclude=.git --exclude='.openarm-upstream/.git' -czf /tmp/openarm-verification/source.tgz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openarm-verification-source
+          path: /tmp/openarm-verification/
+          retention-days: 3
