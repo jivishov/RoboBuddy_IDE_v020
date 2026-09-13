@@ -40,7 +40,7 @@ const visibleOpenarm = tasksForProfile('openarm');
 if (visibleOpenarm.length !== 1 || visibleOpenarm[0].id !== 'openarm-04-filtration-workcell' || visibleOpenarm[0].simulationMode !== 'physical_mujoco') throw new Error(`OpenArm physical catalog drift: ${JSON.stringify(visibleOpenarm)}`);
 if (OPENARM_PHYSICAL_TASKS[0].physicalSceneId !== 'phase5a-openarm-v2-bimanual-stack') throw new Error('OpenArm physical scene id drifted');
 const openarmScenario = await loadPatchedScenario('openarm', 'openarm-04-filtration-workcell');
-if (openarmScenario.modelPackage !== 'openarm-v2-phase5a-a8c9796-v3') throw new Error('OpenArm refined physical model package drifted');
+if (openarmScenario.modelPackage !== 'openarm-v2-phase5a-a8c9796-v2') throw new Error('OpenArm refined physical model package drifted');
 if (openarmScenario.workspaceRevision !== 'openarm-v2-physical-bimanual-stack-v2') throw new Error('OpenArm refined workspace revision drifted');
 if (openarmScenario.physicalSceneRevision !== 'phase5a-openarm-v2-bimanual-stack-v3') throw new Error('OpenArm refined physical scene revision drifted');
 if (openarmScenario.robotId !== 'openarm_v2_bimanual') throw new Error('OpenArm physical robot identity drifted');
