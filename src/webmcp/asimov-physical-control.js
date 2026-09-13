@@ -1,4 +1,5 @@
 import { asimovProgramSchemas,parseAsimovProgram,executeAsimovProgram,ASIMOV_PROGRAM_LIMITS,ASIMOV_PROGRAM_REVISION,ASIMOV_UPPER_BODY_JOINTS } from './asimov-program.js';
+import { asimovWholeBodySchema,parseAsimovWholeBody,executeAsimovWholeBodyMotion,ASIMOV_WHOLE_BODY_LIMITS,ASIMOV_WHOLE_BODY_REVISION } from './asimov-whole-body.js';
 import { ASIMOV_MASS_RECONCILIATION } from '../physics/asimov-sensitivity.js';
 import { PROFILES } from '../profiles.js';
 import { ASIMOV_SOURCE } from '../physics/asimov-generated.js';
@@ -37,6 +38,7 @@ export function createAsimovControlSchema() {
     type: 'object',
     oneOf: [
       ...asimovProgramSchemas(version,targets),
+      asimovWholeBodySchema(version,targets),
       {type:'object',properties:{schema_version:version,command:{type:'string',const:'set_standing_targets'},targets_rad:{...targets,properties:Object.fromEntries(ASIMOV_UPPER_BODY_JOINTS.map(id=>[id,targets.properties[id]]))},advance_seconds:{type:'number',minimum:0,maximum:2},max_steps:{type:'integer',minimum:1,maximum:40000}},required:['schema_version','command','targets_rad'],additionalProperties:false},
       bare('inspect_capability'),
       bare('read_state'),
@@ -76,7 +78,7 @@ export function getAsimovPhysicalControlDefinition(facade) {
   return {
     name: 'control_asimov_physical_simulation',
     title: 'Control the Asimov 1 physical MuJoCo simulation',
-    description: `Control the active Asimov physical scene through ${WEBMCP_ASIMOV_SCHEMA_VERSION}. Bounded joint torques under the selected reference or experimental actuator profile, measured state, gravity and contacts. Estimated PD gains are not hardware calibration. Mounted scenes fix the pelvis explicitly. Experimental standing can be engaged only in its declared standing scene; acceptance is not achievement. Separate synthetic sensor reads are available only in actuator experiments. run_sequence accepts 1..32 prevalidated segments totaling at most 12 simulation seconds; wait_for_joint tests measured attainment and can time out. Manual joint targets release standing. Inspect capability for the 23 joint IDs, limits, selected controller and timestep. No walk, grasp, root-pose write or external-force operation is exposed.`,
+    description: `Control the active Asimov physical scene through ${WEBMCP_ASIMOV_SCHEMA_VERSION}. Bounded joint torques under the selected reference or experimental actuator profile, measured state, gravity and contacts. Estimated PD gains are not hardware calibration. Mounted scenes fix the pelvis explicitly. Experimental standing can be engaged only in its declared standing scene; acceptance is not achievement. Separate synthetic sensor reads are available only in actuator experiments. run_sequence accepts 1..32 prevalidated segments totaling at most 12 simulation seconds; wait_for_joint tests measured attainment and can time out. run_whole_body_motion accepts bounded agent-generated full-body keyframes in actuated free-base scenes for stepping, walking attempts, turning, squatting, reaching, gestures or other motions; achieved displacement and support come from MuJoCo contact physics, not the intent label. It has no stabilization assistance by default. Optional ground_truth stabilization is an explicit simulator-only ankle-target supervisor, not a trained gait or hardware controller. Passive Gravity Drop remains observation-only. Inspect capability for the 23 joint IDs, limits, selected controller and timestep. No root-pose write, root-velocity write, external-force, hidden reset, grasp or hardware operation is exposed.`,
     inputSchema: createAsimovControlSchema(),
   };
 }
@@ -87,6 +89,7 @@ function parse(input) {
   if(typeof input.command!=='string')invalid('command must be a string.');
   const command = input.command;
   if(['run_sequence','wait_for_joint'].includes(command)) {try{return parseAsimovProgram(input);}catch(e){invalid(e.message);}}
+  if(command==='run_whole_body_motion') {try{return parseAsimovWholeBody(input);}catch(e){invalid(e.message);}}
   if (['inspect_capability', 'read_state', 'read_sensors', 'engage_stand', 'stop', 'reset'].includes(command)) {
     onlyKeys(input, ['schema_version', 'command']);
     return { command };
@@ -105,7 +108,7 @@ function parse(input) {
     onlyKeys(input, ['schema_version', 'command', 'advance_seconds']);
     return { command, advanceSeconds: advanceOf(input.advance_seconds, { required: true }) };
   }
-  if (!['set_joint_targets','set_standing_targets'].includes(command)) invalid('Asimov 1 physical command must be inspect_capability, read_state, read_sensors, engage_stand, set_joint_targets, advance, stop or reset.');
+  if (!['set_joint_targets','set_standing_targets'].includes(command)) invalid('Asimov 1 physical command must be inspect_capability, read_state, read_sensors, engage_stand, set_joint_targets, set_standing_targets, run_sequence, wait_for_joint, run_whole_body_motion, advance, stop or reset.');
   onlyKeys(input, ['schema_version', 'command', 'targets_rad', 'advance_seconds', 'max_steps']);
   plain(input.targets_rad, 'targets_rad');
   const entries = Object.entries(input.targets_rad);
@@ -145,9 +148,18 @@ function assertCurrent(facade, baseline, expectedEpoch, signal, { allowAuthority
   if (facade.app.getExecutionState() !== 'idle') throw new WebMcpDomainError('SIMULATION_BUSY', 'A Python run acquired the simulation during direct control.', { retryable: true });
 }
 
+function wholeBodyAvailability(facade, state) {
+  const sceneId=facade.app.scenario?.physicalSceneId??'';
+  if (state?.root?.mode !== 'free-base') return 'requires-free-base';
+  if (sceneId === 'asimov-drop' || state?.controller_mode === 'passive') return 'unavailable-passive-gravity-drop';
+  if (state?.actuation_enabled === false) return 'requires-enabled-actuation';
+  return 'experimental-agent-generated-keyframes';
+}
+
 function observedState(facade) {
   const state = facade.app.sim.getState?.();
   if (!state) return null;
+  const wholeBody=wholeBodyAvailability(facade,state);
   return {
     simulationTimeSeconds: state.simulation_time_s,
     root: state.root,
@@ -158,7 +170,8 @@ function observedState(facade) {
     controllerMode: state.controller_mode,
     actuationEnabled: state.actuation_enabled,
     joints: state.joints,
-    walking: 'unsupported',
+    wholeBodyMotion: wholeBody,
+    walking: wholeBody==='experimental-agent-generated-keyframes'?'experimental-agent-generated-trajectory; not a validated gait policy':wholeBody,
   };
 }
 
@@ -177,18 +190,35 @@ export async function executeAsimovPhysicalControl(facade, input, signal, expect
     guard();
 
     if (parsed.command === 'inspect_capability') {
-      // Read-only. It reports the capability table verbatim and starts nothing.
+      const state=facade.app.sim.getState?.();
+      const rootMode=state?.root?.mode;
+      const wholeBody=wholeBodyAvailability(facade,state);
+      const wholeBodyReady=wholeBody==='experimental-agent-generated-keyframes';
       return {
         ...base,
         command: 'inspect_capability',
         sourceRevision: ASIMOV_SOURCE.revision,
-        rootMode: facade.app.sim.getState()?.root?.mode,
-        capabilities: {jointTargets:'supported',standingUpperBodyTargets:'supported-in-active-standing-trial',sequence:'supported',measuredJointWait:'supported',walking:'unsupported',standing:/^asimov-(?:standing$|sensor-standing)/.test(facade.app.scenario?.physicalSceneId??'')?'experimental-flat-floor-trial':'unsupported',neck:'fixed in source'},
-        programming:{revision:ASIMOV_PROGRAM_REVISION,limits:ASIMOV_PROGRAM_LIMITS,angleUnit:'rad',timeUnit:'simulation seconds',timestepSeconds:facade.app.scenario?.controller?.physicsTimestepSeconds??sim.selectedScene?.physics?.timestepSeconds,manualTargetsReleaseStanding:true,standingControllerId:sim.selectedScene?.controllers?.find(id=>['asimov-stance-feedback-v1','asimov-sensor-stance-v2'].includes(id))??null},
+        rootMode,
+        capabilities: {
+          jointTargets:'supported',standingUpperBodyTargets:'supported-in-active-standing-trial',sequence:'supported',measuredJointWait:'supported',
+          wholeBodyMotion:wholeBody,
+          stepping:wholeBodyReady?'experimental-physical-trajectory':wholeBody,
+          walking:wholeBodyReady?'experimental-agent-generated-trajectory; not a trained or validated gait policy':wholeBody,
+          turning:wholeBodyReady?'experimental-physical-trajectory':wholeBody,
+          standing:/^asimov-(?:standing$|sensor-standing)/.test(facade.app.scenario?.physicalSceneId??'')?'experimental-flat-floor-trial':'unsupported',neck:'fixed in source'
+        },
+        programming:{
+          revision:ASIMOV_PROGRAM_REVISION,limits:ASIMOV_PROGRAM_LIMITS,
+          wholeBodyRevision:ASIMOV_WHOLE_BODY_REVISION,wholeBodyLimits:ASIMOV_WHOLE_BODY_LIMITS,
+          wholeBodyDefaultStabilization:'none',
+          wholeBodyStabilization:'optional bounded ground-truth ankle-target correction at 20 Hz; simulator-only, not hardware-like sensing or a trained gait; final targets remain source-velocity-limited',
+          angleUnit:'rad',timeUnit:'simulation seconds',timestepSeconds:facade.app.scenario?.controller?.physicsTimestepSeconds??sim.selectedScene?.physics?.timestepSeconds,
+          manualTargetsReleaseStanding:true,standingControllerId:sim.selectedScene?.controllers?.find(id=>['asimov-stance-feedback-v1','asimov-sensor-stance-v2'].includes(id))??null
+        },
         jointDefinitions:ASIMOV_SOURCE.joints.map(j=>({id:j.id,rangeRad:j.rangeRad,velocityLimitRadS:j.velocityLimitRadS,sourceEffortLimitNm:j.effortLimitNm})),
         massReconciliation:ASIMOV_MASS_RECONCILIATION,
-        actuatorModel:facade.app.sim.getState()?.actuator_model??null,
-        limitations: [...(facade.app.scenario?.limitations??ASIMOV_LIMITATIONS)],
+        actuatorModel:state?.actuator_model??null,
+        limitations: [...(facade.app.scenario?.limitations??ASIMOV_LIMITATIONS), 'Agent-generated whole-body trajectories are simulator experiments. A completed trajectory is not proof of a stable step, walk, turn or hardware-feasible motion; inspect measured displacement, contacts, support transitions and final state. Passive Gravity Drop remains observation-only.'],
         physicalAuthority: facade.app.sim.getPhysicalAuthorityToken?.(),
       };
     }
@@ -196,6 +226,12 @@ export async function executeAsimovPhysicalControl(facade, input, signal, expect
     if (['run_sequence','wait_for_joint'].includes(parsed.command)) {
       const dt=facade.app.scenario?.controller?.physicsTimestepSeconds??sim.selectedScene?.physics?.timestepSeconds;
       const result=await executeAsimovProgram(sim,parsed,{dt,guard,advance});guard();facade.app.renderPanels?.();
+      return {...base,command:parsed.command,...result,observedState:observedState(facade),taskEvaluation:sim.getTaskEvaluation?.(),physicalAuthority:baseline.authority};
+    }
+
+    if(parsed.command==='run_whole_body_motion') {
+      const dt=facade.app.scenario?.controller?.physicsTimestepSeconds??sim.selectedScene?.physics?.timestepSeconds;
+      const result=await executeAsimovWholeBodyMotion(sim,parsed,{dt,guard,advance});guard();facade.app.renderPanels?.();
       return {...base,command:parsed.command,...result,observedState:observedState(facade),taskEvaluation:sim.getTaskEvaluation?.(),physicalAuthority:baseline.authority};
     }
 
@@ -264,7 +300,7 @@ export const ASIMOV_CONTROL_LIMITS = Object.freeze({
   maxAdvanceSeconds: MAX_ADVANCE_SECONDS,
   maxCommandSteps: MAX_COMMAND_STEPS,
   defaultCommandSteps: DEFAULT_COMMAND_STEPS,
-  exposedCommands: Object.freeze(['inspect_capability', 'read_state', 'read_sensors', 'engage_stand', 'set_joint_targets', 'advance', 'stop', 'reset', 'run_sequence', 'wait_for_joint', 'set_standing_targets']),
+  exposedCommands: Object.freeze(['inspect_capability', 'read_state', 'read_sensors', 'engage_stand', 'set_joint_targets', 'advance', 'stop', 'reset', 'run_sequence', 'wait_for_joint', 'set_standing_targets', 'run_whole_body_motion']),
   // Named so a reviewer can grep for them: none of these exists as an agent-reachable operation.
-  neverExposed: Object.freeze(['set_root_pose', 'set_root_velocity', 'force_upright', 'walk', 'set_actuation', 'apply_external_force', 'place_object']),
+  neverExposed: Object.freeze(['set_root_pose', 'set_root_velocity', 'force_upright', 'set_actuation', 'apply_external_force', 'place_object', 'connect_hardware']),
 });

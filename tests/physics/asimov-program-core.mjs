@@ -45,7 +45,7 @@ for(const kind of ['abort','revoke','epoch','workspace']){
 }
 // Schema must not reject valid oneOf branches through an empty top-level properties list.
 assert.equal(createAsimovControlSchema().additionalProperties,undefined);
-assert.equal(createAsimovControlSchema().oneOf.length,11);
+assert.equal(createAsimovControlSchema().oneOf.length,12);
 assert.throws(()=>assertProgramTiming(parseAsimovProgram({...envelope('run_sequence'),segments:[{duration_seconds:.003}]}),.0025));
 // Exercise the real simulator's advancement method without constructing a renderer.
 const url=new URL('../../src/physics/asimov-physical-simulator.js',import.meta.url);

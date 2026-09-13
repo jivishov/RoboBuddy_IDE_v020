@@ -42,12 +42,13 @@ export const PHYSICS_PREVIEW_CAPABILITIES = Object.freeze({
   }),
   asimov: capabilityRecord({
     backend: EXECUTION_BACKENDS.BROWSER_MUJOCO,
-    capability: 'single-authority Menlo Asimov 1 23-joint rigid-body simulation with mounted and free-base scenes, live Python and bounded WebMCP control',
+    capability: 'single-authority Menlo Asimov 1 23-joint rigid-body simulation with mounted/free-base scenes, live Python, bounded WebMCP control and experimental agent-generated whole-body trajectories',
     evidence: MODEL_EVIDENCE.NUMERICALLY_VERIFIED,
     limitations: [
       'Pinned Menlo model: 23 movable joints and a fixed neck, not the hardware marketing count of 25 joints. Source mass, inertias, joint frames, limits and collision primitives are preserved.',
-      'Reference ideal motors and separate actuator/standing experiments use declared simulator estimates; continuous ratings do not establish hardware accuracy. The mounted joint laboratory deliberately fixes the pelvis; free-base scenes have no hidden support or root stabilization.',
-      'No trained walking, robust balance, finger grasping, calibrated ankle transmission or hardware validation is claimed.',
+      'Reference ideal motors and separate actuator/standing experiments use declared simulator estimates; continuous ratings do not establish hardware accuracy. The mounted joint laboratory deliberately fixes the pelvis; free-base scenes have no hidden support or root-state stabilization.',
+      'WebMCP whole-body motion is a bounded agent-generated joint trajectory evaluated by measured MuJoCo displacement/contact. Its optional ground-truth ankle-target stabilizer is explicit simulator feedback, not a hardware-like locomotion controller.',
+      'No trained or validated walking gait, robust balance/recovery, finger grasping, calibrated ankle transmission or hardware validation is claimed.',
     ],
   }),
   unitree: UNITREE_G1_PHYSICAL_CAPABILITY,
