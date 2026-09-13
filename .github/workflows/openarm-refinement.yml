@@ -14,25 +14,40 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.13'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - name: Dependencies
         run: |
           python -m pip install mujoco==3.11.0 scipy
-          npm install --no-package-lock
+          npm install --no-package-lock --no-save three@0.180.0 ajv@8.17.1
       - name: Baseline checks
         run: |
           node tests/physics/openarm-phase5a-core.mjs
           python native/openarm_v2_reference.py --help
-      - name: Export bounded development snapshot
+      - name: Export development dependencies
         run: |
-          mkdir -p /tmp/openarm-snapshot/wheels
-          git archive HEAD -o /tmp/openarm-snapshot/source.tar
-          python -m pip download --only-binary=:all: --dest /tmp/openarm-snapshot/wheels mujoco==3.11.0 scipy
+          mkdir -p /tmp/openarm-snapshot/wheels /tmp/openarm-snapshot/upstream/collision
+          python -m pip download --no-deps --only-binary=:all: --dest /tmp/openarm-snapshot/wheels mujoco==3.11.0 glfw absl-py etils fsspec zipp pyopengl typing_extensions
+          tar -cf /tmp/openarm-snapshot/node_modules.tar node_modules
+          python - <<'PY'
+          from pathlib import Path
+          import urllib.request, hashlib, json
+          root = Path('/tmp/openarm-snapshot/upstream')
+          base = 'https://raw.githubusercontent.com/enactic/openarm_mujoco/a8c979629f2591ad035d99d338ce114969e6cddc/v2/'
+          files = ['base_link','link1','link2','link3','link4','link6','ee_base_link'] + [f'link5_part_{i:02}' for i in range(3)] + [f'finger_{kind}_part_{i:02}' for kind in ['inner','outer'] for i in range(4)]
+          manifest = {}
+          for name in files:
+              data = urllib.request.urlopen(base+'assets/collision/'+name+'.stl', timeout=30).read()
+              (root/'collision'/f'{name}.stl').write_bytes(data)
+              manifest[name] = {'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)}
+          (root/'manifest.json').write_text(json.dumps(manifest,indent=2))
+          (root/'openarm_bimanual.xml').write_bytes(urllib.request.urlopen(base+'openarm_bimanual.xml').read())
+          (root/'canonical.js').write_bytes(urllib.request.urlopen('https://raw.githubusercontent.com/jivishov/RoboBuddy_AI/66d18a029a0caeb6a6075e681dbd9ecd6b22affa/simulator/js/robot-mesh-data-openarm-v2.js').read())
+          PY
       - uses: actions/upload-artifact@v4
         with:
-          name: openarm-development-snapshot
+          name: openarm-development-dependencies
           path: /tmp/openarm-snapshot
           retention-days: 2
