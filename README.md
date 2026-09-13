@@ -8,7 +8,7 @@ Phase 5C migrates MicroDuck onto the same single-authority backend as a matched-
 
 Phase 5D migrates the Unitree G1 29-DoF fixed-rubber-hand robot onto the same single-authority backend as a separate physical workspace, beside the retained kinematic pose workspace. The free-base plant has gravity, a floor, named foot contact primitives, self-contact and a declared free object. Actuation follows Unitree's own low-level motor law, bounded by the source joint, velocity and effort limits, and requested, accepted and measured joint values are reported separately. Standing is a bounded posture hold that the free-base gate verifies, and it is measured against its own negative controls: the exact source FixStand gains topple this model, disabling the motors topples it, and a 0.20 m/s forward impulse topples it. Perturbation recovery, walking, dexterous-hand control and hardware calibration are unsupported and are not exposed. See `docs/physics/unitree-g1-provenance.md`.
 
-The supported SO-101 task is a synthetic rigid-body block-transfer benchmark. Simulator validation is not hardware calibration. LeKiwi, MicroDuck and Unitree G1 have separate physical workspaces. Panda and ASIMOV remain separate later robot-specific migration work.
+The supported SO-101 task is a synthetic rigid-body block-transfer benchmark. Simulator validation is not hardware calibration. LeKiwi, MicroDuck and Unitree G1 have separate physical workspaces. Panda remains a separate later robot-specific migration work item.
 
 ### Asimov 1 physical preview
 
@@ -17,9 +17,11 @@ dynamics or passive gravity drop with the same authoritative MuJoCo session as t
 existing physical robots. The source model has **23 hinges and a fixed neck**.
 Python and opt-in WebMCP send bounded joint commands; full source STL visuals
 follow measured body poses. Added ideal torque motors and PD gains are estimates;
-walking, balance recovery, grasping and hardware calibration are not supplied.
+balance recovery, grasping and hardware calibration are not supplied.
 See [Asimov provenance, controls and validation](docs/physics/asimov-provenance.md).
 
-### Asimov actuator and standing experiments
+### Asimov actuator, standing and agent-generated whole-body experiments
 
-Asimov's original three reference scenes remain available. **Actuator Lab (experimental)** and **Actuator Free-base (experimental)** add continuous motor caps, estimated speed/friction/delay behavior, and a separate synthetic sensor view. **Standing Trial (experimental)** tests a bounded torso-feedback controller with an observation-derived support assessment. These are source-informed simulation experiments, not hardware calibration, walking, or a completed ankle transmission model. See [scope, source reconciliation and validation](docs/physics/asimov-actuator-fidelity.md).
+Asimov's original three reference scenes remain available. **Actuator Lab (experimental)** and **Actuator Free-base (experimental)** add continuous motor caps, estimated speed/friction/delay behavior, and a separate synthetic sensor view. **Standing Trial (experimental)** tests a bounded torso-feedback controller with an observation-derived support assessment.
+
+Opt-in WebMCP additionally exposes `run_whole_body_motion` in free-base Asimov scenes. An agent can generate bounded multi-joint keyframes for stepping/walking attempts, turning, squatting, reaching, gestures or other coordinated motion. The trajectory is executed through the same joint actuators and MuJoCo contacts; the tool never writes root pose/velocity or applies a hidden external force. Results report measured displacement, support transitions, tilt and fall-like conditions so the agent can revise its next trajectory. An optional bounded ground-truth ankle-target stabilizer is explicitly simulator-only. This capability is **not** a trained walking policy, a validated stable gait, hardware calibration, or a completed ankle transmission model. See [WebMCP programming and whole-body motion](docs/physics/ASIMOV_WEBMCP_PROGRAMMING.md) and [scope, source reconciliation and validation](docs/physics/asimov-actuator-fidelity.md).
