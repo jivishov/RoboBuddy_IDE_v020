@@ -55,10 +55,10 @@ test('Asimov actual full STL presentation follows observed bodies; renderer cann
  });
  expect(reset).toEqual({wasUnready:true,ready:true,time:0});
 });
-test('Asimov IDE selector, live Python and opt-in WebMCP share the visible physics session',async({page})=>{
+test('Asimov IDE selector exposes only user experiments while references remain internal',async({page})=>{
  test.setTimeout(600000);
  await page.addInitScript(()=>{
-  localStorage.setItem('rbide.profile','asimov');localStorage.setItem('rbide.task.asimov','asimov-mounted');
+  localStorage.setItem('rbide.profile','asimov');localStorage.setItem('rbide.task.asimov','asimov-actuator-mounted');
   const registrations=[];
   Object.defineProperty(document,'modelContext',{configurable:true,value:{registerTool(tool){registrations.push(tool);return Promise.resolve();}}});
   window.asimovRegistrations=registrations;
@@ -66,7 +66,16 @@ test('Asimov IDE selector, live Python and opt-in WebMCP share the visible physi
  await page.goto('/?ci=asimov-physical',{waitUntil:'domcontentloaded'});
  await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
  await expect(page.locator('#robotSelect')).toHaveValue('asimov');
- expect(await page.locator('#taskSelect option').count()).toBe(9);
+ const catalog=await page.locator('#taskSelect option').evaluateAll(options=>options.map(o=>({value:o.value,text:o.textContent})));
+ expect(catalog).toEqual([
+  {value:'asimov-actuator-mounted',text:'Asimov 1 — Actuator Lab (experimental)'},
+  {value:'asimov-actuator-freebase',text:'Asimov 1 — Whole-Body Dynamics (experimental)'},
+  {value:'asimov-standing',text:'Asimov 1 — Standing Trial (experimental)'},
+  {value:'asimov-sensor-standing',text:'Asimov 1 — Sensor Standing (experimental)'},
+  {value:'asimov-sensor-standing-delay',text:'Asimov 1 — Delayed Sensor Standing (sensitivity)'},
+  {value:'asimov-sensor-standing-ankle-stress',text:'Asimov 1 — Ankle Loss Standing (sensitivity)'},
+ ]);
+ expect(catalog.map(x=>x.value)).not.toEqual(expect.arrayContaining(['asimov-mounted','asimov-freebase','asimov-drop']));
  await expect(page.locator('#simCanvas')).toHaveAttribute('data-asimov-root-mode','fixed-mounted');
  await page.evaluate(async()=>{const app=window.__robobuddyCi.app; await app.run();});
  const python=await page.evaluate(()=>({out:window.__robobuddyCi.app.console,diagnostics:window.__robobuddyCi.app.sim.backend.getState()}));
@@ -86,7 +95,7 @@ test('Asimov IDE selector, live Python and opt-in WebMCP share the visible physi
  });
  expect(agent.registered).toBe(true);expect(agent.forbidden).toBe(true);expect(agent.command.observedState.joints.left_elbow_joint.requested_target_rad).toBe(1.2);
  await page.screenshot({path:'test-results/asimov-ide.png'});
- await page.locator('#taskSelect').selectOption('asimov-freebase');
+ await page.locator('#taskSelect').selectOption('asimov-actuator-freebase');
  await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
  await expect(page.locator('#simCanvas')).toHaveAttribute('data-asimov-root-mode','free-base');
  await page.locator('#robotSelect').selectOption('unitree');
@@ -140,14 +149,14 @@ test('Asimov actuator experiment: sensor isolation, continuous caps and physical
  });
  expect(agent.sensors.sensorObservation.view).toBe('hardware_like');expect(agent.stopped.status).toBe('failed');
  expect(agent.start.observedState.standing_assessment.status).toBe('running');expect(agent.state.simulation_time_s).toBeCloseTo(.2,8);
- await page.locator('#taskSelect').selectOption('asimov-mounted');await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
- const reference=await page.evaluate(async()=>{
+ await page.locator('#taskSelect').selectOption('asimov-actuator-mounted');await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
+ const mountedExperiment=await page.evaluate(async()=>{
   const {app,agentFacade:f}=window.__robobuddyCi;
   const {executeAsimovPhysicalControl:execute,WEBMCP_ASIMOV_SCHEMA_VERSION:v}=await import('/src/webmcp/asimov-physical-control.js');
   let blocked=false;try{await execute(f,{schema_version:v,command:'engage_stand'},null,f.registrationEpoch);}catch{blocked=true;}
   return {blocked,state:app.sim.getState()};
  });
- expect(reference.blocked).toBe(true);expect(reference.state.actuator_model).toBeUndefined();
+ expect(mountedExperiment.blocked).toBe(true);expect(mountedExperiment.state.actuator_model.continuousOnly).toBe(true);
 });
 
 test('Sensor standing and bounded programs are available through the registered WebMCP tool',async({page})=>{

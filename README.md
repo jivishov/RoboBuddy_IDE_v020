@@ -12,16 +12,14 @@ The supported SO-101 task is a synthetic rigid-body block-transfer benchmark. Si
 
 ### Asimov 1 physical preview
 
-Select **Asimov 1 — Physical** to use the mounted joint laboratory, free-base
-dynamics or passive gravity drop with the same authoritative MuJoCo session as the
-existing physical robots. The source model has **23 hinges and a fixed neck**.
-Python and opt-in WebMCP send bounded joint commands; full source STL visuals
-follow measured body poses. Added ideal torque motors and PD gains are estimates;
-balance recovery, grasping and hardware calibration are not supplied.
-See [Asimov provenance, controls and validation](docs/physics/asimov-provenance.md).
+Select **Asimov 1 — Physical** to use six user-facing experiment/sensitivity workspaces. **Actuator Lab (experimental)** is the default fixed-pelvis laboratory. **Whole-Body Dynamics (experimental)** is the primary free-base workspace for agent-generated coordinated motion. Standing Trial, Sensor Standing, Delayed Sensor Standing and Ankle Loss Standing provide progressively more specific balance experiments.
+
+The source model has **23 hinges and a fixed neck**. Python and opt-in WebMCP send bounded joint commands; full source STL visuals follow measured body poses. Added ideal/experimental actuator behavior and controller gains remain simulator estimates; balance recovery, grasping and hardware calibration are not supplied. See [Asimov provenance, controls and validation](docs/physics/asimov-provenance.md).
+
+The original **Mounted Joint Lab**, **Free-base Dynamics** and **Passive Gravity Drop** are no longer normal selectable tasks. Their models and validation paths remain registered internally as source/reference fixtures: mounted isolates joint dynamics, free-base anchors the source-derived floating-base baseline, and passive drop remains a gravity/contact negative control. Experimental actuator models continue to be generated from hash-verified reference model bytes rather than bypassing that provenance layer.
 
 ### Asimov actuator, standing and agent-generated whole-body experiments
 
-Asimov's original three reference scenes remain available. **Actuator Lab (experimental)** and **Actuator Free-base (experimental)** add continuous motor caps, estimated speed/friction/delay behavior, and a separate synthetic sensor view. **Standing Trial (experimental)** tests a bounded torso-feedback controller with an observation-derived support assessment.
+**Actuator Lab (experimental)** and **Whole-Body Dynamics (experimental)** add continuous motor caps, estimated speed/friction/delay behavior, and a separate synthetic sensor view. **Standing Trial (experimental)** tests a bounded torso-feedback controller with an observation-derived support assessment.
 
-Opt-in WebMCP additionally exposes `run_whole_body_motion` in free-base Asimov scenes. An agent can generate bounded multi-joint keyframes for stepping/walking attempts, turning, squatting, reaching, gestures or other coordinated motion. The trajectory is executed through the same joint actuators and MuJoCo contacts; the tool never writes root pose/velocity or applies a hidden external force. Results report measured displacement, support transitions, tilt and fall-like conditions so the agent can revise its next trajectory. An optional bounded ground-truth ankle-target stabilizer is explicitly simulator-only. This capability is **not** a trained walking policy, a validated stable gait, hardware calibration, or a completed ankle transmission model. See [WebMCP programming and whole-body motion](docs/physics/ASIMOV_WEBMCP_PROGRAMMING.md) and [scope, source reconciliation and validation](docs/physics/asimov-actuator-fidelity.md).
+Opt-in WebMCP additionally exposes `run_whole_body_motion` in actuated free-base Asimov scenes. An agent can generate bounded multi-joint keyframes for stepping/walking attempts, turning, squatting, reaching, gestures or other coordinated motion. The trajectory is executed through the same joint actuators and MuJoCo contacts; the tool never writes root pose/velocity or applies a hidden external force. Results report measured displacement, support transitions, tilt and fall-like conditions so the agent can revise its next trajectory. An optional bounded ground-truth ankle-target stabilizer is explicitly simulator-only. This capability is **not** a trained walking policy, a validated stable gait, hardware calibration, or a completed ankle transmission model. See [WebMCP programming and whole-body motion](docs/physics/ASIMOV_WEBMCP_PROGRAMMING.md) and [scope, source reconciliation and validation](docs/physics/asimov-actuator-fidelity.md).

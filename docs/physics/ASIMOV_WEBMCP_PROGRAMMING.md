@@ -4,15 +4,18 @@ Simulation only. This changes only `jivishov/RoboBuddy_IDE_v020`. No physical ro
 
 ## Workspaces
 
-Select **Asimov 1 — Physical**. The original six workspaces remain. Three additive workspaces use the unchanged free-base MuJoCo model:
+Select **Asimov 1 — Physical**. The normal task menu exposes six user-facing workspaces:
 
-| Workspace ID | Balance observations | Additional assumption |
+| Workspace ID | User-facing purpose | Important qualification |
 |---|---|---|
-| `asimov-sensor-standing` | Synthetic body-frame gyro and normalized projected gravity; 10 ms feedback delay | Independent source-equivalent ankle axes |
-| `asimov-sensor-standing-delay` | Same sensors, 25 ms feedback delay | Not a command-transport-delay test |
-| `asimov-sensor-standing-ankle-stress` | Same 10 ms sensors | Hypothetical ankle losses, 70% source joint torque caps and motoring taper |
+| `asimov-actuator-mounted` | Fixed-base actuator/joint laboratory | Not standing evidence |
+| `asimov-actuator-freebase` | **Whole-Body Dynamics**: primary free-base workspace for agent-generated coordinated motion | Not a trained or validated gait policy |
+| `asimov-standing` | Ground-truth torso-feedback flat-floor standing trial | Repository-designed controller |
+| `asimov-sensor-standing` | Sensor-driven standing | Synthetic body-frame gyro/projected gravity; 10 ms feedback delay |
+| `asimov-sensor-standing-delay` | Delayed sensor standing sensitivity | Same sensors with 25 ms feedback delay |
+| `asimov-sensor-standing-ankle-stress` | Ankle-loss standing sensitivity | Hypothetical ankle losses and reduced source-joint torque envelope |
 
-Every new workspace has an executable async Python starter requesting 12 simulation seconds. The balance regulator runs at 200 Hz; physics and standing assessment at 400 Hz. A 30 ms exponential smoothing time constant is explicit. The evaluator retains the original 1 s settling plus 10 s continuous standing criteria. Later falls invalidate earlier passes. Reset is explicit, not a recovery.
+The original `asimov-mounted`, `asimov-freebase` and `asimov-drop` scenes remain registered **internally** as reference/validation fixtures. They are intentionally absent from the normal task selector. They preserve the hash-verified source/reference lineage used to derive or validate the experimental actuator models; the passive drop remains a gravity/contact negative control.
 
 The body sensor profile is `asimov-body-sensors-v2`; the regulator is `asimov-sensor-stance-v2`. Gyro and projected gravity share the `pelvis_link` frame. Sensor histories advance only on simulation-time sample ticks. Cold-start history is unavailable; stale/invalid observations after a bounded warmup latch a sensor fault. There is no ground-truth attitude fallback in this regulator. The inner joint PD loop still uses ideal local encoder feedback; this is not a fully calibrated hardware control stack. Projected gravity is synthetic attitude-derived data, not a raw accelerometer or a full IMU estimator.
 
@@ -26,7 +29,7 @@ Start with `inspect_capability`. It reports all 23 named joint ranges, the selec
 |---|---|
 | `inspect_capability` | Read model/joint/programming metadata; starts nothing |
 | `read_state` | Ground-truth simulated state and independent standing assessment |
-| `read_sensors` | Synthetic measurements only; unsupported in original reference scenes |
+| `read_sensors` | Synthetic measurements in actuator/sensor experiments |
 | `set_joint_targets` | Bounded targets in radians; releases a standing controller |
 | `engage_stand` | Engage the controller declared by the selected standing workspace; no time advance |
 | `set_standing_targets` | Bounded waist/arm targets while keeping an already active nonfailed standing controller |
@@ -37,7 +40,7 @@ Start with `inspect_capability`. It reports all 23 named joint ranges, the selec
 | `stop` | Bounded measured-position hold; not a velocity reset |
 | `reset` | New initial condition and trial; not task success |
 
-Waist/arm `set_standing_targets` remains deliberately separate from whole-body programming. The 12 leg joints cannot be overridden while preserving the existing standing regulator through that command. `run_whole_body_motion` instead executes a complete, bounded full-body target trajectory against an actuated free-base MuJoCo plant. It does not retain the existing standing trial. Motion and failure arise from joint actuation, gravity and contact. **Passive Gravity Drop remains observation-only** and rejects whole-body motion before issuing any target.
+Waist/arm `set_standing_targets` remains deliberately separate from whole-body programming. The 12 leg joints cannot be overridden while preserving the existing standing regulator through that command. `run_whole_body_motion` instead executes a complete, bounded full-body target trajectory against an actuated free-base MuJoCo plant. It does not retain the existing standing trial. Motion and failure arise from joint actuation, gravity and contact. The internal Passive Gravity Drop fixture remains observation-only and rejects whole-body motion before issuing any target.
 
 ## Agent-generated whole-body movement
 
@@ -54,7 +57,7 @@ The supervisor is intentionally limited to ankle target offsets and remains insi
 
 The result reports measured root displacement, yaw change, maximum tilt, minimum pelvis height, observed support state at each keyframe, support-state transitions and any final-command target-rate limiting events. A returned `executionStatus: "completed"` means all requested keyframes executed. It does **not** mean a requested step, walk or turn succeeded. Agents should inspect those measured outcomes and revise their next trajectory if needed.
 
-Example exploratory full-body sequence in a free-base actuator scene:
+Example exploratory full-body sequence in **Whole-Body Dynamics** (`asimov-actuator-freebase`):
 
 ```json
 {
@@ -112,7 +115,9 @@ Select `asimov-sensor-standing`, reset explicitly, then send:
 
 A completed sequence means the commands/time segments executed—not that standing passed, a pose was achieved, or a physical robot could do the same. This two-second example is shorter than the 11 seconds needed for the standing gate. Continue with bounded advances and inspect the assessment. Use duration-only segments to leave all targets/controllers unchanged.
 
-## Example: measured-position wait in the mounted lab
+## Example: measured-position wait in Actuator Lab
+
+Select `asimov-actuator-mounted` and send:
 
 ```json
 {"schema_version":"robobuddy.asimov.physical.v1","command":"set_joint_targets","targets_rad":{"left_elbow_joint":1.0},"max_steps":4000}
@@ -134,9 +139,9 @@ The wait does not send a target. It uses ground-truth joint position, checked ev
 
 ## Bounds and cancellation
 
-Inputs and the complete sequence or whole-body trajectory are validated before any mutation, including joint ranges and timestep alignment. Whole-body programs reject keyframe target-rate requests that exceed the source joint velocity limits; the interpolated final target stream is independently rate-limited as well. Durations must be multiples of 5 ms in original reference scenes or 2.5 ms in actuator/sensor scenes. A single call has a fixed 120 s wall deadline, never extended by progress. Physics advancement checks cancellation, access, workspace and session ownership between at-most-50-ms simulation batches. An already submitted batch cannot be undone. The normal UI Stop remains available; a second concurrent robot-control call is rejected.
+Inputs and the complete sequence or whole-body trajectory are validated before any mutation, including joint ranges and timestep alignment. Whole-body programs reject keyframe target-rate requests that exceed the source joint velocity limits; the interpolated final target stream is independently rate-limited as well. Durations use the selected scene timestep: the internal reference fixtures use 5 ms integration while actuator/sensor scenes use 2.5 ms. A single call has a fixed 120 s wall deadline, never extended by progress. Physics advancement checks cancellation, access, workspace and session ownership between at-most-50-ms simulation batches. An already submitted batch cannot be undone. The normal UI Stop remains available; a second concurrent robot-control call is rejected.
 
-No command sets root pose/velocity, applies external force, changes model mass/contact properties, silently resets after failure, creates synthetic foot contact, or connects to hardware. Agent-generated stepping/walking is expressed only as bounded joint trajectories; whether locomotion occurs is decided by the physical plant. Passive Gravity Drop is excluded rather than silently converted into an actuated scene. Model sensitivity variations are explicit test-runner cases or separately selected immutable workspaces, not hidden changes from an agent.
+No command sets root pose/velocity, applies external force, changes model mass/contact properties, silently resets after failure, creates synthetic foot contact, or connects to hardware. Agent-generated stepping/walking is expressed only as bounded joint trajectories; whether locomotion occurs is decided by the physical plant. The internal Passive Gravity Drop negative control is excluded rather than silently converted into an actuated scene. Model sensitivity variations are explicit test-runner cases or separately selected immutable user workspaces, not hidden changes from an agent.
 
 ## Verification and evidence
 
@@ -153,8 +158,10 @@ npx playwright test tests/asimov-physical-browser.spec.mjs tests/asimov-whole-bo
 
 The native test independently reimplements the sensor/controller and compares with actual WASM traces. Additional cases vary seed, feedback delay, ankle losses, mass, COM, floor/foot friction and contact softness. Uniform mass/inertia scaling to 35 kg is explicitly a hypothetical test, never a correction to the production model. Combined cases and negatives are included. Reports preserve failures rather than tuning every case to pass. CI artifacts are retained 90 days; a compact report should accompany each accepted release.
 
+The browser/catalog gate additionally verifies that only the six user-facing Asimov tasks appear in the normal selector while `asimov-mounted`, `asimov-freebase` and `asimov-drop` remain internally registered for provenance/regression validation.
+
 ## Evidence-dependent work deliberately not invented
 
 Actual paired ankle ratios, motor-space limits and consistent reflected inertia still require compatible numeric evidence. So do fitted torque–speed/braking curves, breakaway friction, electrical/thermal peak limits, true encoder/CAN timing and hardware validation. The independent-axis ankle stress profile tests dependence on assumptions but does not solve paired-motor feasibility.
 
-The new whole-body WebMCP surface enables an agent to generate and iteratively test physical full-body trajectories, including stepping/walking attempts. It does not supply or claim a trained gait policy, a validated stable walking controller, hardware-feasible locomotion, grasping or general recovery. Those stronger claims remain evidence-dependent.
+The whole-body WebMCP surface enables an agent to generate and iteratively test physical full-body trajectories, including stepping/walking attempts. It does not supply or claim a trained gait policy, a validated stable walking controller, hardware-feasible locomotion, grasping or general recovery. Those stronger claims remain evidence-dependent.
