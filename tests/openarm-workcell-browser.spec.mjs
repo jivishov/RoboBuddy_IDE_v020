@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises';
 
 test('OpenArm shared geometry and registered WebMCP equipment/program tools use real browser physics', async ({page}, testInfo) => {
   test.setTimeout(240000); const errors=[]; page.on('pageerror',e=>errors.push(String(e)));
-  await page.goto('/tests/fixtures/openarm.html'); await page.waitForFunction(()=>window.ready,{timeout:60000});
+  await page.goto('/tests/fixtures/openarm.html'); await page.waitForFunction(()=>window.ready, null, {timeout:60000});
   const alignment = await page.evaluate(() => {
     sim.renderFrame(); const state=sim.getState().observation;
     return [...sim.presentation.bodyGroups].filter(([id])=>id!=='world').map(([id,group])=>({id,actual:group.position.toArray(),expected:[state.bodies[id].positionM[0]*1000,state.bodies[id].positionM[2]*1000,-state.bodies[id].positionM[1]*1000]}));

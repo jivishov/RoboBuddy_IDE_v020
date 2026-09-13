@@ -91,7 +91,7 @@ const OPENARM_PHYSICAL_SCENARIO = Object.freeze({
   schemaVersion: 1,
   simulationMode: 'physical_mujoco',
   workspaceRevision: 'openarm-v2-physical-bimanual-stack-v3',
-  executionBudget: Object.freeze({ pythonWallTimeMs: 180000 }),
+  executionBudget: Object.freeze({ pythonWallTimeMs: 120000 }),
   id: 'openarm-04-filtration-workcell',
   title: 'Bimanual Heater and Ring-Stand Stack',
   brief: 'Program both OpenArm V2 arms in one MuJoCo world. The left gripper must physically grasp, lift, carry, support, release and retreat from an empty flask on an unpowered hotplate; only then may the right gripper do the same with an empty beaker on the ring-stand gauze. Task success is based on observed contact, free-body motion and stable support, not legacy attachment state.',

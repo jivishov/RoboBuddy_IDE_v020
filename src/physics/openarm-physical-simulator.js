@@ -84,7 +84,12 @@ export class OpenArmPhysicalSimulator {
     const w = Math.max(1, this.canvas.clientWidth || 640), h = Math.max(1, this.canvas.clientHeight || 480);
     this.renderer.setSize(w, h, false); this.camera.aspect = w/h; this.camera.updateProjectionMatrix(); return true;
   }
-  fit() { this.controls.target.set(415, 1050, 0); this.camera.position.set(1590, 1620, 1130); this.camera.updateProjectionMatrix(); this.controls.update(); return true; }
+  fit() {
+    this.controls.target.set(415, 1050, 0);
+    const scale = Math.max(1, 1.18 / this.camera.aspect);
+    this.camera.position.copy(this.controls.target).add(new THREE.Vector3(1175, 570, 1130).multiplyScalar(scale));
+    this.camera.updateProjectionMatrix(); this.controls.update(); return true;
+  }
   setHighContrastScene(value) { this.highContrast = Boolean(value); this.targetMarkers.forEach(m => { m.visible = this.highContrast; }); this.canvas.dataset.highContrastScene = String(this.highContrast); return this.highContrast; }
   isHighContrastSceneEnabled() { return this.highContrast; }
   isReady() { return Boolean(this.ready && !this.disposed && this.session?.robotId && this.lastObservation); }

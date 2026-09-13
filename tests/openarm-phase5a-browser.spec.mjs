@@ -103,7 +103,10 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
 
   await page.screenshot({path:testInfo.outputPath('openarm-workcell.png')});
   await page.locator('#runBtn').click();
-  await expect(page.locator('#statusMessage')).toContainText('Run complete', { timeout: 180_000 });
+  await page.waitForFunction(() => /Run complete|run failed/i.test(document.querySelector('#statusMessage').textContent), null, { timeout: 180_000 });
+  const runStatus = await page.locator('#statusMessage').textContent();
+  if (!runStatus.includes('Run complete')) await writeFile(testInfo.outputPath('python-run-failure.txt'), await page.locator('body').innerText());
+  expect(runStatus).toContain('Run complete');
 
   const completed = await page.evaluate(() => {
     const app = window.__robobuddyCi.app;
