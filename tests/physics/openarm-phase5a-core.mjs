@@ -11,8 +11,8 @@ import { createOpenArmLabEquipmentSchema } from '../../src/webmcp/openarm-lab-eq
 
 assert.equal(OPENARM_V2_SOURCE.revision, 'a8c979629f2591ad035d99d338ce114969e6cddc');
 assert.equal(OPENARM_V2_SOURCE.sourcePath, 'v2/openarm_bimanual.xml');
-assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.id, 'openarm-v2-phase5a-a8c9796-v3');
-assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.modelId, 'robobuddy-openarm-v2-phase5a-v3');
+assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.id, 'openarm-v2-phase5a-a8c9796-v2');
+assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.modelId, 'robobuddy-openarm-v2-phase5a-v2');
 assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.robotId, 'openarm_v2_bimanual');
 assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.physics.timestepSeconds, 0.001);
 assert.equal(OPENARM_V2_PHASE5A_MODEL_PACKAGE.physics.integrator, 'Euler');
@@ -33,11 +33,9 @@ assert.ok(xml.includes('openarm_left_ee_finger_joint_mimic'));
 assert.ok(xml.includes('openarm_right_ee_finger_joint_mimic'));
 assert.equal((xml.match(/<weld\b/g) || []).length, 0, 'task model must contain no weld constraints');
 assert.equal((xml.match(/<freejoint\b/g) || []).length, 2, 'flask and beaker must remain true free bodies');
-assert.equal((xml.match(/size="0.008" class="left_fingertip"/g) || []).length, 2, 'left fingertip surrogate must remain the reviewed 8 mm approximation');
-assert.equal((xml.match(/size="0.008" class="right_fingertip"/g) || []).length, 2, 'right fingertip surrogate must remain the reviewed 8 mm approximation');
-for (const offset of ['-0.0125 0 -0.005 -0.0125 0 -0.075', '-0.0128 0 -0.005 -0.0128 0 -0.075']) {
-  assert.ok(xml.includes(`fromto="${offset}"`), `source-informed fingertip longitudinal offset missing: ${offset}`);
-}
+assert.equal((xml.match(/size="0.008" class="left_fingertip"/g) || []).length, 2, 'left fingertip surrogate must remain the validated 8 mm approximation');
+assert.equal((xml.match(/size="0.008" class="right_fingertip"/g) || []).length, 2, 'right fingertip surrogate must remain the validated 8 mm approximation');
+assert.equal((xml.match(/fromto="0 0 -0.005 0 0 -0.075"/g) || []).length, 4, 'validated fingertip capsule centerlines must remain at the known-good baseline until exact source collision meshes replace them');
 assert.ok(xml.includes('flask_shoulder_geom'), 'source-informed Erlenmeyer shoulder collider must be present');
 assert.ok(xml.includes('size="0.025 0.030" class="vessel"'), '50 mL beaker must use the pinned 50 x 60 mm envelope');
 assert.deepEqual(OPENARM_V2_PHASE5A_SCENE.taskGoal.flask.targetHalfExtentsXYM, [0.017, 0.013]);
@@ -98,7 +96,6 @@ const flaskOuter = { geom1Name: 'flask_grip_geom', geom2Name: 'left_outer_finger
 const flaskSupport = { geom1Name: 'flask_body_geom', geom2Name: 'left_hotplate', distanceM: -0.0001 };
 const beakerSupport = { geom1Name: 'beaker_grip_geom', geom2Name: 'right_ring_gauze', distanceM: -0.0001 };
 
-// Target inclusion/support contact without a physical grasp/lift/carry cannot pass.
 const evaluator = new OpenArmBimanualStackEvaluator();
 evaluator.observe(obs({
   time: 0,
@@ -110,7 +107,6 @@ assert.equal(evaluator.snapshot().success, false);
 assert.equal(evaluator.snapshot().flask.releaseSeen, false);
 assert.equal(evaluator.snapshot().beaker.releaseSeen, false);
 
-// Contacts that occur on opposite fingers at different times are not a bilateral grasp.
 const sequentialFingerContact = new OpenArmBimanualStackEvaluator();
 sequentialFingerContact.observe(obs({ time: 0, contacts: [flaskInner] }));
 sequentialFingerContact.observe(obs({ time: 0.01, contacts: [flaskOuter] }));
@@ -119,14 +115,12 @@ assert.equal(sequentialFingerContact.snapshot().flask.outerContactSeen, true);
 assert.equal(sequentialFingerContact.snapshot().flask.graspSeen, false);
 assert.equal(sequentialFingerContact.snapshot().flask.bilateralContactObservationCount, 0);
 
-// Bilateral finger contact does not count as a valid grasp if the vessel is simultaneously in the palm/end-effector proxy.
 const palmEmbedded = new OpenArmBimanualStackEvaluator();
 palmEmbedded.observe(obs({ time: 0, contacts: [flaskInner, flaskOuter, { geom1Name: 'flask_grip_geom', geom2Name: 'left_ee_proxy', distanceM: -0.001 }] }));
 assert.equal(palmEmbedded.snapshot().flask.forbiddenRobotContactSeen, true);
 assert.equal(palmEmbedded.snapshot().flask.graspClearanceValid, false);
 assert.equal(palmEmbedded.snapshot().flask.graspSeen, false);
 
-// Excessive signed contact penetration is rejected even when both fingertips contact the vessel.
 const deeplyEmbedded = new OpenArmBimanualStackEvaluator();
 deeplyEmbedded.observe(obs({ time: 0, contacts: [
   { ...flaskInner, distanceM: -0.005 },
@@ -136,7 +130,6 @@ assert.equal(deeplyEmbedded.snapshot().flask.maxGripPenetrationM, 0.005);
 assert.equal(deeplyEmbedded.snapshot().flask.graspClearanceValid, false);
 assert.equal(deeplyEmbedded.snapshot().flask.graspSeen, false);
 
-// A vessel dropped before reaching its support may later land in the target, but that is not a controlled placement/release.
 const droppedIntoTarget = new OpenArmBimanualStackEvaluator();
 droppedIntoTarget.observe(obs({ time: 0, contacts: [flaskInner, flaskOuter] }));
 droppedIntoTarget.observe(obs({ time: 0.10, flask: [0.509, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
@@ -147,7 +140,6 @@ droppedIntoTarget.observe(obs({ time: 0.40, flask: [0.608, 0.1535, 1.092], conta
 assert.equal(droppedIntoTarget.snapshot().flask.supportWhileHeldSeen, false);
 assert.equal(droppedIntoTarget.snapshot().flask.releaseSeen, false);
 
-// Retreat evidence is actual post-settle EE displacement; normal EE/object geometry separation cannot satisfy it by itself.
 const noFakeRetreat = new OpenArmBimanualStackEvaluator();
 noFakeRetreat.observe(obs({ time: 0, contacts: [flaskInner, flaskOuter] }));
 noFakeRetreat.observe(obs({ time: 0.10, flask: [0.509, 0.1535, 1.120], contacts: [flaskInner, flaskOuter] }));
@@ -163,9 +155,6 @@ assert.equal(noFakeRetreat.snapshot().flask.retreated, false);
 noFakeRetreat.observe(obs({ time: 0.60, flask: [0.608, 0.1535, 1.092], contacts: [flaskSupport], leftEe: [0.668, 0.1535, 1.155] }));
 assert.equal(noFakeRetreat.snapshot().flask.retreated, true);
 
-// Declared observation cadence. Native 1 ms evidence measures the beaker's intended gauze
-// support contact while it is still bilaterally pinched at only 3-4 ms, so the browser
-// cadence must be short enough to land inside any window of two or more physics steps.
 const OPENARM_MEASURED_MIN_CAUSAL_WINDOW_STEPS = 3;
 const simulatorSource = fs.readFileSync(new URL('../../src/physics/openarm-physical-simulator.js', import.meta.url), 'utf8');
 const declaredCadence = Number(simulatorSource.match(/const OPENARM_OBSERVATION_BATCH_STEPS = (\d+);/)?.[1]);
@@ -177,7 +166,6 @@ assert.ok(
 assert.ok(simulatorSource.includes('observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS'), 'the declared cadence must be the one the physical session actually uses');
 assert.ok(simulatorSource.includes('observationPeriodSeconds:'), 'the presentation audit must expose the observation period actually in force');
 assert.ok(simulatorSource.includes("plane = 'physical-tabletop'"), 'the presentation grid must describe the physical tabletop rather than a detached world floor');
-// The evaluator consumes every authoritative sample; the renderer only ever shows the latest.
 assert.ok(simulatorSource.includes('this.presentationDirty = true;'), 'observations must mark presentation stale rather than drive the scene graph per sample');
 assert.ok(/renderFrame\(\) \{[\s\S]*?this\.#applyObservation\(this\.lastObservation\);/.test(simulatorSource), 'the render loop must pull the latest observed state instead of physics pushing it');
 assert.ok(!/#consumeObservation\(observation\) \{[\s\S]*?this\.#applyObservation\(observation\);/.test(simulatorSource), 'per-sample scene-graph updates must not be reintroduced');
