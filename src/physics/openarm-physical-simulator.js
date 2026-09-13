@@ -48,6 +48,7 @@ export class OpenArmPhysicalSimulator {
       const marker = new THREE.Mesh(new THREE.PlaneGeometry(w * 1000, d * 1000), new THREE.MeshBasicMaterial({ color: 0x28a86b, transparent: true, opacity: .5, depthWrite: false, side: THREE.DoubleSide }));
       marker.rotation.x = -Math.PI / 2; marker.position.copy(toThreePosition([x, y, z])); marker.userData.presentationOnly = true; this.scene.add(marker); this.targetMarkers.push(marker);
     }
+    this.setHighContrastScene(this.highContrast);
     this.statusPanel = document.createElement('div'); this.statusPanel.className = 'openarm-workcell-status';
     Object.assign(this.statusPanel.style, { position: 'absolute', right: '8px', top: '48px', maxWidth: '320px', padding: '6px 9px', background: '#ffffffeb', color: '#23313a', font: '12px/1.4 sans-serif', borderRadius: '5px', pointerEvents: 'none' });
     canvas.parentElement?.append(this.statusPanel); this.#updateStatus(); this.resize(); this.fit();
@@ -90,7 +91,17 @@ export class OpenArmPhysicalSimulator {
     this.camera.position.copy(this.controls.target).add(new THREE.Vector3(1175, 570, 1130).multiplyScalar(scale));
     this.camera.updateProjectionMatrix(); this.controls.update(); return true;
   }
-  setHighContrastScene(value) { this.highContrast = Boolean(value); this.targetMarkers.forEach(m => { m.visible = this.highContrast; }); this.canvas.dataset.highContrastScene = String(this.highContrast); return this.highContrast; }
+  setHighContrastScene(value) {
+    // Presentation only: report the real visible markers, never advance/reset the plant.
+    this.highContrast = Boolean(value);
+    for (const marker of this.targetMarkers) marker.visible = this.highContrast;
+    Object.assign(this.canvas.dataset, {
+      highContrastScene: String(this.highContrast),
+      highContrastPerimeterCount: String(this.targetMarkers.filter(marker => marker.visible).length),
+      presentationGroundColor: '#687378',
+    });
+    return this.highContrast;
+  }
   isHighContrastSceneEnabled() { return this.highContrast; }
   isReady() { return Boolean(this.ready && !this.disposed && this.session?.robotId && this.lastObservation); }
   getPhysicalSession() { return this.session; }
