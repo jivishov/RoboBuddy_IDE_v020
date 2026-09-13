@@ -19,6 +19,7 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
     cursorDisabled: await page.locator('#cursorBtn').isDisabled(),
     visualSource: await page.locator('#simCanvas').getAttribute('data-openarm-visual-source'),
     legacyBaseYawRendered: await page.locator('#simCanvas').getAttribute('data-openarm-legacy-base-yaw-rendered'),
+    gridPlane: await page.locator('#simCanvas').getAttribute('data-presentation-grid-plane'),
     canvasBackend: await page.locator('#simCanvas').getAttribute('data-simulator-backend'),
     canvasAuthority: await page.locator('#simCanvas').getAttribute('data-simulation-authority'),
     runtime: await page.evaluate(() => {
@@ -46,6 +47,7 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   await expect(page.locator('#cursorBtn')).toBeDisabled();
   await expect(page.locator('#simCanvas')).toHaveAttribute('data-openarm-visual-source', 'canonical-v2-arm-mesh-source-aligned');
   await expect(page.locator('#simCanvas')).toHaveAttribute('data-openarm-legacy-base-yaw-rendered', 'false');
+  await expect(page.locator('#simCanvas')).toHaveAttribute('data-presentation-grid-plane', 'physical-tabletop');
 
   const initial = await page.evaluate(() => {
     const app = window.__robobuddyCi.app;
@@ -69,15 +71,20 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   await writeFile(initialPath, JSON.stringify({ ...initial, pageErrors }, null, 2));
   await testInfo.attach('openarm-initial-state.json', { path: initialPath, contentType: 'application/json' });
   expect(initial.backend).toBe('OpenArmPhysicalSimulator');
-  expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v2' });
-  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v2', asset: 'models/openarm_v2/manipulation.xml' });
-  expect(initial.model.sha256).toBe('960ecf32c0aa7c8b2b016c6f28a7a8afe8147ce6cb1cdfd9b91f550cd4fc27dc');
+  expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v3' });
+  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v3', asset: 'models/openarm_v2/manipulation.xml' });
+  expect(initial.model.sha256).toBe('916468a20a335f48e2dc91626719b6d12ed96d2a3a6918c8791f9bf04275c1f4');
+  expect(initial.model.compiledSha256).toBe(initial.model.sha256);
+  expect(initial.model.labEquipmentCount).toBe(0);
   expect(initial.presentation).toMatchObject({
     physicalAuthority: 'MuJoCo PhysicsSession only',
     jointPresentationSource: 'observed MuJoCo joint positions',
     mountTranslationMm: [185, 790, 0],
     legacyBaseYawControlled: false,
     legacyBaseYawRendered: false,
+    workSurfaceGridElevationMm: 1006,
+    workSurfaceGridPhysicalZReferenceM: 1.005,
+    temporaryLabEquipmentCount: 0,
     observationBatchSteps: 2,
     observationPeriodSeconds: 0.002,
   });
@@ -144,7 +151,9 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(completed.evaluation.success).toBe(true);
   expect(completed.evaluation.orderViolation).toBe(false);
   for (const object of [completed.evaluation.flask, completed.evaluation.beaker]) {
-    expect(object).toMatchObject({ graspSeen: true, liftSeen: true, carrySeen: true, supportWhileHeldSeen: true, releaseSeen: true, settled: true, retreated: true, currentGripperContact: false, currentSupportContact: true });
+    expect(object).toMatchObject({ graspSeen: true, graspClearanceValid: true, forbiddenRobotContactSeen: false, liftSeen: true, carrySeen: true, supportWhileHeldSeen: true, releaseSeen: true, settled: true, retreated: true, currentGripperContact: false, currentSupportContact: true });
+    expect(object.maxGripPenetrationM).toBeLessThanOrEqual(object.maxAllowedGripPenetrationM);
+    expect(object.maxGripPenetrationM).toBeLessThanOrEqual(0.004);
     expect(object.bilateralContactObservationCount).toBeGreaterThan(0);
     expect(object.maxHeldHorizontalTravelM).toBeGreaterThanOrEqual(0.06);
     expect(object.settleEvidenceDurationSeconds).toBeGreaterThanOrEqual(0.20);
@@ -178,6 +187,65 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   expect(Math.abs(webmcp.result.observedState.jointsRad.openarm_left_joint1 + 0.2)).toBeGreaterThan(0.01);
   expect(webmcp.after.sessionId).toBe(webmcp.before.sessionId);
   expect(webmcp.after.epoch).toBe(webmcp.before.epoch);
+
+  const program = await page.evaluate(async () => {
+    const app = window.__robobuddyCi.app;
+    const { executeOpenArmPhysicalProgram, WEBMCP_OPENARM_PROGRAM_SCHEMA_VERSION } = await import('/src/webmcp/openarm-physical-program.js');
+    const facade = { app, activeControlId: null, controlSequence: 0, assertActive: () => {}, getRegistrationContext: () => app.getAgentRegistrationContext() };
+    const before = app.sim.getPhysicalAuthorityToken();
+    const result = await executeOpenArmPhysicalProgram(facade, {
+      schema_version: WEBMCP_OPENARM_PROGRAM_SCHEMA_VERSION,
+      segments: [
+        { name: 'bounded_probe_1', targets_rad: { openarm_left_joint1: -0.12 }, duration_seconds: 0.02 },
+        { name: 'bounded_probe_2', targets_rad: { openarm_left_joint1: -0.08 }, duration_seconds: 0.02 },
+      ],
+    }, new AbortController().signal, 1);
+    return { before, after: app.sim.getPhysicalAuthorityToken(), result };
+  });
+  expect(program.result.ok).toBe(true);
+  expect(program.result.segments).toHaveLength(2);
+  expect(program.result.totalSimulationSeconds).toBeCloseTo(0.04, 12);
+  expect(program.after.sessionId).toBe(program.before.sessionId);
+  expect(program.after.epoch).toBe(program.before.epoch);
+
+  const labEquipment = await page.evaluate(async () => {
+    const app = window.__robobuddyCi.app;
+    const { executeOpenArmLabEquipment } = await import('/src/webmcp/openarm-lab-equipment.js');
+    const { OPENARM_LAB_EQUIPMENT_SCHEMA_VERSION } = await import('/src/physics/openarm-lab-equipment.js');
+    const facade = { app, activeControlId: null, controlSequence: 0, assertActive: () => {}, getRegistrationContext: () => app.getAgentRegistrationContext() };
+    const before = app.sim.getPhysicalAuthorityToken();
+    const result = await executeOpenArmLabEquipment(facade, {
+      schema_version: OPENARM_LAB_EQUIPMENT_SCHEMA_VERSION,
+      command: 'replace',
+      items: [
+        { id: 'agent_fixture', shape: 'box', mobility: 'fixed', positionM: [0.67, 0.30, 1.025], sizeM: [0.10, 0.08, 0.04] },
+        { id: 'agent_vial', shape: 'cylinder', mobility: 'free', positionM: [0.48, 0.30, 1.055], sizeM: [0.012, 0.08], massKg: 0.025 },
+      ],
+    }, new AbortController().signal, 1);
+    const state = app.sim.getState();
+    const afterReplace = app.sim.getPhysicalAuthorityToken();
+    const cleared = await executeOpenArmLabEquipment(facade, {
+      schema_version: OPENARM_LAB_EQUIPMENT_SCHEMA_VERSION,
+      command: 'clear',
+    }, new AbortController().signal, 1);
+    return {
+      before,
+      afterReplace,
+      result,
+      observedLabBody: state?.observation?.bodies?.lab_agent_vial || null,
+      model: state?.observation?.model || null,
+      cleared,
+      afterClear: app.sim.getPhysicalAuthorityToken(),
+    };
+  });
+  expect(labEquipment.result.ok).toBe(true);
+  expect(labEquipment.result.scene.items).toHaveLength(2);
+  expect(labEquipment.model.labEquipmentCount).toBe(2);
+  expect(labEquipment.model.compiledSha256).not.toBe(labEquipment.model.sha256);
+  expect(labEquipment.observedLabBody.positionM).toHaveLength(3);
+  expect(labEquipment.afterReplace.sessionId).not.toBe(labEquipment.before.sessionId);
+  expect(labEquipment.cleared.scene.items).toHaveLength(0);
+  expect(labEquipment.afterClear.sessionId).not.toBe(labEquipment.afterReplace.sessionId);
 
   const stale = await page.evaluate(async () => {
     const app = window.__robobuddyCi.app;
