@@ -6,6 +6,7 @@ import { PhysicsSession } from './session.js';
 import { OPENARM_V2_PHASE5A_MODEL_PACKAGE } from './openarm-model-package.js';
 import { OPENARM_V2_PHASE5A_SCENE } from './openarm-scene.js';
 import { OpenArmBimanualStackEvaluator } from './openarm-task-evaluator.js';
+import { normalizeOpenArmLabEquipment, OPENARM_LAB_EQUIPMENT_CATALOG, openArmLabBodyName } from './openarm-lab-equipment.js';
 
 const MAX_WEBMCP_ADVANCE_SECONDS = 2;
 const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
@@ -17,6 +18,7 @@ const STEP_ALIGNMENT_TOLERANCE_SECONDS = 1e-9;
 // this resolution costs one cross-thread request per advance rather than one per sample.
 const OPENARM_OBSERVATION_BATCH_STEPS = 2;
 const PRESENTATION_GROUND_COLOR = 0x687378;
+const WORK_SURFACE_GRID_Y_MM = 1006;
 const CANONICAL_OPENARM_MOUNT_TRANSLATION_MM = Object.freeze([185, 790, 0]);
 const NONPHYSICAL_CANONICAL_PARTS = new Set([
   'turntable_pedestal',
@@ -76,6 +78,13 @@ function canonicalStateFromObservation(observation) {
   }
   return state;
 }
+function disposeObject3D(root) {
+  root?.traverse?.((node) => {
+    node.geometry?.dispose?.();
+    if (Array.isArray(node.material)) node.material.forEach((material) => material?.dispose?.());
+    else node.material?.dispose?.();
+  });
+}
 
 export class OpenArmPhysicalSimulator {
   constructor(canvas) {
@@ -83,13 +92,13 @@ export class OpenArmPhysicalSimulator {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0xb9c1c4);
     this.camera = new THREE.PerspectiveCamera(42, 1, 1, 6000);
-    this.camera.position.set(1900, 1500, 0);
+    this.camera.position.set(1500, 1360, 0);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: false });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
     this.controls = new OrbitControls(this.camera, this.canvas);
     this.controls.enableDamping = true;
-    this.controls.target.set(420, 1160, 0);
+    this.controls.target.set(450, 1130, 0);
 
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x334155, 1.35));
     const key = new THREE.DirectionalLight(0xffffff, 2.0);
@@ -99,19 +108,30 @@ export class OpenArmPhysicalSimulator {
     const fill = new THREE.DirectionalLight(0x93c5fd, 0.4);
     fill.position.set(-500, 900, -900);
     this.scene.add(fill);
-    const grid = new THREE.GridHelper(1800, 36, 0x334155, 0x4b5563);
-    grid.userData.presentationOnly = true;
-    this.scene.add(grid);
+    // The old world-floor grid sat one metre below the physical table and visually split
+    // the scene into two disconnected layers. The grid is presentation-only and now marks
+    // the actual work surface, 1 mm above the table collider to avoid z-fighting.
+    this.workSurfaceGrid = new THREE.GridHelper(1000, 40, 0x334155, 0x4b5563);
+    this.workSurfaceGrid.position.set(410, WORK_SURFACE_GRID_Y_MM, 0);
+    this.workSurfaceGrid.userData.presentationOnly = true;
+    this.workSurfaceGrid.userData.plane = 'physical-tabletop';
+    this.scene.add(this.workSurfaceGrid);
 
     this.workcellRoot = new THREE.Group();
     this.workcellRoot.name = 'openarm-v2-physical-workcell-presentation';
     this.scene.add(this.workcellRoot);
+    this.labEquipmentRoot = new THREE.Group();
+    this.labEquipmentRoot.name = 'openarm-v2-temporary-lab-equipment-presentation';
+    this.workcellRoot.add(this.labEquipmentRoot);
     this.robotRoot = new THREE.Group();
     this.robotRoot.name = 'openarm-v2-source-aligned-canonical-arm-presentation';
     this.scene.add(this.robotRoot);
     this.canonicalRig = null;
     this.hiddenCanonicalParts = [];
     this.objectMeshes = new Map();
+    this.labEquipmentMeshes = new Map();
+    this.labEquipment = Object.freeze([]);
+    this.labEquipmentRevision = 0;
     this.targetMarkers = [];
     this.session = null;
     this.unsubscribeSession = null;
@@ -142,6 +162,7 @@ export class OpenArmPhysicalSimulator {
     this.canvas.dataset.physicalSceneId = OPENARM_V2_PHASE5A_SCENE.id;
     this.canvas.dataset.modelPackageId = OPENARM_V2_PHASE5A_SCENE.modelPackage;
     this.canvas.dataset.presentationGroundColor = '#687378';
+    this.canvas.dataset.presentationGridPlane = 'physical-tabletop';
     this.canvas.dataset.openarmVisualSource = 'canonical-v2-arm-mesh-source-aligned';
     this.canvas.dataset.openarmLegacyBaseYawRendered = 'false';
     this.fit();
@@ -185,8 +206,8 @@ export class OpenArmPhysicalSimulator {
     return true;
   }
   fit() {
-    this.controls.target.set(420, 1160, 0);
-    this.camera.position.set(1900, 1500, 0);
+    this.controls.target.set(450, 1130, 0);
+    this.camera.position.set(1500, 1360, 0);
     this.camera.near = 1;
     this.camera.far = 6000;
     this.camera.updateProjectionMatrix();
@@ -224,6 +245,9 @@ export class OpenArmPhysicalSimulator {
       hiddenNonphysicalParts: [...this.hiddenCanonicalParts],
       legacyBaseYawControlled: false,
       legacyBaseYawRendered: false,
+      workSurfaceGridElevationMm: WORK_SURFACE_GRID_Y_MM,
+      workSurfaceGridPhysicalZReferenceM: 1.005,
+      temporaryLabEquipmentCount: this.labEquipment.length,
       observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS,
       observationPeriodSeconds: OPENARM_OBSERVATION_BATCH_STEPS * Number(this.lastObservation?.engine?.timestepSeconds || 0.001),
     });
@@ -250,9 +274,15 @@ export class OpenArmPhysicalSimulator {
     return {
       contact_count: Number(observation.contactCount || 0),
       flask_grasp_seen: evaluation.flask.graspSeen,
+      flask_grasp_clearance_valid: evaluation.flask.graspClearanceValid,
+      flask_max_grip_penetration_m: evaluation.flask.maxGripPenetrationM,
+      flask_forbidden_robot_contact: evaluation.flask.forbiddenRobotContactSeen,
       flask_support_while_held_seen: evaluation.flask.supportWhileHeldSeen,
       flask_support_contact: evaluation.flask.currentSupportContact,
       beaker_grasp_seen: evaluation.beaker.graspSeen,
+      beaker_grasp_clearance_valid: evaluation.beaker.graspClearanceValid,
+      beaker_max_grip_penetration_m: evaluation.beaker.maxGripPenetrationM,
+      beaker_forbidden_robot_contact: evaluation.beaker.forbiddenRobotContactSeen,
       beaker_support_while_held_seen: evaluation.beaker.supportWhileHeldSeen,
       beaker_support_contact: evaluation.beaker.currentSupportContact,
       order_violation: evaluation.orderViolation,
@@ -260,7 +290,32 @@ export class OpenArmPhysicalSimulator {
     };
   }
   getState() {
-    return this.lastObservation ? { observation: structuredClone(this.lastObservation), evaluation: this.getTaskEvaluation(), authority: this.getPhysicalAuthorityToken() } : null;
+    return this.lastObservation ? { observation: structuredClone(this.lastObservation), evaluation: this.getTaskEvaluation(), authority: this.getPhysicalAuthorityToken(), labEquipment: this.getLabEquipmentState() } : null;
+  }
+  getLabEquipmentState() {
+    return Object.freeze({
+      schemaVersion: OPENARM_LAB_EQUIPMENT_CATALOG.schemaVersion,
+      revision: this.labEquipmentRevision,
+      items: structuredClone(this.labEquipment),
+      catalog: structuredClone(OPENARM_LAB_EQUIPMENT_CATALOG),
+      compiledModelSha256: this.lastObservation?.model?.compiledSha256 || null,
+    });
+  }
+  async configureLabEquipment(items = []) {
+    this.#assertNotDisposed();
+    const normalized = normalizeOpenArmLabEquipment(items);
+    this.ready = false;
+    this.labEquipment = normalized;
+    this.labEquipmentRevision += 1;
+    this.#rebuildLabEquipmentPresentation();
+    await this.#disposeSession();
+    this.evaluator = new OpenArmBimanualStackEvaluator();
+    await this.#createSession();
+    this.ready = true;
+    this.canvas.dataset.openarmLabEquipmentCount = String(this.labEquipment.length);
+    this.canvas.dataset.openarmLabEquipmentRevision = String(this.labEquipmentRevision);
+    this.presentationDirty = true;
+    return this.getLabEquipmentState();
   }
   async applyAction() {
     throw new Error('Legacy OpenArm .pos/source-plant replay is disabled in the physical workspace. Use robobuddy.sim.v1 radians or the bounded OpenArm physical WebMCP schema.');
@@ -308,6 +363,7 @@ export class OpenArmPhysicalSimulator {
       this.canonicalRig.dispose();
       this.canonicalRig = null;
     }
+    disposeObject3D(this.labEquipmentRoot);
     this.controls?.dispose?.();
     this.renderer?.dispose?.();
   }
@@ -331,13 +387,18 @@ export class OpenArmPhysicalSimulator {
     return rig;
   }
   async #createSession() {
+    const workerUrl = new URL('./openarm-mujoco-worker.js', import.meta.url);
+    if (this.labEquipment.length) workerUrl.searchParams.set('lab', JSON.stringify(this.labEquipment));
     const session = new PhysicsSession(
-      new BrowserMuJoCoBackend({ workerUrl: new URL('./openarm-mujoco-worker.js', import.meta.url) }),
+      new BrowserMuJoCoBackend({ workerUrl }),
       { sessionId: `ide-openarm-v2-${++this.sessionSequence}`, observationBatchSteps: OPENARM_OBSERVATION_BATCH_STEPS },
     );
     this.session = session;
     this.unsubscribeSession = session.subscribe(({ observation }) => this.#consumeObservation(observation));
-    await session.loadScene(structuredClone(OPENARM_V2_PHASE5A_SCENE));
+    const scene = structuredClone(OPENARM_V2_PHASE5A_SCENE);
+    scene.labEquipment = structuredClone(this.labEquipment);
+    if (this.labEquipment.length) scene.revision = `${OPENARM_V2_PHASE5A_SCENE.revision}-lab-${this.labEquipmentRevision}`;
+    await session.loadScene(scene);
   }
   async #disposeSession() {
     this.unsubscribeSession?.();
@@ -372,6 +433,12 @@ export class OpenArmPhysicalSimulator {
     }
     for (const [objectId, mesh] of this.objectMeshes) {
       const body = observation.bodies?.[objectId];
+      if (!body?.positionM) continue;
+      mesh.position.copy(toThreePosition(body.positionM));
+      if (body.quaternionWxyz) mesh.quaternion.copy(toThreeQuaternion(body.quaternionWxyz));
+    }
+    for (const [bodyName, mesh] of this.labEquipmentMeshes) {
+      const body = observation.bodies?.[bodyName];
       if (!body?.positionM) continue;
       mesh.position.copy(toThreePosition(body.positionM));
       if (body.quaternionWxyz) mesh.quaternion.copy(toThreeQuaternion(body.quaternionWxyz));
@@ -413,7 +480,26 @@ export class OpenArmPhysicalSimulator {
     flaskGroup.add(flaskBody, flaskShoulder, flaskNeck); this.objectMeshes.set('flask', flaskGroup); this.workcellRoot.add(flaskGroup);
     const beakerMaterial = new THREE.MeshStandardMaterial({ color: 0x8dc8e3, transparent: true, opacity: 0.76, roughness: 0.30 });
     const beaker = cylinder(0.025, 0.060, beakerMaterial); this.objectMeshes.set('beaker', beaker); this.workcellRoot.add(beaker);
+    this.#rebuildLabEquipmentPresentation();
     this.setHighContrastScene(this.highContrast);
+  }
+  #rebuildLabEquipmentPresentation() {
+    if (!this.labEquipmentRoot) return;
+    disposeObject3D(this.labEquipmentRoot);
+    this.labEquipmentRoot.clear();
+    this.labEquipmentMeshes.clear();
+    for (const item of this.labEquipment) {
+      const material = new THREE.MeshStandardMaterial({ color: item.mobility === 'free' ? 0x7fa8b8 : 0x667a82, roughness: 0.60, metalness: item.mobility === 'free' ? 0.02 : 0.12 });
+      const mesh = item.shape === 'box'
+        ? box(item.sizeM[0], item.sizeM[2], item.sizeM[1], material)
+        : cylinder(item.sizeM[0], item.sizeM[1], material);
+      mesh.name = `visual-lab-${item.id}`;
+      mesh.position.copy(toThreePosition(item.positionM));
+      mesh.userData.physicalLabEquipment = true;
+      mesh.userData.mobility = item.mobility;
+      this.labEquipmentRoot.add(mesh);
+      if (item.mobility === 'free') this.labEquipmentMeshes.set(openArmLabBodyName(item.id), mesh);
+    }
   }
   #assertReady() { this.#assertNotDisposed(); if (!this.isReady()) throw new Error('OpenArm physical session is not ready'); }
   #assertNotDisposed() { if (this.disposed) throw new Error('OpenArm physical simulator is disposed'); }
