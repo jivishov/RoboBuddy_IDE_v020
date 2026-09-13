@@ -2,42 +2,77 @@ name: OpenArm refinement verification
 on:
   push:
     branches: [fix/openarm-contact-workcell-webmcp]
-  workflow_dispatch:
 permissions:
-  contents: read
+  contents: write
 jobs:
-  prepare:
-    if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
+  install-and-verify:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020' && github.ref == 'refs/heads/fix/openarm-contact-workcell-webmcp'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: fix/openarm-contact-workcell-webmcp
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Fetch pinned upstream OpenArm sources (read-only)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: enactic/openarm_mujoco
           ref: a8c979629f2591ad035d99d338ce114969e6cddc
           path: .openarm-upstream
           persist-credentials: false
-      - name: Prepare verification bundle
+      - name: Install pinned verification dependencies
+        run: python -m pip install 'numpy==2.3.5' 'scipy==1.17.0' 'mujoco==3.11.0' jsonschema
+      - name: Apply verified source and generate shared contact geometry
         run: |
-          mkdir -p /tmp/openarm-verification/wheels /tmp/openarm-verification/npm
-          python -m pip download 'mujoco==3.11.0' -d /tmp/openarm-verification/wheels
-          cd /tmp/openarm-verification/npm
-          npm pack three@0.180.0
-          npm pack @playwright/test@1.55.0
-          npm pack playwright@1.55.0
-          npm pack playwright-core@1.55.0
-          cd "$GITHUB_WORKSPACE"
-          tar --exclude=.git --exclude='.openarm-upstream/.git' -czf /tmp/openarm-verification/source.tgz .
-      - uses: actions/upload-artifact@v4
+          python .openarm-install/apply.py
+          python scripts/prepare_openarm_contact_model.py --upstream-dir .openarm-upstream/v2
+          echo '33f91106557f73a1a90527416d8cb09e21d951c3d81c563498a8b9651cf1a16e  models/openarm_v2/manipulation.xml' | sha256sum -c
+          echo 'cb412ffb720eeb3d950917b1ce81d72fd54c71a896555dff0331f18355262e66  models/openarm_v2/geometry.json' | sha256sum -c
+          node tests/physics/openarm-phase5a-core.mjs
+          python tests/validate_openarm_schemas.py
+          node tests/physics/live-python-bridge-core.mjs
+          node tests/physics/physical-python-runtime-core.mjs
+      - name: Commit ordinary reviewable implementation files to this feature branch only
+        run: |
+          test "$GITHUB_REPOSITORY" = 'jivishov/RoboBuddy_IDE_v020'
+          test "$GITHUB_REF" = 'refs/heads/fix/openarm-contact-workcell-webmcp'
+          git add --pathspec-from-file=/tmp/openarm-paths --pathspec-file-nul
+          git diff --cached --stat
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'fix(openarm): align source contact geometry, workcell supports and bounded WebMCP equipment programming'
+          git push origin HEAD:refs/heads/fix/openarm-contact-workcell-webmcp
+      - name: Actual MuJoCo WASM transfer and equipment contact tests
+        run: OPENARM_EVIDENCE_PATH=/tmp/openarm-wasm.json node tests/physics/openarm-worker.mjs
+      - name: Install browser harness
+        run: |
+          npm install --ignore-scripts --no-audit --no-fund
+          npx playwright install --with-deps chromium
+      - name: Full IDE and equipment-program browser tests
+        run: npx playwright test tests/openarm-phase5a-browser.spec.mjs tests/openarm-workcell-browser.spec.mjs --reporter=line
+      - name: Native nominal and half-timestep comparison
+        run: |
+          python native/openarm_v2_reference.py --trial nominal > /tmp/openarm-native.json
+          python native/openarm_v2_reference.py --trial nominal --timestep 0.0005 > /tmp/openarm-tight.json
+          python - <<'PY'
+          import json, math
+          a=json.load(open('/tmp/openarm-native.json')); b=json.load(open('/tmp/openarm-tight.json'))
+          assert a['metrics']['success'] and b['metrics']['success']
+          for obj in ['flask','beaker']:
+              d=math.dist(a['metrics'][obj]['finalPositionM'],b['metrics'][obj]['finalPositionM'])
+              assert d<.002,(obj,d)
+              print(obj,'half-timestep final position delta (m):',d)
+          PY
+      - name: Preserve execution evidence and screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: openarm-verification-source
-          path: /tmp/openarm-verification/
-          retention-days: 3
+          name: openarm-refinement-evidence
+          path: |
+            /tmp/openarm-*.json
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 7
