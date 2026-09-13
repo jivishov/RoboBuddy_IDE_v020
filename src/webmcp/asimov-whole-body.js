@@ -16,7 +16,7 @@ const RANGES = Object.freeze(Object.fromEntries(ASIMOV_SOURCE.joints.map((joint)
 const VELOCITY_LIMITS = Object.freeze(Object.fromEntries(ASIMOV_SOURCE.joints.map((joint) => [joint.id, joint.velocityLimitRadS])));
 const MOTION_INTENTS = Object.freeze(['step', 'walk', 'turn', 'squat', 'reach', 'gesture', 'custom']);
 const SUPPORT_HINTS = Object.freeze(['double', 'left', 'right', 'any']);
-const STABILIZATION_MODES = Object.freeze(['ground_truth', 'none']);
+const STABILIZATION_MODES = Object.freeze(['none', 'ground_truth']);
 
 const fail = (message) => { throw new RangeError(message); };
 function plain(value, allowed, label) {
@@ -43,7 +43,7 @@ export function asimovWholeBodySchema(version, targetSchema) {
       schema_version: version,
       command: { type: 'string', const: 'run_whole_body_motion' },
       motion_intent: { type: 'string', enum: [...MOTION_INTENTS], description: 'Descriptive intent only. Physics, not the label, decides whether the motion succeeds.' },
-      stabilization: { type: 'string', enum: [...STABILIZATION_MODES], description: 'ground_truth adds a bounded 20 Hz ankle target correction from measured pelvis attitude. It is simulator feedback, not a hardware IMU controller.' },
+      stabilization: { type: 'string', enum: [...STABILIZATION_MODES], description: 'Optional explicit simulator supervisor. none is the default; ground_truth adds bounded 20 Hz ankle target correction from measured pelvis attitude.' },
       abort_on_instability: { type: 'boolean', description: 'Abort on a fall-like state or non-foot ground contact. Default true.' },
       keyframes: {
         type: 'array', minItems: 1, maxItems: ASIMOV_WHOLE_BODY_LIMITS.maxKeyframes,
@@ -68,9 +68,11 @@ export function asimovWholeBodySchema(version, targetSchema) {
 export function parseAsimovWholeBody(input) {
   plain(input, ['schema_version', 'command', 'motion_intent', 'stabilization', 'abort_on_instability', 'keyframes'], 'whole-body motion');
   if (input.command !== 'run_whole_body_motion') fail('Unknown whole-body command');
-  const motionIntent = input.motion_intent === undefined ? 'custom' : String(input.motion_intent);
+  if (input.motion_intent !== undefined && typeof input.motion_intent !== 'string') fail('motion_intent must be a string');
+  const motionIntent = input.motion_intent ?? 'custom';
   if (!MOTION_INTENTS.includes(motionIntent)) fail(`motion_intent must be one of ${MOTION_INTENTS.join(', ')}`);
-  const stabilization = input.stabilization === undefined ? 'ground_truth' : String(input.stabilization);
+  if (input.stabilization !== undefined && typeof input.stabilization !== 'string') fail('stabilization must be a string');
+  const stabilization = input.stabilization ?? 'none';
   if (!STABILIZATION_MODES.includes(stabilization)) fail(`stabilization must be one of ${STABILIZATION_MODES.join(', ')}`);
   if (input.abort_on_instability !== undefined && typeof input.abort_on_instability !== 'boolean') fail('abort_on_instability must be boolean');
   if (!Array.isArray(input.keyframes) || !input.keyframes.length || input.keyframes.length > ASIMOV_WHOLE_BODY_LIMITS.maxKeyframes) {
@@ -81,9 +83,11 @@ export function parseAsimovWholeBody(input) {
     plain(frame, ['duration_seconds', 'targets_rad', 'phase', 'support'], `keyframe ${index + 1}`);
     const durationSeconds = finite(frame.duration_seconds, Number.MIN_VALUE, ASIMOV_WHOLE_BODY_LIMITS.maxKeyframeSeconds, `keyframe ${index + 1} duration_seconds`);
     totalSeconds += durationSeconds;
-    const phase = frame.phase === undefined ? `keyframe-${index + 1}` : String(frame.phase);
+    if (frame.phase !== undefined && typeof frame.phase !== 'string') fail(`keyframe ${index + 1} phase must be a string`);
+    const phase = frame.phase ?? `keyframe-${index + 1}`;
     if (!phase.length || phase.length > 48) fail(`keyframe ${index + 1} phase must be 1..48 characters`);
-    const support = frame.support === undefined ? 'any' : String(frame.support);
+    if (frame.support !== undefined && typeof frame.support !== 'string') fail(`keyframe ${index + 1} support must be a string`);
+    const support = frame.support ?? 'any';
     if (!SUPPORT_HINTS.includes(support)) fail(`keyframe ${index + 1} support must be ${SUPPORT_HINTS.join(', ')}`);
     return Object.freeze({ durationSeconds, targetsRad: targets(frame.targets_rad), phase, support });
   });
@@ -136,6 +140,17 @@ function stabilizedTargets(nominal, state, mode) {
     left_ankle_roll_joint: boundedJoint('left_ankle_roll_joint', nominal.left_ankle_roll_joint + rollCorrection),
     right_ankle_roll_joint: boundedJoint('right_ankle_roll_joint', nominal.right_ankle_roll_joint + rollCorrection),
   };
+}
+function rateLimitedTargets(requested, previous, seconds) {
+  const result = {};
+  let events = 0;
+  for (const jointId of Object.keys(RANGES)) {
+    const maxDelta = VELOCITY_LIMITS[jointId] * seconds;
+    const limited = boundedJoint(jointId, clamp(requested[jointId], previous[jointId] - maxDelta, previous[jointId] + maxDelta));
+    if (Math.abs(limited - requested[jointId]) > 1e-12) events += 1;
+    result[jointId] = limited;
+  }
+  return { targets: result, events };
 }
 function instability(state, support) {
   const root = state?.root;
@@ -190,7 +205,10 @@ export async function executeAsimovWholeBodyMotion(sim, program, { dt, guard, ad
   guard();
   const before = sim.getState();
   if (!before?.root || before.root.mode !== 'free-base') fail('Whole-body motion requires a free-base Asimov scene');
-  const compiled = compileTargets(program, fullMeasuredState(before));
+  if (sim.selectedScene?.id === 'asimov-drop' || before.controller_mode === 'passive') fail('Passive Gravity Drop is observation-only; choose an actuated free-base Asimov workspace');
+  if (before.actuation_enabled === false) fail('Whole-body motion requires enabled actuation');
+  const initialTargets = fullMeasuredState(before);
+  const compiled = compileTargets(program, initialTargets);
   const origin = [...before.root.position_m];
   const initialYaw = yawOf(before.root.quaternion_wxyz);
   let maxTiltRad = Number(before.root.tilt_rad || 0);
@@ -198,6 +216,8 @@ export async function executeAsimovWholeBodyMotion(sim, program, { dt, guard, ad
   let supportTransitions = 0;
   let previousSupport = supportSnapshot(sim).mode;
   let executedSeconds = 0;
+  let commandRateLimitEvents = 0;
+  let previousIssued = { ...initialTargets };
   const samples = [];
 
   for (const [index, frame] of compiled.entries()) {
@@ -207,12 +227,15 @@ export async function executeAsimovWholeBodyMotion(sim, program, { dt, guard, ad
     while (physicsSteps < frameSteps) {
       guard();
       const nextSteps = Math.min(controlSteps, frameSteps - physicsSteps);
+      const seconds = nextSteps * dt;
       const alpha = (physicsSteps + nextSteps) / frameSteps;
       const nominal = interpolate(frame.from, frame.to, alpha);
-      const command = stabilizedTargets(nominal, sim.getState(), program.stabilization);
-      await sim.applyPhysicalTargets(command, { maxSteps: Math.max(frameSteps, 1), assertActive: guard });
+      const supervised = stabilizedTargets(nominal, sim.getState(), program.stabilization);
+      const limited = rateLimitedTargets(supervised, previousIssued, seconds);
+      commandRateLimitEvents += limited.events;
+      await sim.applyPhysicalTargets(limited.targets, { maxSteps: Math.max(frameSteps, 1), assertActive: guard });
+      previousIssued = limited.targets;
       guard();
-      const seconds = nextSteps * dt;
       await advance(seconds);
       physicsSteps += nextSteps;
       executedSeconds += seconds;
@@ -235,7 +258,7 @@ export async function executeAsimovWholeBodyMotion(sim, program, { dt, guard, ad
           rootDisplacementM: state.root.position_m.map((value, axis) => value - origin[axis]),
           horizontalDisplacementM: Math.hypot(state.root.position_m[0] - origin[0], state.root.position_m[1] - origin[1]),
           yawChangeRad: yawOf(state.root.quaternion_wxyz) - initialYaw,
-          maxTiltRad, minPelvisHeightM, supportTransitions,
+          maxTiltRad, minPelvisHeightM, supportTransitions, commandRateLimitEvents,
           note: 'The physical plant became unstable. No root correction, teleport, external force, hidden reset or success event was applied.',
         };
       }
@@ -264,7 +287,7 @@ export async function executeAsimovWholeBodyMotion(sim, program, { dt, guard, ad
     rootDisplacementM: [dx, dy, dz],
     horizontalDisplacementM: Math.hypot(dx, dy),
     yawChangeRad: yawOf(after.root.quaternion_wxyz) - initialYaw,
-    maxTiltRad, minPelvisHeightM, supportTransitions, samples,
-    note: 'All keyframes executed through bounded joint actuation and MuJoCo contact physics. Completion is not proof that a requested step/walk/turn was achieved; use measured displacement, support transitions and final state. ground_truth stabilization, when selected, is simulator feedback rather than hardware-like sensing. This is not hardware calibration.',
+    maxTiltRad, minPelvisHeightM, supportTransitions, commandRateLimitEvents, samples,
+    note: 'All keyframes executed through bounded joint actuation and MuJoCo contact physics. Completion is not proof that a requested step/walk/turn was achieved; use measured displacement, support transitions and final state. ground_truth stabilization, when explicitly selected, is simulator feedback rather than hardware-like sensing. This is not hardware calibration.',
   };
 }
