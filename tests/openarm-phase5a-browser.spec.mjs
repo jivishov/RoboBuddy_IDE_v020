@@ -72,8 +72,8 @@ test('OpenArm V2 Phase 5A uses one MuJoCo authority for both arms, free vessels,
   await testInfo.attach('openarm-initial-state.json', { path: initialPath, contentType: 'application/json' });
   expect(initial.backend).toBe('OpenArmPhysicalSimulator');
   expect(initial.authority).toMatchObject({ robotId: 'openarm_v2_bimanual', sceneRevision: 'phase5a-openarm-v2-bimanual-stack-v3' });
-  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v3', asset: 'models/openarm_v2/manipulation.xml' });
-  expect(initial.model.sha256).toBe('916468a20a335f48e2dc91626719b6d12ed96d2a3a6918c8791f9bf04275c1f4');
+  expect(initial.model).toMatchObject({ id: 'robobuddy-openarm-v2-phase5a-v2', asset: 'models/openarm_v2/manipulation.xml' });
+  expect(initial.model.sha256).toBe('dcf3e5c47c8d8eaba48a721ae58a7563f3b60aedf7c7f39d00595be706528fad');
   expect(initial.model.compiledSha256).toBe(initial.model.sha256);
   expect(initial.model.labEquipmentCount).toBe(0);
   expect(initial.presentation).toMatchObject({
