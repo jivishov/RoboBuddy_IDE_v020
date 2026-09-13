@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {createHash} from 'node:crypto';
+import './openarm-observation-core.mjs';
 import { OPENARM_V2_PHASE5A_MODEL_PACKAGE as pkg, OPENARM_V2_SOURCE } from '../../src/physics/openarm-model-package.js';
 import { OPENARM_V2_PHASE5A_SCENE as scene, OPENARM_V2_BIMANUAL_CONTROLLER as controller } from '../../src/physics/openarm-scene.js';
 import { OPENARM_GEOMETRY_SHA256 } from '../../src/physics/openarm-generated.js';
@@ -39,7 +40,7 @@ for(const item of [{...items[0],position_m:[0,0,1.005]},{...items[0],id:'../esca
 assert.throws(()=>validateOpenArmEquipment(Array(13).fill(items[0])));assert.throws(()=>validateOpenArmEquipment([items[0],items[0]]));
 assert.deepEqual(worldPoint({positionM:[1,2,3],quaternionWxyz:[Math.SQRT1_2,0,0,Math.SQRT1_2]},[1,0,0]).map(v=>Math.round(v)),[1,3,3]);
 const e = new OpenArmBimanualStackEvaluator();
-const obs=(time,contacts=[],flask=[.55,.1535,1.092])=>({simulationTimeSeconds:time,bodies:{flask:{positionM:flask,linearVelocityMS:[0,0,0],angularVelocityRadS:[0,0,0],quaternionWxyz:[1,0,0,0]},beaker:{positionM:[.55,-.1535,1.105],linearVelocityMS:[0,0,0],angularVelocityRadS:[0,0,0],quaternionWxyz:[1,0,0,0]},openarm_left_ee_base_link:{positionM:[.401,.1535,1.14]},openarm_right_ee_base_link:{positionM:[.401,-.1535,1.14]}},contacts});
+const obs=(time,contacts=[],flask=[.55,.1535,1.092])=>({simulationTimeSeconds:time,bodies:{flask:{positionM:flask,linearVelocityMS:[0,0,0],angularVelocityRadS:[0,0,0],quaternionWxyz:[1,0,0,0]},beaker:{positionM:[.55,-.1535,1.105],linearVelocityMS:[0,0,0],angularVelocityRadS:[0,0,0],quaternionWxyz:[1,0,0,0]},openarm_left_ee_base_link:{positionM:[.401,.1535,1.14]},openarm_right_ee_base_link:{positionM:[.401,-.1535,1.14]}},contacts,contactsReadable:true,contactCount:contacts.length});
 const contact=(a,b,force=1,depth=-.0001)=>({geom1Name:a,geom2Name:b,normalForceN:force,distanceM:depth});
 const pinch=[contact('flask_grip_geom','finger_inner_left_collision_02'),contact('flask_grip_geom','finger_outer_left_collision_02')];
 e.observe(obs(0,pinch));e.observe(obs(.002,pinch));assert.equal(e.snapshot().flask.graspSeen,false,'instant touch is not sustained grasp');
