@@ -1,7 +1,7 @@
 name: Validate Asimov physics
 on:
   push:
-    branches: [main, integration/asimov-physics-20260911, integration/asimov-actuator-fidelity-20260911, integration/asimov-sensor-webmcp-20260912]
+    branches: [main, integration/asimov-physics-20260911, integration/asimov-actuator-fidelity-20260911, integration/asimov-sensor-webmcp-20260912, feat/asimov-whole-body-webmcp]
     paths:
       - 'src/**'
       - 'models/asimov/**'
@@ -71,12 +71,13 @@ jobs:
         run: |
           node tests/physics/asimov-sensor-core.mjs
           node tests/physics/asimov-program-core.mjs
+          node tests/physics/asimov-whole-body-core.mjs
           ASIMOV_SENSOR_REPORT=/tmp/asimov-sensor-wasm.json node tests/physics/asimov-sensor-worker.mjs
           python tests/validate_asimov_sensors.py --wasm-report /tmp/asimov-sensor-wasm.json --report /tmp/asimov-sensor-validation.json
       - name: Chromium presentation and full IDE acceptance
         env:
           CI: 'true'
-        run: npx playwright test tests/asimov-physical-browser.spec.mjs --workers=1
+        run: npx playwright test tests/asimov-physical-browser.spec.mjs tests/asimov-whole-body-browser.spec.mjs --workers=1
       - name: Collect evidence
         if: always()
         run: |
