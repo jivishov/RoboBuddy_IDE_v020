@@ -12,7 +12,7 @@ export const PhysicsBackendState = Object.freeze({
 
 const SCENE_KEYS = new Set([
   'schemaVersion', 'id', 'revision', 'robotId', 'modelPackage', 'legacyTaskId',
-  'physics', 'fixtures', 'objects', 'controllers', 'taskGoal',
+  'physics', 'fixtures', 'objects', 'controllers', 'taskGoal', 'labEquipment',
 ]);
 const PHYSICS_KEYS = new Set(['timestepSeconds', 'integrator', 'iterations', 'lsIterations']);
 const INTEGRATORS = new Set(['Euler', 'RK4', 'implicit', 'implicitfast']);
@@ -111,10 +111,10 @@ export function assertPhysicalScene(scene) {
   if (scene.physics.lsIterations != null && (!Number.isInteger(scene.physics.lsIterations) || scene.physics.lsIterations < 0)) {
     throw new RangeError('physics.lsIterations must be a non-negative integer when provided');
   }
-  for (const key of ['fixtures', 'objects', 'controllers']) {
+  for (const key of ['fixtures', 'objects', 'controllers', 'labEquipment']) {
     if (scene[key] != null && !Array.isArray(scene[key])) throw new TypeError(`${key} must be an array when provided`);
   }
-  for (const key of ['fixtures', 'objects']) {
+  for (const key of ['fixtures', 'objects', 'labEquipment']) {
     for (const [index, item] of (scene[key] || []).entries()) {
       if (!item || typeof item !== 'object' || Array.isArray(item)) throw new TypeError(`${key}[${index}] must be an object`);
     }
