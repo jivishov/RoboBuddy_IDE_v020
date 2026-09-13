@@ -1,0 +1,38 @@
+name: OpenArm refinement verification
+on:
+  push:
+    branches: [fix/openarm-workcell-fidelity]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Dependencies
+        run: |
+          python -m pip install mujoco==3.11.0 scipy
+          npm install --no-package-lock
+      - name: Baseline checks
+        run: |
+          node tests/physics/openarm-phase5a-core.mjs
+          python native/openarm_v2_reference.py --help
+      - name: Export bounded development snapshot
+        run: |
+          mkdir -p /tmp/openarm-snapshot/wheels
+          git archive HEAD -o /tmp/openarm-snapshot/source.tar
+          python -m pip download --only-binary=:all: --dest /tmp/openarm-snapshot/wheels mujoco==3.11.0 scipy
+      - uses: actions/upload-artifact@v4
+        with:
+          name: openarm-development-snapshot
+          path: /tmp/openarm-snapshot
+          retention-days: 2
