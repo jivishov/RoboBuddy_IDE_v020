@@ -62,3 +62,69 @@ test('OpenArm shared geometry and registered WebMCP equipment/program tools use 
   expect(cancelled.result.ok).toBe(false);expect(cancelled.state).toBe('idle');expect(cancelled.owner).toBe(null);
   expect(errors,errors.join('\n')).toEqual([]);
 });
+
+test('OpenArm contrast reports visible markers without changing physics, including rebuilt workcells', async ({ page }, testInfo) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(String(error)));
+  await page.goto('/tests/fixtures/openarm.html');
+  await page.waitForFunction(() => window.ready, null, { timeout: 60000 });
+  const result = await page.evaluate(async () => {
+    const contrast = () => ({
+      enabled: sim.isHighContrastSceneEnabled(),
+      active: sim.canvas.dataset.highContrastScene,
+      count: Number(sim.canvas.dataset.highContrastPerimeterCount),
+      markers: sim.targetMarkers.map(marker => ({
+        visible: marker.visible,
+        presentationOnly: marker.userData.presentationOnly,
+        attached: marker.parent === sim.scene,
+        opacity: marker.material.opacity,
+      })),
+    });
+    const initial = contrast();
+    // Start at nonzero simulation time so an accidental reset cannot pass unnoticed.
+    await sim.advanceTime(.02);
+    const before = sim.getState();
+    const toggles = [false, false, true, true, false].map(enabled => {
+      const returned = sim.setHighContrastScene(enabled);
+      sim.renderFrame();
+      return { requested: enabled, returned, contrast: contrast(), state: sim.getState() };
+    });
+    const staged = sim.stageEquipment([{ id: 'contrast_tray', kind: 'tray', position_m: [.35, -.38, 1.005] }]);
+    const stagedState = sim.getState();
+    // Applying equipment is an explicit reset; contrast alone is not.
+    const applied = await sim.applyStagedEquipment(staged.id, true);
+    const rebuiltOff = contrast();
+    const rebuiltState = sim.getState();
+    sim.setHighContrastScene(true);
+    sim.renderFrame();
+    return { initial, before, toggles, stagedState, applied, rebuiltOff, rebuiltOn: contrast(), rebuiltState, finalState: sim.getState() };
+  });
+  const assertContrast = (value, enabled) => {
+    expect(value.enabled).toBe(enabled);
+    expect(value.active).toBe(String(enabled));
+    expect(value.markers).toHaveLength(2);
+    expect(value.count).toBe(enabled ? 2 : 0);
+    for (const marker of value.markers) {
+      expect(marker.visible).toBe(enabled);
+      expect(marker.presentationOnly).toBe(true);
+      expect(marker.attached).toBe(true);
+      expect(marker.opacity).toBeGreaterThan(0);
+    }
+  };
+  assertContrast(result.initial, true);
+  expect(result.before.observation.simulationTimeSeconds).toBeGreaterThan(0);
+  for (const toggle of result.toggles) {
+    expect(toggle.returned).toBe(toggle.requested);
+    assertContrast(toggle.contrast, toggle.requested);
+    expect(toggle.state).toEqual(result.before);
+  }
+  expect(result.stagedState).toEqual(result.before);
+  expect(result.applied.status).toBe('applied');
+  expect(result.applied.reset).toBe(true);
+  expect(result.rebuiltState.authority.sessionId).not.toBe(result.before.authority.sessionId);
+  assertContrast(result.rebuiltOff, false);
+  assertContrast(result.rebuiltOn, true);
+  expect(result.finalState).toEqual(result.rebuiltState);
+  await page.screenshot({ path: testInfo.outputPath('openarm-contrast-rebuilt-workcell.png') });
+  expect(errors).toEqual([]);
+});
