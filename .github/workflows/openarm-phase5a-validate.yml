@@ -55,8 +55,8 @@ jobs:
           done
           python native/openarm_v2_reference.py --trial nominal --timestep 0.0005 > test-results/native/openarm-tight.json
           python tests/validate_openarm_evidence.py test-results/native
-      - name: Full IDE Python and registered WebMCP workcell/program tests
-        run: npx playwright test tests/openarm-phase5a-browser.spec.mjs tests/openarm-workcell-browser.spec.mjs --reporter=line
+      - name: Full IDE Python, registered workcell programs and WebMCP access lifecycle
+        run: npx playwright test tests/openarm-phase5a-browser.spec.mjs tests/openarm-workcell-browser.spec.mjs tests/webmcp.spec.mjs --reporter=line
       - name: Verification never rewrites the checked-out source
         run: git diff --exit-code
       - name: Retain OpenArm native and browser evidence
