@@ -60,7 +60,7 @@ export class AsimovPhysicalSimulator {
       await Promise.all([this.loadMeshes(),session.loadScene(structuredClone(scene))]);
       if(this.disposed || generation!==this.sequence) throw new Error('Superseded Asimov scene');
       this.ready=true; Object.assign(this.canvas.dataset,{simulatorBackend:'browser-mujoco',simulationAuthority:'physics-session',physicalSceneId:scene.id,
-        physicalSceneRevision:scene.revision,modelPackageId:scene.modelPackage,asimovRootMode:this.lastObservation.root.mode,asimovWalking:'unsupported'});
+        physicalSceneRevision:scene.revision,modelPackageId:scene.modelPackage,asimovRootMode:this.lastObservation.root.mode,asimovWalking:this.getWholeBodyCapability()});
       this.applyObservation(); this.renderDirty=true; this.fit(); return true;
     } catch(error) {session.dispose(); this.ready=false; throw error;}
   }
@@ -91,6 +91,7 @@ export class AsimovPhysicalSimulator {
     this.canvas.dataset.simulationClockS=String(observation.simulationTimeSeconds);
     this.canvas.dataset.asimovPelvisZM=String(observation.root?.positionM?.[2]);
     this.canvas.dataset.asimovContactCount=String(observation.contactCount);
+    this.canvas.dataset.asimovWalking=this.getWholeBodyCapability();
   }
   applyObservation() {
     for(const [name,group] of this.groups) {
@@ -117,6 +118,12 @@ export class AsimovPhysicalSimulator {
   isHighContrastSceneEnabled() {return this.highContrast;}
   isReady() {return !!(!this.disposed&&this.ready&&this.session?.robotId&&this.lastObservation);}
   assertReady() {if(!this.isReady()) throw new Error('Asimov physical session is not ready');}
+  getWholeBodyCapability() {
+    const id=this.selectedScene?.id??'';
+    if(!id || id==='asimov-drop' || id.endsWith('mounted')) return 'unsupported';
+    if(this.lastObservation?.actuationEnabled===false) return 'requires-enabled-actuation';
+    return 'experimental-agent-generated-trajectory-not-validated-gait';
+  }
   getPhysicalSession() {return this.session;}
   getPhysicalAuthorityToken() {return this.isReady()?{sessionId:this.session.sessionId,epoch:this.session.epoch,sceneRevision:this.session.sceneRevision,robotId:this.session.robotId}:null;}
   async applyPhysicalTargets(targetsRad,{advanceSeconds=0,maxSteps=4000,...guard}={}) {
@@ -176,14 +183,14 @@ export class AsimovPhysicalSimulator {
       joints:Object.fromEntries(Object.entries(o.joints).map(([id,j])=>[id,{position_rad:j.positionRad,velocity_rad_s:j.velocityRadS,effort_nm:j.effortNm,
         requested_target_rad:j.requestedTargetRad,accepted_target_rad:j.acceptedTargetRad,command_bounded:j.commandBounded,effort_limit_nm:j.effortLimitNm}])),
       ...(o.actuatorModel?{actuator_model:structuredClone(o.actuatorModel),standing_assessment:structuredClone(o.standingAssessment)}:{}),
-      contacts:o.contacts,controller_mode:o.controller.id,actuation_enabled:o.actuationEnabled,walking:'unsupported'};
+      contacts:o.contacts,controller_mode:o.controller.id,actuation_enabled:o.actuationEnabled,walking:this.getWholeBodyCapability()};
   }
   getContacts() {return {count:this.lastObservation?.contactCount??0,readable:!!this.lastObservation?.contactsReadable,...this.lastObservation?.contactClasses};}
   getTelemetry() {return {backend:'browser-mujoco',authority:'physics-session',simulationTimeSeconds:this.lastObservation?.simulationTimeSeconds??0,
-    rootMode:this.lastObservation?.root?.mode,totalMassKg:ASIMOV_SOURCE.totalMassKg,controllerId:this.lastObservation?.controller?.id,walking:'unsupported'};}
+    rootMode:this.lastObservation?.root?.mode,totalMassKg:ASIMOV_SOURCE.totalMassKg,controllerId:this.lastObservation?.controller?.id,walking:this.getWholeBodyCapability()};}
   getSensorObservation() {this.assertReady();if(!this.lastObservation.sensorObservation)throw new Error('No hardware-like profile in this reference scene');return structuredClone(this.lastObservation.sensorObservation);}
   engageStand() {this.assertReady();const controllerId=this.selectedScene.controllers.find(id=>id==='asimov-stance-feedback-v1'||id==='asimov-sensor-stance-v2');if(!controllerId)throw new Error('No declared standing controller');return this.session.sendCommand({type:'engage_stand',controllerId},{maxSteps:8000});}
-  getTaskEvaluation() {return this.lastObservation?.standingAssessment?.status !== 'not-started' && this.lastObservation?.standingAssessment ? structuredClone(this.lastObservation.standingAssessment) : {status:'observation-only',standing:null,walking:'unsupported',syntheticSuccessEvents:false};}
+  getTaskEvaluation() {return this.lastObservation?.standingAssessment?.status !== 'not-started' && this.lastObservation?.standingAssessment ? structuredClone(this.lastObservation.standingAssessment) : {status:'observation-only',standing:null,walking:this.getWholeBodyCapability(),syntheticSuccessEvents:false};}
   getPresentationAudit() {return {sourceRevision:ASIMOV_SOURCE.revision,jointCount:23,meshCount:this.geometries.size,bodyCount:this.groups.size,drivesFromObservation:!!this.lastObservation};}
   getPresentationAlignment() {
     this.applyObservation(); let maximum=0;
