@@ -86,17 +86,17 @@ for (const side of ['left', 'right']) {
 }
 
 export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
-  id: 'openarm-v2-phase5a-a8c9796-v3',
+  id: 'openarm-v2-phase5a-a8c9796-v2',
   robotId: 'openarm_v2_bimanual',
-  modelId: 'robobuddy-openarm-v2-phase5a-v3',
+  modelId: 'robobuddy-openarm-v2-phase5a-v2',
   source: {
     url: `https://github.com/${OPENARM_V2_SOURCE.repository}/blob/${OPENARM_V2_SOURCE.revision}/${OPENARM_V2_SOURCE.sourcePath}`,
     revision: OPENARM_V2_SOURCE.revision,
-    variant: `${OPENARM_V2_SOURCE.variant}; repository-local primitive collision adaptation with source-informed finger longitudinal offsets for browser execution`,
+    variant: `${OPENARM_V2_SOURCE.variant}; repository-local primitive collision adaptation for browser execution`,
   },
   license: 'Apache-2.0 for OpenArm-derived plant; repository-authored dry benchmark fixtures are MIT',
   asset: 'models/openarm_v2/manipulation.xml',
-  sha256: '916468a20a335f48e2dc91626719b6d12ed96d2a3a6918c8791f9bf04275c1f4',
+  sha256: '960ecf32c0aa7c8b2b016c6f28a7a8afe8147ce6cb1cdfd9b91f550cd4fc27dc',
   physics: { timestepSeconds: 0.001, integrator: 'Euler' },
   controllers: ['openarm_v2_position'],
   joints,
@@ -157,7 +157,6 @@ export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
     actuatorGainsAndForceLimits: PARAMETER_EVIDENCE.SOURCE_DERIVED,
     mechanicalFingerCoupling: PARAMETER_EVIDENCE.SOURCE_DERIVED,
     primitiveCollisionSurrogates: PARAMETER_EVIDENCE.ESTIMATED,
-    sourceInformedFingerLongitudinalOffsets: PARAMETER_EVIDENCE.SOURCE_DERIVED,
     dryTaskVesselAndReceiverGeometry: PARAMETER_EVIDENCE.SOURCE_DERIVED,
     stagingSupportGeometry: PARAMETER_EVIDENCE.ESTIMATED,
     vesselMassInertiaAndFriction: PARAMETER_EVIDENCE.ESTIMATED,
@@ -165,8 +164,7 @@ export const OPENARM_V2_PHASE5A_MODEL_PACKAGE = registerModelPackage({
   },
   limitations: [
     'The plant preserves the pinned OpenArm V2 kinematic tree, mirrored axes/ranges, inertials and source simulation actuator semantics, but replaces upstream mesh collision geometry with explicit primitive surrogates for a self-contained browser package.',
-    'The fingertip primitive centerlines now use source-informed longitudinal offsets from the pinned V2 finger bodies, but their capsule radii/shape are still estimated and do not establish exact fingertip pressure distribution or installed-hardware clearance.',
-    'Primitive collision surrogates remain insufficient for exact self-collision margins, glass compliance, or calibrated palm/finger clearance claims.',
+    'Primitive collision surrogates are estimated and intentionally do not support claims about exact self-collision margins, fingertip pressure distribution, glass compliance, or installed-hardware clearances.',
     'The flask/beaker exterior envelopes and hotplate/gauze receiver dimensions are aligned to the pinned RoboBuddy task definition, but remain simulator benchmark geometry; staging supports, vessel mass/inertia, friction and contact material are estimates rather than measured laboratory hardware.',
     'Source actuator gains and force limits are simulator parameters from the pinned V2 model, not calibration of a particular assembled OpenArm.',
     'The only equality constraints are the source-derived left/right finger mechanical couplings. Passive finger2 qpos is initialized consistently with the coupled actuated finger1 at setup/reset; it is never exposed as a separate command surface.',
