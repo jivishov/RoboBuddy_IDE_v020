@@ -10,8 +10,8 @@ export const ASIMOV_LIMITATIONS=Object.freeze([
   'Pinned Menlo MJCF has 23 hinges and two fixed neck bodies, not the advertised 25 actuated hardware joints.',
   'Source link inertias, 32.224913 kg model mass, joint axes, reference offsets, collision primitives, foot contacts, exclusions and solver settings are retained.',
   'Ideal torque motors use URDF effort limits. Joint-space PD gains are repository estimates, not a Menlo trained policy or measured actuator dynamics.',
-  'Ankles are source ideal pitch/roll joints, not a simulation of the hardware parallel transmission. No finger actuators, grasping, walking, balance recovery or hardware fidelity is claimed.',
-  'Free-base posture hold may fall. Mounted tests explicitly fix the pelvis and cannot establish standing or walking capability.',
+  'Ankles are source ideal pitch/roll joints, not a simulation of the hardware parallel transmission. No finger actuators, grasping, trained/validated walking controller, general balance recovery or hardware fidelity is claimed.',
+  'Free-base posture hold or agent-generated whole-body trajectories may fall. Mounted tests explicitly fix the pelvis and cannot establish standing or walking capability.',
 ]);
 const pkg = (variant,rootMode,initialCommand) => registerModelPackage({
   id:`asimov-1-${variant}-732cc60-v1`,modelId:`robobuddy-asimov-${variant}-v1`,robotId:ASIMOV_ROBOT_ID,
@@ -39,7 +39,8 @@ export const ASIMOV_ACTUATOR_LIMITATIONS=Object.freeze([
   'Nineteen single-axis motors use the lower of source effort limit and published continuous rating. Peak output is disabled without duty-cycle evidence.',
   'Linear motoring-speed derating, smoothed friction, 5 ms command delay and sensor stress are explicit estimates, not identified full-body hardware responses.',
   'The four ankle axes retain the source equivalent joint-space plant. A/B motor ratings and linkage ratios are unresolved; no guessed transmission or extra rotor inertia is enabled.',
-  'Experimental standing uses bounded ankle torques with ground-truth torso feedback on a flat floor. It may fail; it is neither walking nor general balance recovery.',
+  'Experimental standing uses bounded ankle torques with ground-truth torso feedback on a flat floor. It may fail; it is neither a trained walking controller nor general balance recovery.',
+  'Agent-generated full-body WebMCP trajectories can be tested in actuated free-base scenes; successful execution does not establish a stable gait or hardware-feasible locomotion.',
   'Neck remains fixed; no actuated fingers, hardware connection or hardware validation.',
 ]);
 const experiment=(key,sourceVariant,standing=false)=>{
