@@ -3,16 +3,22 @@ const SHAPES = new Set(['box', 'cylinder']);
 const MOBILITIES = new Set(['fixed', 'free']);
 const MAX_ITEMS = 12;
 const MAX_FREE_ITEMS = 6;
+const TABLETOP = Object.freeze({
+  xM: Object.freeze([0.0, 0.82]),
+  yM: Object.freeze([-0.55, 0.55]),
+  zM: 1.005,
+});
 const WORKSPACE = Object.freeze({
   xM: Object.freeze([0.20, 0.78]),
   yM: Object.freeze([-0.48, 0.48]),
-  zM: Object.freeze([1.005, 1.48]),
+  zM: Object.freeze([TABLETOP.zM, 1.48]),
 });
 
 export const OPENARM_LAB_EQUIPMENT_SCHEMA_VERSION = 'robobuddy.openarm.lab.v1';
 export const OPENARM_LAB_EQUIPMENT_LIMITS = Object.freeze({
   maxItems: MAX_ITEMS,
   maxFreeItems: MAX_FREE_ITEMS,
+  tabletop: TABLETOP,
   workspace: WORKSPACE,
   boxSizeM: Object.freeze([0.005, 0.35]),
   cylinderRadiusM: Object.freeze([0.003, 0.12]),
@@ -22,7 +28,7 @@ export const OPENARM_LAB_EQUIPMENT_LIMITS = Object.freeze({
 
 export const OPENARM_LAB_EQUIPMENT_CATALOG = Object.freeze({
   schemaVersion: OPENARM_LAB_EQUIPMENT_SCHEMA_VERSION,
-  semantics: 'Validated rigid-body primitives compiled into the same OpenArm MuJoCo world. fixed items are fixtures; free items are dynamic rigid bodies. No arbitrary XML, mesh URL, script, plugin, weld, snap, teleport, liquid, thermal or hardware-control surface is exposed.',
+  semantics: 'Validated rigid-body primitives compiled into the same OpenArm MuJoCo world. fixed items are fixtures; free items are dynamic rigid bodies. Item extents must remain above and within the physical tabletop. No arbitrary XML, mesh URL, script, plugin, weld, snap, teleport, liquid, thermal or hardware-control surface is exposed.',
   shapes: Object.freeze({
     box: Object.freeze({ sizeM: '[x, y, z] full dimensions in metres' }),
     cylinder: Object.freeze({ sizeM: '[radius, height] in metres; cylinder axis is MuJoCo +Z' }),
@@ -63,6 +69,16 @@ function normalizeSize(shape, value, label) {
   result[1] = bounded(result[1], OPENARM_LAB_EQUIPMENT_LIMITS.cylinderHeightM, `${label}[1]`);
   return result;
 }
+function assertPhysicalBounds(id, shape, positionM, sizeM) {
+  const halfX = shape === 'box' ? sizeM[0] / 2 : sizeM[0];
+  const halfY = shape === 'box' ? sizeM[1] / 2 : sizeM[0];
+  const halfZ = shape === 'box' ? sizeM[2] / 2 : sizeM[1] / 2;
+  const [x, y, z] = positionM;
+  if (x - halfX < TABLETOP.xM[0] || x + halfX > TABLETOP.xM[1]) throw new RangeError(`OpenArm lab equipment ${id} extends beyond the physical tabletop in X`);
+  if (y - halfY < TABLETOP.yM[0] || y + halfY > TABLETOP.yM[1]) throw new RangeError(`OpenArm lab equipment ${id} extends beyond the physical tabletop in Y`);
+  if (z - halfZ < TABLETOP.zM - 1e-12) throw new RangeError(`OpenArm lab equipment ${id} intersects the physical tabletop; its bottom must be at or above z=${TABLETOP.zM}`);
+  if (z + halfZ > WORKSPACE.zM[1] + 1e-12) throw new RangeError(`OpenArm lab equipment ${id} extends above the configured workcell ceiling z=${WORKSPACE.zM[1]}`);
+}
 
 export function normalizeOpenArmLabEquipment(items = []) {
   if (!Array.isArray(items)) throw new TypeError('OpenArm lab equipment must be an array');
@@ -83,6 +99,7 @@ export function normalizeOpenArmLabEquipment(items = []) {
     if (!MOBILITIES.has(mobility)) throw new TypeError(`OpenArm lab equipment ${id} mobility must be fixed or free`);
     const positionM = normalizePosition(raw.positionM, `${id}.positionM`);
     const sizeM = normalizeSize(shape, raw.sizeM, `${id}.sizeM`);
+    assertPhysicalBounds(id, shape, positionM, sizeM);
     let massKg = null;
     if (mobility === 'free') {
       freeCount += 1;
