@@ -17,7 +17,7 @@ jobs:
   lab-builder:
     if: github.repository == 'jivishov/RoboBuddy_IDE_v020'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,6 +37,8 @@ jobs:
           node --check src/physics/openarm-lab-builder-simulator.js
           node --check src/physics/openarm-lab-builder-simulator-base.js
           node --check src/webmcp/openarm-workcell.js
+          node --check src/webmcp/physical-agent-facade.js
+          node --check src/physics/ui-status.js
           node --check src/task-catalog.js
           node --check src/task-workspace.js
           node --check src/simulator-host.js
@@ -46,8 +48,8 @@ jobs:
         run: |
           npm install --ignore-scripts --no-audit --no-fund
           npx playwright install --with-deps chromium
-      - name: Robot-only start, WebMCP authoring and physical dry-transfer browser test
-        run: npx playwright test tests/openarm-lab-builder-browser.spec.mjs --reporter=line
+      - name: Robot-only start, WebMCP authoring, physical transfer and negative gates
+        run: npx playwright test tests/openarm-lab-builder-browser.spec.mjs tests/openarm-lab-builder-negative-browser.spec.mjs --reporter=line
       - name: Verification never rewrites checked-out source
         run: git diff --exit-code
       - name: Retain Lab Builder browser evidence
