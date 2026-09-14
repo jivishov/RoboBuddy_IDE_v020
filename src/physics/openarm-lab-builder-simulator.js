@@ -13,10 +13,12 @@ export class OpenArmLabBuilderSimulator extends BaseSimulator {
     this.estimatorSeed = 1;
     this.syntheticEstimator = new OpenArmSyntheticEstimator({ seed: this.estimatorSeed });
     this.lastPlanBinding = null;
+    this.programValidation = null;
   }
   async setScenario(...args) {
     const result = await super.setScenario(...args);
     this.lastPlanBinding = null;
+    this.programValidation = null;
     this.syntheticEstimator.reset(this.estimatorSeed);
     if (this.lastObservation) this.syntheticEstimator.push(this.lastObservation);
     return result;
@@ -24,6 +26,7 @@ export class OpenArmLabBuilderSimulator extends BaseSimulator {
   async reset(...args) {
     const result = await super.reset(...args);
     this.lastPlanBinding = null;
+    this.programValidation = null;
     this.syntheticEstimator.reset(this.estimatorSeed);
     if (this.lastObservation) this.syntheticEstimator.push(this.lastObservation);
     return result;
@@ -73,6 +76,7 @@ export class OpenArmLabBuilderSimulator extends BaseSimulator {
       observationProfiles: clone(OPENARM_LAB_OBSERVATION_PROFILES),
       estimatorSeed: this.estimatorSeed,
       generatedPlanBinding: clone(this.lastPlanBinding),
+      programValidation: clone(this.programValidation),
       preHardwarePackageStatus: 'partial: synthetic estimator implemented; controller-side observation enforcement and perturbation rerun package remain open',
     };
   }
@@ -92,8 +96,50 @@ export class OpenArmLabBuilderSimulator extends BaseSimulator {
     const result = super.planLabTransfer(...args);
     if (!result?.supported || !result.program) {
       this.lastPlanBinding = null;
+      this.programValidation = null;
       return result;
     }
+
+    // Add feedback where it materially constrains the physical transfer. The independent
+    // evaluator remains authoritative; these waits only keep the generated controller from
+    // blindly advancing after missing receiver support or a failed release.
+    const program = clone(result.program);
+    const equipment = this.lastObservation?.openarm?.equipment || [];
+    const objectRecord = equipment.find(record => record.id === this.taskSpec?.object_id);
+    const receiverRecord = equipment.find(record => record.id === this.taskSpec?.receiver_id);
+    const objectBodyId = objectRecord?.bodyId || `lab_${this.taskSpec?.object_id}`;
+    const supportGeometryId = receiverRecord?.affordances?.supportGeometryId || `lab_${this.taskSpec?.receiver_id}_base`;
+    const lowerIndex = program.segments.findIndex(segment => /lower into receiver/i.test(segment.label || ''));
+    const releaseIndex = program.segments.findIndex(segment => /open and release/i.test(segment.label || ''));
+    if (lowerIndex >= 0) {
+      program.segments[lowerIndex].wait_for = {
+        type: 'supported', object_id: objectBodyId, support_geom: supportGeometryId,
+        timeout_seconds: 2, dwell_seconds: .06,
+      };
+    }
+    if (releaseIndex >= 0) {
+      const release = program.segments[releaseIndex];
+      delete release.wait_for;
+      release.label = 'Open gripper while receiver supports object';
+      release.duration_seconds = Math.max(1.5, Number(release.duration_seconds) || 0);
+      const lowerTool = lowerIndex >= 0 ? program.segments[lowerIndex].tool : null;
+      if (lowerTool?.position_m) {
+        const clearance = clone(lowerTool);
+        clearance.position_m[2] += .025;
+        program.segments.splice(releaseIndex + 1, 0,
+          {
+            label: 'Clear released object with open gripper', tool: clearance, duration_seconds: 1.5,
+            wait_for: { type: 'released', side: this.taskSpec.side, object_id: objectBodyId, timeout_seconds: 2, dwell_seconds: .08 },
+          },
+          {
+            label: 'Allow supported object to settle',
+            duration_seconds: Math.max(.35, Number(this.taskSpec?.tolerances?.settle_dwell_s || .2) + .15),
+          },
+        );
+      }
+    }
+    this.programSpec = clone(program);
+
     const authority = this.getPhysicalAuthorityToken();
     const relevantBodyPositionsM = {};
     for (const asset of this.sceneSpec?.assets || []) {
@@ -108,9 +154,16 @@ export class OpenArmLabBuilderSimulator extends BaseSimulator {
       simulationTimeSeconds: this.lastObservation?.simulationTimeSeconds ?? null,
       relevantBodyPositionsM,
       positionValidityToleranceM: 0.01,
-      programKey: JSON.stringify(result.program),
+      programKey: JSON.stringify(program),
     };
-    return { ...result, planner: { ...result.planner, stateBinding: clone(this.lastPlanBinding) } };
+    this.programValidation = {
+      origin: 'lab_transfer_planner',
+      stateBound: true,
+      taskSpaceClearanceValidated: true,
+      sampledRobotLinkClearanceValidated: false,
+      continuousCollisionGuarantee: false,
+    };
+    return { ...result, program: clone(program), planner: { ...result.planner, stateBinding: clone(this.lastPlanBinding), feedback: 'receiver support before release; sustained release after 25 mm clearance; explicit settle dwell', sampledRobotLinkClearanceValidated: false } };
   }
   setLabProgramSpec(program) {
     const key = JSON.stringify(program);
@@ -125,9 +178,12 @@ export class OpenArmLabBuilderSimulator extends BaseSimulator {
           throw new Error(`Generated transfer plan is stale because ${assetId} moved beyond the declared 10 mm validity tolerance; re-observe and replan.`);
         }
       }
+      this.programValidation = { ...(this.programValidation || {}), origin: 'lab_transfer_planner', stateBound: true };
     } else {
-      // A deliberately edited program is a new instruction artifact rather than the old planner output.
+      // A deliberately edited/external program is permitted as a new bounded instruction artifact,
+      // but it must not inherit the planner's clearance or freshness claims.
       this.lastPlanBinding = null;
+      this.programValidation = { origin: 'edited_or_external', stateBound: false, taskSpaceClearanceValidated: false, sampledRobotLinkClearanceValidated: false, continuousCollisionGuarantee: false };
     }
     return super.setLabProgramSpec(program);
   }
@@ -144,6 +200,7 @@ export class OpenArmLabBuilderSimulator extends BaseSimulator {
         controller: 'openarm_v2_position',
         controller_model_source: 'existing OpenArm simulation control profile',
         plant_parameter_source: 'active MuJoCo model package; not silently read as controller calibration',
+        program_validation: clone(this.programValidation),
         hardware_validated: false,
       },
     });
