@@ -17,5 +17,7 @@ try {
 } catch (error) {
   window.startupError = String(error?.stack || error?.message || error);
   console.error('Lab Builder startup failed', error);
+  window.sim = { getWorkcellState() { throw new Error(`LAB_BUILDER_STARTUP: ${window.startupError}`); } };
+  window.ready = true;
 }
 </script></body></html>
