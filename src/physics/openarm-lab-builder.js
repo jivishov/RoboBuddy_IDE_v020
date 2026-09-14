@@ -6,22 +6,26 @@ import {
 } from './openarm-lab-builder-base.js';
 import { PHYSICS_BACKEND_API_VERSION } from './backend-contract.js';
 import { OPENARM_V2_PHASE5A_MODEL_PACKAGE } from './openarm-model-package.js';
+import { requireModelPackage } from './model-registry.js';
 
-// The Lab Builder identity belongs to the app/scenario layer, not the shared physical-scene
-// contract. Keep the scene descriptor strictly inside backend-contract.js so PhysicsSession can
-// validate it exactly like every other MuJoCo workspace.
-export function openArmLabBuilderScene(modelPackage) {
-  if (typeof modelPackage !== 'string' || !modelPackage) throw new TypeError('Lab Builder scene requires a registered model package id');
+// Lab Builder identity belongs to the app/scenario layer, not the shared physical-scene
+// contract. Build a strict scene descriptor from the actual registered transient package so
+// fixture/object identities cannot drift from the model that the worker will compile.
+export function openArmLabBuilderScene(modelPackageId) {
+  if (typeof modelPackageId !== 'string' || !modelPackageId) throw new TypeError('Lab Builder scene requires a registered model package id');
+  const modelPackage = requireModelPackage(modelPackageId);
+  const fixtures = (modelPackage.sceneConstraints?.fixtures || []).map(id => Object.freeze({ id }));
+  const objects = (modelPackage.sceneConstraints?.objects || []).map(id => Object.freeze({ id }));
   return Object.freeze({
     schemaVersion: PHYSICS_BACKEND_API_VERSION,
     id: OPENARM_LAB_BUILDER_SCENE_ID,
     revision: OPENARM_LAB_BUILDER_SCENE_REVISION,
-    robotId: OPENARM_V2_PHASE5A_MODEL_PACKAGE.robotId,
-    modelPackage,
-    physics: Object.freeze({ ...OPENARM_V2_PHASE5A_MODEL_PACKAGE.physics }),
-    fixtures: Object.freeze([{ id: 'floor' }, { id: 'openarm_mount' }]),
-    objects: Object.freeze([]),
-    controllers: Object.freeze([...OPENARM_V2_PHASE5A_MODEL_PACKAGE.controllers]),
+    robotId: modelPackage.robotId || OPENARM_V2_PHASE5A_MODEL_PACKAGE.robotId,
+    modelPackage: modelPackageId,
+    physics: Object.freeze({ ...modelPackage.physics }),
+    fixtures: Object.freeze(fixtures),
+    objects: Object.freeze(objects),
+    controllers: Object.freeze([...(modelPackage.controllers || [])]),
     taskGoal: null,
   });
 }
