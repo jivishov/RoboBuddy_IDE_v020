@@ -1,153 +1,137 @@
+import { graspState, usableContact } from './openarm-observation.js';
+
+export const OPENARM_LAB_OBSERVATION_PROFILE_VERSION = 'robobuddy.openarm.observation-profile.v1';
 export const OPENARM_LAB_OBSERVATION_PROFILES = Object.freeze({
   simulator_ground_truth: Object.freeze({
+    schema_version: OPENARM_LAB_OBSERVATION_PROFILE_VERSION,
     id: 'simulator_ground_truth',
-    label: 'Simulator ground truth (development)',
-    source: 'MuJoCo authoritative state',
-    hardwareAlignment: 'none',
-    samplingPeriodS: 0.001,
-    latencyS: 0,
-    restrictions: Object.freeze([]),
+    label: 'Simulator ground truth (development only)',
+    source: 'authoritative MuJoCo PhysicsSession',
+    sample_period_s: .002,
+    latency_s: 0,
+    position_noise_std_m: 0,
+    joint_noise_std_rad: 0,
+    orientation_noise_std_rad: 0,
+    contact_state: 'full simulator contact list/forces available to development tools and hidden evaluator',
+    assumed_hardware_interface: false,
+    camera_perception: false,
+    hardware_validated: false,
   }),
   synthetic_estimator_v1: Object.freeze({
+    schema_version: OPENARM_LAB_OBSERVATION_PROFILE_VERSION,
     id: 'synthetic_estimator_v1',
-    label: 'Synthetic estimator sensitivity profile',
-    source: 'Delayed/noisy transform and joint estimates generated from simulation for software sensitivity testing',
-    hardwareAlignment: 'assumed interface; parameters are illustrative estimates, not measurements and not camera perception',
-    samplingPeriodS: 0.02,
-    latencyS: 0.04,
-    jointPositionStdRad: 0.002,
-    jointVelocityStdRadS: 0.01,
-    bodyPositionStdM: 0.003,
-    bodyOrientationStdRad: 0.008,
-    restrictions: Object.freeze([
-      'No exact contact forces or MuJoCo contact list are exposed through this profile.',
-      'Object and tool poses are delayed/noisy estimates; evaluator ground truth remains private to application evaluation.',
-      'This is not rendered-camera perception, calibration, or a hardware sensor replica.',
-    ]),
+    label: 'Synthetic delayed/noisy estimator sensitivity profile',
+    source: 'deterministic perturbation of delayed MuJoCo observations; not camera inference',
+    sample_period_s: .02,
+    latency_s: .04,
+    position_noise_std_m: .002,
+    joint_noise_std_rad: .004,
+    orientation_noise_std_rad: .012,
+    contact_state: 'delayed binary gripper/support state only; no contact force, depth, full pair list or tactile-sensor claim',
+    assumed_hardware_interface: true,
+    camera_perception: false,
+    hardware_validated: false,
   }),
 });
 
-function mulberry32(seed) {
-  let state = seed >>> 0;
-  return () => {
-    state |= 0;
-    state = state + 0x6D2B79F5 | 0;
-    let t = Math.imul(state ^ state >>> 15, 1 | state);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
+function xorshift32(seed) {
+  let x = seed >>> 0 || 0x6d2b79f5;
+  return () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return (x >>> 0) / 0x100000000; };
 }
-function normal(rng) {
-  const u1 = Math.max(Number.EPSILON, rng());
-  const u2 = rng();
-  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+function gaussian(random) {
+  const u = Math.max(1e-12, random()), v = Math.max(1e-12, random());
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
 }
-function normalizeQuaternion(q) {
-  const n = Math.hypot(...q);
-  return n > 0 ? q.map(v => v / n) : [1, 0, 0, 0];
+function noisyQuaternion(q, sigma, random) {
+  const axis = [gaussian(random), gaussian(random), gaussian(random)];
+  const n = Math.hypot(...axis) || 1, angle = gaussian(random) * sigma;
+  const s = Math.sin(angle / 2) / n, d = [Math.cos(angle / 2), axis[0] * s, axis[1] * s, axis[2] * s];
+  const [w,x,y,z] = d, [a,b,c,e] = q;
+  const out = [w*a-x*b-y*c-z*e, w*b+x*a+y*e-z*c, w*c-x*e+y*a+z*b, w*e+x*c-y*b+z*a];
+  const m = Math.hypot(...out) || 1; return out.map(value => value / m);
 }
-function multiplyQuaternion(a, b) {
-  const [aw, ax, ay, az] = a, [bw, bx, by, bz] = b;
-  return [
-    aw*bw-ax*bx-ay*by-az*bz,
-    aw*bx+ax*bw+ay*bz-az*by,
-    aw*by-ax*bz+ay*bw+az*bx,
-    aw*bz+ax*by-ay*bx+az*bw,
-  ];
-}
-function perturbQuaternion(q, std, rng) {
-  const rx = normal(rng) * std, ry = normal(rng) * std, rz = normal(rng) * std;
-  const angle = Math.hypot(rx, ry, rz);
-  if (angle < 1e-12) return [...q];
-  const s = Math.sin(angle / 2) / angle;
-  return normalizeQuaternion(multiplyQuaternion(q, [Math.cos(angle / 2), rx*s, ry*s, rz*s]));
+function contactEstimates(source) {
+  const equipment = source.openarm?.equipment || [];
+  const byGeom = new Map();
+  for (const record of equipment) for (const geom of record.geometryIds || []) byGeom.set(geom, record.bodyId);
+  const supportPairs = [];
+  for (const contact of source.contacts || []) {
+    if (!usableContact(contact)) continue;
+    const body1 = byGeom.get(contact.geom1Name), body2 = byGeom.get(contact.geom2Name);
+    if (body1 && !body2) supportPairs.push({ objectId: body1, supportGeom: contact.geom2Name });
+    if (body2 && !body1) supportPairs.push({ objectId: body2, supportGeom: contact.geom1Name });
+    if (body1 && body2) {
+      supportPairs.push({ objectId: body1, supportGeom: contact.geom2Name });
+      supportPairs.push({ objectId: body2, supportGeom: contact.geom1Name });
+    }
+  }
+  const grasp = {};
+  for (const record of equipment) {
+    grasp[record.bodyId] = {};
+    for (const side of ['left','right']) {
+      const state = graspState(source, side, record.bodyId);
+      grasp[record.bodyId][side] = { bilateralContact: Boolean(state.bilateralContact), anyGripperContact: Boolean(state.anyGripperContact) };
+    }
+  }
+  return { grasp, supportPairs, source: 'delayed simulator-derived binary state for sensitivity testing; no force/tactile hardware claim' };
 }
 
 export class OpenArmSyntheticEstimator {
-  constructor({ seed = 1, profileId = 'synthetic_estimator_v1' } = {}) {
-    if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) throw new RangeError('Estimator seed must be a uint32');
-    const profile = OPENARM_LAB_OBSERVATION_PROFILES[profileId];
-    if (!profile || profileId === 'simulator_ground_truth') throw new TypeError('Synthetic estimator requires a synthetic profile');
-    this.profile = profile;
-    this.seed = seed >>> 0;
-    this.rng = mulberry32(this.seed);
-    this.queue = [];
-    this.lastSampleTime = -Infinity;
-    this.sequence = 0;
-  }
-  reset(seed = this.seed) {
-    if (!Number.isInteger(seed) || seed < 0 || seed > 0xffffffff) throw new RangeError('Estimator seed must be a uint32');
-    this.seed = seed >>> 0;
-    this.rng = mulberry32(this.seed);
-    this.queue.length = 0;
-    this.lastSampleTime = -Infinity;
-    this.sequence = 0;
-  }
-  push(observation) {
-    const time = Number(observation?.simulationTimeSeconds);
-    if (!Number.isFinite(time)) return;
-    if (time + 1e-12 < this.lastSampleTime + this.profile.samplingPeriodS) return;
-    this.lastSampleTime = time;
-    this.queue.push(structuredClone(observation));
-    while (this.queue.length > 64) this.queue.shift();
+  constructor({ seed = 1 } = {}) { this.reset(seed); }
+  reset(seed = 1) { this.seed = seed >>> 0; this.random = xorshift32(this.seed); this.queue = []; this.lastSampleTimeS = -Infinity; this.sequence = 0; }
+  push(source) {
+    const time = Number(source?.simulationTimeSeconds); if (!Number.isFinite(time)) return;
+    const profile = OPENARM_LAB_OBSERVATION_PROFILES.synthetic_estimator_v1;
+    if (time - this.lastSampleTimeS + 1e-12 < profile.sample_period_s) return;
+    this.lastSampleTimeS = time; this.queue.push(structuredClone(source));
+    while (this.queue.length > 128) this.queue.shift();
   }
   observe(currentSimulationTimeS) {
-    const threshold = Number(currentSimulationTimeS) - this.profile.latencyS;
-    if (!Number.isFinite(threshold)) return this.invalid('invalid_current_time');
+    const profile = OPENARM_LAB_OBSERVATION_PROFILES.synthetic_estimator_v1, target = currentSimulationTimeS - profile.latency_s;
     let source = null;
-    while (this.queue.length && Number(this.queue[0].simulationTimeSeconds) <= threshold + 1e-12) source = this.queue.shift();
-    if (!source) return this.invalid('latency_buffer_not_ready');
-    const joints = {};
-    for (const [id, joint] of Object.entries(source.joints || {})) {
-      joints[id] = {
-        positionRad: Number(joint.positionRad) + normal(this.rng) * this.profile.jointPositionStdRad,
-        velocityRadS: Number(joint.velocityRadS) + normal(this.rng) * this.profile.jointVelocityStdRadS,
-      };
-    }
-    const bodies = {};
-    for (const [id, body] of Object.entries(source.bodies || {})) {
-      if (!Array.isArray(body.positionM) || !Array.isArray(body.quaternionWxyz)) continue;
-      bodies[id] = {
-        frame: body.frame || 'mujoco_world',
-        positionM: body.positionM.map(v => Number(v) + normal(this.rng) * this.profile.bodyPositionStdM),
-        quaternionWxyz: perturbQuaternion(body.quaternionWxyz.map(Number), this.profile.bodyOrientationStdRad, this.rng),
-      };
-    }
-    const pinchReferences = {};
-    for (const [side, pose] of Object.entries(source.openarm?.pinchReferences || {})) {
-      pinchReferences[side] = {
-        frame: pose.frame || 'mujoco_world',
-        positionM: pose.positionM.map(v => Number(v) + normal(this.rng) * this.profile.bodyPositionStdM),
-        quaternionWxyz: perturbQuaternion(pose.quaternionWxyz.map(Number), this.profile.bodyOrientationStdRad, this.rng),
-      };
-    }
+    for (const candidate of this.queue) if (candidate.simulationTimeSeconds <= target + 1e-12) source = candidate; else break;
+    if (!source) return { valid:false, reason:'latency_buffer_not_ready', profileId:profile.id, sourceSimulationTimeS:null, deliveredSimulationTimeS:currentSimulationTimeS, seed:this.seed, hardwareValidated:false, cameraPerception:false };
+    const joints = Object.fromEntries(Object.entries(source.joints || {}).map(([id,joint]) => [id, {
+      positionRad: Number(joint.positionRad) + gaussian(this.random) * profile.joint_noise_std_rad,
+      velocityRadS: Number(joint.velocityRadS || 0),
+    }]));
+    const bodies = Object.fromEntries(Object.entries(source.bodies || {}).map(([id,body]) => [id, {
+      frame: body.frame || 'mujoco_world',
+      positionM: body.positionM.map(value => Number(value) + gaussian(this.random) * profile.position_noise_std_m),
+      quaternionWxyz: noisyQuaternion(body.quaternionWxyz, profile.orientation_noise_std_rad, this.random),
+      ...(Array.isArray(body.linearVelocityMS) ? {linearVelocityMS:[...body.linearVelocityMS]} : {}),
+      ...(Array.isArray(body.angularVelocityRadS) ? {angularVelocityRadS:[...body.angularVelocityRadS]} : {}),
+    }]));
+    const pinchReferences = Object.fromEntries(Object.entries(source.openarm?.pinchReferences || {}).map(([side,record]) => [side, {
+      frame: record.frame || 'mujoco_world',
+      positionM: record.positionM.map(value => Number(value) + gaussian(this.random) * profile.position_noise_std_m),
+      quaternionWxyz: noisyQuaternion(record.quaternionWxyz, profile.orientation_noise_std_rad, this.random),
+    }]));
     return {
-      valid: true,
-      profileId: this.profile.id,
-      seed: this.seed,
-      sampleSequence: ++this.sequence,
-      sourceSimulationTimeSeconds: Number(source.simulationTimeSeconds),
-      deliveredSimulationTimeSeconds: Number(currentSimulationTimeS),
-      nominalLatencySeconds: this.profile.latencyS,
-      samplingPeriodSeconds: this.profile.samplingPeriodS,
-      joints,
-      bodies,
-      pinchReferences,
-      contactsAvailable: false,
-      limitations: [...this.profile.restrictions],
-      hardwareValidated: false,
-      cameraPerception: false,
+      valid:true, sequence:++this.sequence, profileId:profile.id, sourceSimulationTimeS:source.simulationTimeSeconds,
+      deliveredSimulationTimeS:currentSimulationTimeS, ageSeconds:currentSimulationTimeS-source.simulationTimeSeconds,
+      seed:this.seed, joints, bodies, pinchReferences, contactEstimates:contactEstimates(source), contactsAvailable:false,
+      contactForcesAvailable:false, source:'synthetic delayed/noisy estimator generated from simulator state for pre-hardware sensitivity only',
+      hardwareValidated:false, cameraPerception:false,
     };
   }
-  invalid(reason) {
-    return {
-      valid: false,
-      reason,
-      profileId: this.profile.id,
-      seed: this.seed,
-      contactsAvailable: false,
-      hardwareValidated: false,
-      cameraPerception: false,
-    };
-  }
+}
+
+export function syntheticEstimatorAsProgramObservation(sensor) {
+  if (!sensor?.valid) return null;
+  return {
+    simulationTimeSeconds: sensor.deliveredSimulationTimeS,
+    contactsReadable: false,
+    contactCount: 0,
+    contacts: [],
+    joints: structuredClone(sensor.joints || {}),
+    bodies: structuredClone(sensor.bodies || {}),
+    openarm: {
+      observationContract: sensor.profileId,
+      pinchReferences: structuredClone(sensor.pinchReferences || {}),
+      contactEstimates: structuredClone(sensor.contactEstimates || { grasp:{}, supportPairs:[] }),
+      sourceSimulationTimeS: sensor.sourceSimulationTimeS,
+      observationAgeSeconds: sensor.ageSeconds,
+    },
+  };
 }
