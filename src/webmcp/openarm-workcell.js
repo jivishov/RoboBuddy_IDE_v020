@@ -38,7 +38,7 @@ export function getOpenArmWorkcellDefinitions(facade){
   return[
     {name:'inspect_openarm_workcell',title:'Inspect OpenArm Lab Builder',description:'Read the active Lab Builder SceneSpec/TaskSpec, assumptions, physical asset poses, contacts, pinch frames, scene revision, staged candidate, planner validation and evaluator state. Simulator ground truth is labelled as such; image pixels are not required when an external multimodal agent supplied structured interpretation.',inputSchema:{type:'object',properties:{},additionalProperties:false},readOnly:true},
     {name:'manage_openarm_workcell',title:'Author OpenArm lab from structured image interpretation',description:`Use ${OPENARM_LAB_BUILDER_TOOL_VERSION}. stage_scene accepts an inspectable ${OPENARM_LAB_SCENE_VERSION} with reference provenance, quantity evidence, bench/equipment/obstacles and support relations. Ordinary equipment is free-standing unless dynamic:false is explicitly authored. stage_project reopens an exported project but never starts its program. apply is transactional and explicitly resets to a new scene revision; failed compilation/overlap checks leave the active scene intact. set_task freezes the supported dry_transfer evaluator. plan_transfer creates an editable state-bound program and performs carried-object plus sampled MuJoCo robot-to-authored-lab clearance validation without mutating the plant. export_project returns scene/task/program together. No arbitrary XML, code, URLs, evaluator code or physical-state setters.`,inputSchema:createOpenArmWorkcellSchema(),readOnly:false},
-    {name:'run_openarm_program',title:'Run bounded OpenArm Lab Builder program',description:`Execute ${base.OPENARM_PROGRAM_VERSION} against the CURRENT approved Lab Builder revision. Planner-generated programs are freshness-checked again at execution; edited/external programs remain bounded but do not inherit planner-clearance claims. Application-owned task success remains independent of the user program. Human Stop or Agent Assist revocation cancels execution.`,inputSchema:base.createOpenArmProgramSchema(),readOnly:false},
+    {name:'run_openarm_program',title:'Run bounded OpenArm Lab Builder program',description:`Execute ${base.OPENARM_PROGRAM_VERSION} against the CURRENT approved Lab Builder revision. Planner-generated programs are freshness-checked again at execution; edited/imported programs remain bounded but do not inherit planner-clearance claims. Application-owned task success remains independent of the user program. Human Stop or Agent Assist revocation cancels execution.`,inputSchema:base.createOpenArmProgramSchema(),readOnly:false},
   ];
 }
 export function inspectOpenArmWorkcell(facade,input,epoch){return base.inspectOpenArmWorkcell(facade,input,epoch);}
@@ -70,7 +70,13 @@ export async function manageOpenArmWorkcell(facade,input,signal,epoch){
       result=await backend.applyStagedEquipment(input.stage_id,true,guard);
       const pending=backend.__pendingLabProject;backend.__pendingLabProject=null;
       if(pending?.task){const taskResult=backend.setLabTaskSpec(pending.task);if(!taskResult.supported)throw new Error(taskResult.reason);result.loadedTask=taskResult.task;}
-      if(pending?.program){backend.setLabProgramSpec(pending.program);result.loadedProgram=structuredClone(pending.program);}
+      if(pending?.program){
+        // Reopening creates a new PhysicsSession/attempt. Preserve the program, but never carry
+        // an old state-bound planner certificate into the new session.
+        backend.lastPlanBinding=null;
+        backend.programValidation={origin:'imported_project',stateBound:false,taskSpaceClearanceValidated:false,sampledRobotLinkClearanceValidated:false,continuousCollisionGuarantee:false,requiresReplanBeforeClaimedClearance:true};
+        backend.setLabProgramSpec(pending.program);result.loadedProgram=structuredClone(pending.program);
+      }
       result.autoStarted=false;
     }else if(input.command==='set_task')result=backend.setLabTaskSpec(input.task_spec);
     else if(input.command==='plan_transfer')result=await backend.planLabTransfer();
@@ -81,5 +87,11 @@ export async function manageOpenArmWorkcell(facade,input,signal,epoch){
 }
 export async function runOpenArmProgram(facade,input,signal,epoch){
   if(!isLabBuilder(facade))return base.runOpenArmProgram(facade,input,signal,epoch);
-  const backend=backendFor(facade);backend.setLabProgramSpec(input);return base.runOpenArmProgram(facade,input,signal,epoch);
+  const backend=backendFor(facade);
+  try{backend.setLabProgramSpec(input);}catch(error){
+    const message=String(error?.message||error);
+    if(/stale|validity tolerance|session|scene revision|moved beyond/i.test(message))throw new WebMcpDomainError('STALE_PLAN',message,{retryable:true,details:{requiresReplan:true}});
+    throw new WebMcpDomainError('INVALID_PROGRAM_STATE',message.slice(0,500),{retryable:true});
+  }
+  return base.runOpenArmProgram(facade,input,signal,epoch);
 }
