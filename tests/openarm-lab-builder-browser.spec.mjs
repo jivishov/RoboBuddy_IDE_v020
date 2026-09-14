@@ -74,26 +74,27 @@ test('standalone Lab Builder authors, plans and physically evaluates a dry vial 
   const planned = await page.evaluate(async ({ TASK_VERSION, TOOL_VERSION }) => {
     const task = await callTool('manage_openarm_workcell', { schema_version: TOOL_VERSION, command: 'set_task', task_spec: {
       schema_version: TASK_VERSION, id: 'transfer_sample', type: 'dry_transfer', object_id: 'sample', receiver_id: 'receiver', side: 'left', required_action_sequence: true,
-      tolerances: { position_m: .015, settle_speed_ms: .035, settle_angular_speed_rads: .8, settle_dwell_s: .20, retreat_m: .05, max_penetration_m: .002 },
+      tolerances: { position_m: .015, orientation_rad: .35, settle_speed_ms: .035, settle_angular_speed_rads: .8, settle_dwell_s: .20, retreat_m: .05, max_penetration_m: .002 },
     } });
     const plan = await callTool('manage_openarm_workcell', { schema_version: TOOL_VERSION, command: 'plan_transfer' });
-    return { task, plan, binding: sim.getWorkcellState().generatedPlanBinding };
+    return { task, plan, binding: sim.getWorkcellState().generatedPlanBinding, validation: sim.getWorkcellState().programValidation };
   }, { TASK_VERSION, TOOL_VERSION });
   expect(planned.task.ok).toBe(true);
   expect(planned.plan.ok).toBe(true);
   expect(planned.plan.result.supported, JSON.stringify(planned.plan)).toBe(true);
   expect(planned.binding.sceneRevision).toBe(authored.state.authority.sceneRevision);
+  expect(planned.validation.taskSpaceClearanceValidated).toBe(true);
+  expect(planned.validation.sampledRobotLinkClearanceValidated).toBe(true);
+  expect(planned.validation.continuousCollisionGuarantee).toBe(false);
 
-  const stale = await page.evaluate(async ({ TOOL_VERSION }) => {
+  const freshness = await page.evaluate(async () => {
     const plan = structuredClone(sim.programSpec);
     await sim.advanceTime(.02);
     const sample = sim.lastObservation.bodies.lab_sample;
-    // A test-only MuJoCo disturbance is deliberately NOT exposed by WebMCP; verify the binding itself
-    // survives mere elapsed time when relevant state remains within its declared tolerance.
     const stillFresh = (() => { try { sim.setLabProgramSpec(plan); return true; } catch { return false; } })();
     return { stillFresh, position: sample.positionM, binding: sim.getWorkcellState().generatedPlanBinding };
-  }, { TOOL_VERSION });
-  expect(stale.stillFresh).toBe(true);
+  });
+  expect(freshness.stillFresh).toBe(true);
 
   const execution = await page.evaluate(async () => callTool('run_openarm_program', structuredClone(sim.programSpec)));
   await writeFile(testInfo.outputPath('lab-transfer-result.json'), JSON.stringify(execution, null, 2));
@@ -104,24 +105,29 @@ test('standalone Lab Builder authors, plans and physically evaluates a dry vial 
   expect(outcome.evaluation.success, JSON.stringify(outcome.evaluation)).toBe(true);
   for (const flag of ['grasp','lift','transport','receivingRegion','support','release','settled','retreat']) expect(outcome.evaluation.flags[flag]).toBe(true);
   expect(outcome.evaluation.flags.excessivePenetration).toBe(false);
+  expect(outcome.evaluation.flags.prohibitedContact).toBe(false);
   expect(outcome.project.auto_start).toBe(false);
   expect(outcome.project.scene.id).toBe('synthetic_lab_demo');
   expect(outcome.project.task.id).toBe('transfer_sample');
-  expect(outcome.project.program.segments.length).toBeGreaterThan(5);
+  expect(outcome.project.program.segments.length).toBeGreaterThan(7);
+  expect(outcome.project.execution_profile.program_validation.sampledRobotLinkClearanceValidated).toBe(true);
   await page.screenshot({ path: testInfo.outputPath('completed-lab-transfer.png') });
 
   const estimator = await page.evaluate(async () => {
+    const target = sim.lastObservation.joints.openarm_left_finger_joint1.targetRad ?? sim.lastObservation.joints.openarm_left_finger_joint1.positionRad;
     sim.setObservationProfile('synthetic_estimator_v1', { seed: 12345 });
-    await sim.advanceTime(.08);
+    await sim.applyPhysicalTargets({ openarm_left_finger_joint1: target }, { maxSteps: 200, advanceSeconds: .08 });
     const first = sim.getSensorObservation();
     sim.setObservationProfile('synthetic_estimator_v1', { seed: 12345 });
-    await sim.advanceTime(.08);
+    await sim.applyPhysicalTargets({ openarm_left_finger_joint1: target }, { maxSteps: 200, advanceSeconds: .08 });
     const second = sim.getSensorObservation();
     return { first, second, state: sim.getWorkcellState() };
   });
+  expect(estimator.first.valid).toBe(true);
   expect(estimator.first.profileId).toBe('synthetic_estimator_v1');
   expect(estimator.first.contactsAvailable).toBe(false);
   expect(estimator.first.cameraPerception).toBe(false);
+  expect(estimator.second.valid).toBe(true);
   expect(estimator.state.preHardwarePackageStatus).toContain('partial');
 
   expect(errors, errors.join('\n')).toEqual([]);
