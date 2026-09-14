@@ -33,7 +33,7 @@ export const OPENARM_LAB_BUILDER_SCENARIO = Object.freeze({
   portablePython: Object.freeze({ referenceActions: Object.freeze([]) }),
   taskEvaluation: Object.freeze({
     source: 'Application-owned frozen dry-transfer evaluator over MuJoCo body state, velocities and named contacts',
-    requires: Object.freeze(['new bilateral grasp', 'lift', 'carried displacement', 'receiver region and support', 'release', 'settling', 'retreat']),
+    requires: Object.freeze(['new sustained bilateral grasp', 'lift while held', 'carried displacement while held', 'receiver region and support while held', 'release', 'settling', 'retreat']),
     syntheticSuccessEvents: false,
   }),
   capabilities: Object.freeze({
@@ -43,7 +43,7 @@ export const OPENARM_LAB_BUILDER_SCENARIO = Object.freeze({
   limitations: Object.freeze([
     'The authoring image is interpreted by the external multimodal agent; RoboBuddy does not require or claim its own vision model.',
     'Image-estimated dimensions and material/contact properties remain assumptions until independently measured. Tight-clearance claims must be treated as conditional on those inputs.',
-    'The initial transfer planner is conservative task-space clearance planning plus runtime IK/physics; it is not a mathematical continuous-collision guarantee for every robot link.',
+    'Generated dry-transfer plans combine carried-object corridor checks with sampled MuJoCo narrow-phase clearance for the selected arm against authored lab geometry. Sampling is bounded and does not constitute a mathematical continuous-collision guarantee; self/opposite-arm contacts remain subject to the physical runtime and evaluator/safety evidence.',
     'No object attachment, snapping, pose assignment for task credit, collision disabling, hidden reference arrangement, hardware transport or hardware validation is provided.',
   ]),
 });
