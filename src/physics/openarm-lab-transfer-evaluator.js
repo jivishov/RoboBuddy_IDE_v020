@@ -1,17 +1,36 @@
 export * from './openarm-lab-transfer-evaluator-base.js';
 import { OpenArmLabTransferEvaluator as BaseEvaluator } from './openarm-lab-transfer-evaluator-base.js';
+import { worldPoint } from './openarm-observation.js';
 
 const PHASE_FLAGS = Object.freeze(['grasp','lift','transport','receivingRegion','support','release','settled','retreat','excessivePenetration','prohibitedContact']);
 
-// Targeted correction layer: the base evaluator sets phase flags before its private event helper,
-// which can suppress the corresponding event record. Preserve the base logic and synthesize only
-// missing transitions after each observation; task credit still comes exclusively from the base
-// read-only evaluator state.
+// Correction layer over the initial evaluator implementation. Task credit remains application-owned
+// and read-only: this layer fixes transition logging and measures retreat from the declared grasp
+// reference rather than from a procedural body's bottom-origin.
 export class OpenArmLabTransferEvaluator extends BaseEvaluator {
   observe(observation) {
     const before = this.snapshot()?.flags || {};
-    const result = super.observe(observation);
-    const after = result?.flags || {};
+    super.observe(observation);
+
+    if (this.task?.required_action_sequence !== false && this.flags?.release) {
+      const object = this.last?.records?.object;
+      const body = object ? observation?.bodies?.[object.bodyId] : null;
+      const pinch = observation?.openarm?.pinchReferences?.[this.task.side]?.positionM;
+      const localGrasp = object?.affordances?.graspReferenceM || [0, 0, 0];
+      if (body && Array.isArray(pinch)) {
+        const graspPoint = worldPoint(body, localGrasp);
+        const distance = Math.hypot(...pinch.map((value, index) => value - graspPoint[index]));
+        this.flags.retreat = distance >= this.task.tolerances.retreat_m;
+        if (!this.flags.retreat) this.events = (this.events || []).filter(event => event?.type !== 'retreat');
+      } else {
+        this.flags.retreat = false;
+      }
+      const sequence = this.flags.grasp && this.flags.lift && this.flags.transport && this.flags.receivingRegion
+        && this.flags.support && this.flags.release && this.flags.settled && this.flags.retreat;
+      this.success = Boolean(sequence && !this.initialAlreadySatisfied && !this.flags.excessivePenetration && !this.flags.prohibitedContact);
+    }
+
+    const after = this.snapshot()?.flags || {};
     const time = Number(observation?.simulationTimeSeconds);
     for (const flag of PHASE_FLAGS) {
       if (before[flag] === true || after[flag] !== true) continue;
