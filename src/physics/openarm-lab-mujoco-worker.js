@@ -49,9 +49,9 @@ function resolveAddresses(modelSha256) {
     actuatorState.set(actuator.id, { ...actuator, id, controlRange });
   }
   for (const body of descriptor.bodies || []) {
-    const id = idFor('mjOBJ_BODY', body.id); let freeDof = null;
-    if (body.freeJointId) { const j = idFor('mjOBJ_JOINT', body.freeJointId); freeDof = Number(model.jnt_dofadr[j]); if (!Number.isInteger(freeDof) || freeDof < 0) throw new Error(`Invalid free joint for ${body.id}`); }
-    bodyState.set(body.id, { id, freeDof });
+    const id = idFor('mjOBJ_BODY', body.id); let freeDof = null, freeQpos = null;
+    if (body.freeJointId) { const j = idFor('mjOBJ_JOINT', body.freeJointId); freeDof = Number(model.jnt_dofadr[j]); freeQpos = Number(model.jnt_qposadr[j]); if (!Number.isInteger(freeDof) || freeDof < 0 || !Number.isInteger(freeQpos) || freeQpos < 0) throw new Error(`Invalid free joint for ${body.id}`); }
+    bodyState.set(body.id, { id, freeDof, freeQpos });
   }
   const timestepSeconds = Number(model.opt?.timestep), expected = Number(descriptor.physics.timestepSeconds);
   if (!Number.isFinite(timestepSeconds) || Math.abs(timestepSeconds - expected) > 1e-12) throw new Error(`Unexpected timestep ${timestepSeconds}`);
@@ -141,6 +141,7 @@ function integrate() { servo.apply(); mujoco.mj_step(model, data); mujoco.mj_for
 function step(count = 1) { if (!Number.isInteger(count) || count < 1 || count > MAX_ADVANCE_STEPS_PER_REQUEST) throw new RangeError('Invalid step count'); if (!paused) for (let i = 0; i < count; i += 1) integrate(); return observation(); }
 function stepSampled(count = 1, sampleEverySteps = 1) { if (!Number.isInteger(count) || count < 1 || count > MAX_ADVANCE_STEPS_PER_REQUEST) throw new RangeError('Invalid step count'); if (!Number.isInteger(sampleEverySteps) || sampleEverySteps < 1) throw new RangeError('Invalid sample cadence'); if (paused) return { observations: [observation()], executedSteps: 0, sampleEverySteps }; const expected = sampledObservationCount(count, sampleEverySteps); if (expected > MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE) throw new RangeError('Observation sample budget exceeded'); const observations = []; for (let i = 1; i <= count; i += 1) { integrate(); if (i === count || i % sampleEverySteps === 0) observations.push(observation()); } return { observations, executedSteps: count, sampleEverySteps }; }
 function validatedJointTarget(jointId, value) { const joint = jointState.get(jointId), actuator = positionActuator(jointId, true), target = Number(value); if (!joint || !Number.isFinite(target)) throw new Error(`Invalid joint target ${jointId}`); if (target < actuator.controlRange[0] || target > actuator.controlRange[1]) throw new RangeError(`${jointId} target outside actuator range`); if (target < joint.range[0] || target > joint.range[1]) throw new RangeError(`${jointId} target outside joint range`); return target; }
+function finiteVector(value,length,label){if(!Array.isArray(value)||value.length!==length||value.some(v=>typeof v!=='number'||!Number.isFinite(v)))throw new TypeError(`${label} requires ${length} finite numbers`);return value.map(Number);}
 
 function validateToolWaypoints(payload = {}) {
   const side = payload.side; if (!['left', 'right'].includes(side)) throw new TypeError('Path validation side must be left or right');
@@ -153,11 +154,17 @@ function validateToolWaypoints(payload = {}) {
   const geomNames = Array.from({ length: Number(model.ngeom) }, (_, id) => nameForGeom(id));
   const ownerByGeom = new Map();
   for (const record of equipment?.records || []) for (const name of record.geometryIds || []) ownerByGeom.set(name, record.id);
-  const robotGeoms = geomNames.map((name, id) => ({ name, id })).filter(item => typeof item.name === 'string' && item.name.includes(`_${side}_collision_`));
+  const robotGeoms = geomNames.map((name, id) => ({ name, id })).filter(item => typeof item.name === 'string' && item.name.includes(`_${side}_collision_`) && !item.name.startsWith('base_link_'));
+  const opposite = side==='left'?'right':'left';
+  const oppositeRobotIds = new Set(geomNames.map((name,id)=>({name,id})).filter(item=>typeof item.name==='string'&&item.name.includes(`_${opposite}_collision_`)).map(item=>item.id));
+  const selectedRobotIds = new Set(robotGeoms.map(item=>item.id));
   const labGeoms = geomNames.map((name, id) => ({ name, id, owner: ownerByGeom.get(name) })).filter(item => item.owner && !ignored.has(item.owner));
   const scratch = new mujoco.MjData(model), fromto = new Float64Array(6); let totalSamples = 0, minimumObservedM = Infinity;
   try {
-    scratch.qpos.set(data.qpos); scratch.qvel.set(data.qvel); mujoco.mj_forward(model, scratch);
+    scratch.qpos.set(data.qpos); scratch.qvel.set(data.qvel);
+    if(payload.startJointPositionsRad!==undefined){if(!payload.startJointPositionsRad||typeof payload.startJointPositionsRad!=='object'||Array.isArray(payload.startJointPositionsRad))throw new TypeError('startJointPositionsRad must be an object');const entries=Object.entries(payload.startJointPositionsRad);if(entries.length>7)throw new RangeError('Too many start joint overrides');for(const[id,value]of entries){if(!id.startsWith(`openarm_${side}_joint`)||id.includes('finger'))throw new TypeError(`Invalid planning start joint ${id}`);const joint=jointState.get(id);if(!joint)throw new TypeError(`Unknown planning start joint ${id}`);scratch.qpos[joint.qpos]=validatedJointTarget(id,value);scratch.qvel[joint.dof]=0;}}
+    if(payload.bodyPoseOverrides!==undefined){if(!payload.bodyPoseOverrides||typeof payload.bodyPoseOverrides!=='object'||Array.isArray(payload.bodyPoseOverrides))throw new TypeError('bodyPoseOverrides must be an object');const entries=Object.entries(payload.bodyPoseOverrides);if(entries.length>12)throw new RangeError('Too many planning body overrides');for(const[bodyId,pose]of entries){const body=bodyState.get(bodyId);if(!body||body.freeQpos==null||!bodyId.startsWith('lab_'))continue;const position=finiteVector(pose?.positionM,3,`${bodyId}.positionM`),quat=finiteVector(pose?.quaternionWxyz,4,`${bodyId}.quaternionWxyz`),norm=Math.hypot(...quat);if(Math.abs(norm-1)>.02)throw new RangeError(`${bodyId} planning quaternion is not normalized`);for(let i=0;i<3;i++)scratch.qpos[body.freeQpos+i]=position[i];for(let i=0;i<4;i++)scratch.qpos[body.freeQpos+3+i]=quat[i]/norm;for(let i=0;i<6;i++)scratch.qvel[body.freeDof+i]=0;}}
+    mujoco.mj_forward(model, scratch);
     const armJoints = Array.from({ length: 7 }, (_, index) => jointState.get(`openarm_${side}_joint${index + 1}`));
     const diagnostics = [];
     for (let waypointIndex = 0; waypointIndex < waypoints.length; waypointIndex += 1) {
@@ -177,25 +184,21 @@ function validateToolWaypoints(payload = {}) {
           for (const labGeom of labGeoms) {
             const distance = Number(mujoco.mj_geomDistance(model, scratch, robotGeom.id, labGeom.id, Math.max(.015, minimumSeparationM + .005), fromto));
             if (Number.isFinite(distance)) { segmentMinimumM = Math.min(segmentMinimumM, distance); minimumObservedM = Math.min(minimumObservedM, distance); }
-            if (Number.isFinite(distance) && distance < minimumSeparationM) {
-              return { valid: false, reason: 'robot_lab_clearance', side, waypointIndex, waypointLabel: String(waypoint.label || `waypoint ${waypointIndex + 1}`), sample, samples, minimumSeparationM, observedDistanceM: distance, robotGeom: robotGeom.name, labGeom: labGeom.name, equipmentId: labGeom.owner, totalSamples, activePlantMutated: false };
-            }
+            if (Number.isFinite(distance) && distance < minimumSeparationM) return { valid:false,reason:'robot_lab_clearance',side,waypointIndex,waypointLabel:String(waypoint.label||`waypoint ${waypointIndex+1}`),sample,samples,minimumSeparationM,observedDistanceM:distance,robotGeom:robotGeom.name,labGeom:labGeom.name,equipmentId:labGeom.owner,totalSamples,activePlantMutated:false };
           }
         }
+        const collection=scratch.contact;
+        if(collection){const count=Number(scratch.ncon||0),available=typeof collection.size==='function'?Number(collection.size()):count;for(let contactIndex=0;contactIndex<Math.min(count,available);contactIndex++){const contact=typeof collection.get==='function'?collection.get(contactIndex):collection[contactIndex];if(!contact)continue;try{const g1=Number(contact.geom?.[0]??contact.geom1??-1),g2=Number(contact.geom?.[1]??contact.geom2??-1);const selected1=selectedRobotIds.has(g1),selected2=selectedRobotIds.has(g2);if(!(selected1||selected2))continue;const other=selected1?g2:g1,otherName=nameForGeom(other),otherOwner=ownerByGeom.get(otherName);if(otherOwner&&ignored.has(otherOwner))continue;const selfContact=(selected1&&selected2),oppositeContact=oppositeRobotIds.has(other);if(selfContact||oppositeContact){return{valid:false,reason:selfContact?'selected_arm_self_collision':'opposite_arm_collision',side,waypointIndex,waypointLabel:String(waypoint.label||`waypoint ${waypointIndex+1}`),sample,samples,robotGeom:nameForGeom(selected1?g1:g2),otherGeom:otherName,totalSamples,activePlantMutated:false};}}finally{contact.delete?.();}}collection.delete?.();}
       }
       diagnostics.push({ waypointIndex, label: String(waypoint.label || `waypoint ${waypointIndex + 1}`), samples, positionResidualM: solution.positionResidualM, orientationResidualRad: solution.orientationResidualRad, minimumRobotLabSeparationM: Number.isFinite(segmentMinimumM) ? segmentMinimumM : null });
     }
-    return { valid: true, side, waypoints: diagnostics, minimumSeparationM, minimumObservedM: Number.isFinite(minimumObservedM) ? minimumObservedM : null, jointSampleStepRad, totalSamples, activePlantMutated: false, continuousCollisionGuarantee: false, scope: 'sampled narrow-phase selected-arm collision geometry versus all non-ignored authored lab geometry; task object is separately checked as a carried envelope' };
+    return { valid:true,side,waypoints:diagnostics,minimumSeparationM,minimumObservedM:Number.isFinite(minimumObservedM)?minimumObservedM:null,jointSampleStepRad,totalSamples,activePlantMutated:false,continuousCollisionGuarantee:false,scope:'sampled narrow-phase selected-arm collision geometry versus all non-ignored authored lab geometry plus MuJoCo-filtered selected-arm self/opposite-arm collision contacts; task object is separately checked as a carried envelope',startStateSource:payload.startJointPositionsRad||payload.bodyPoseOverrides?'caller-selected observation contract':'authoritative current MuJoCo state' };
   } finally { scratch.delete(); }
 }
 
 function command(payload = {}) {
   let targets;
-  if (payload.type === 'validate_tool_waypoints') {
-    const validation = validateToolWaypoints(payload);
-    motionPlan = { type: 'sampled_path_validation', validation, collisionFreePath: validation.valid, activePlantMutated: false };
-    return observation();
-  }
+  if (payload.type === 'validate_tool_waypoints') { const validation = validateToolWaypoints(payload); motionPlan = { type:'sampled_path_validation',validation,collisionFreePath:validation.valid,activePlantMutated:false }; return observation(); }
   if (payload.type === 'set_joint_targets' || payload.type === 'move_joint_targets') {
     if (!payload.targetsRad || typeof payload.targetsRad !== 'object' || Array.isArray(payload.targetsRad) || !Object.keys(payload.targetsRad).length) throw new Error('Joint targets required');
     targets = Object.fromEntries(Object.entries(payload.targetsRad).map(([id, value]) => [id, validatedJointTarget(id, value)]));
