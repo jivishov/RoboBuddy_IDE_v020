@@ -45,8 +45,20 @@ export function worldPoint(body, local) {
   return [a+w*t[0]+y*t[2]-z*t[1], b+w*t[1]+z*t[0]-x*t[2], c+w*t[2]+x*t[1]-y*t[0]].map((v, i) => v + body.positionM[i]);
 }
 const finiteVec3 = p => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite);
+function estimatedContactCondition(observation, condition) {
+  if (observation.openarm?.observationContract !== 'synthetic_estimator_v1') return null;
+  const estimates = observation.openarm?.contactEstimates;
+  if (!estimates) return false;
+  if (condition.type === 'bilateral_grasp') return Boolean(estimates.grasp?.[condition.object_id]?.[condition.side]?.bilateralContact);
+  if (condition.type === 'released') return estimates.grasp?.[condition.object_id]?.[condition.side]
+    ? !estimates.grasp[condition.object_id][condition.side].anyGripperContact : false;
+  if (condition.type === 'supported') return (estimates.supportPairs || []).some(pair => pair.objectId === condition.object_id && pair.supportGeom === condition.support_geom);
+  return null;
+}
 export function conditionMet(observation, condition) {
   const o = observation;
+  const estimated = estimatedContactCondition(o, condition);
+  if (estimated !== null) return estimated;
   if (condition.type === 'bilateral_grasp' || condition.type === 'released' || condition.type === 'supported') {
     if (!contactEvidenceComplete(o) || !o.bodies?.[condition.object_id] || !objectGeometryIds(o, condition.object_id).length) return false;
   }
