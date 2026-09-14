@@ -14,7 +14,6 @@ function baseAssets(extra=[]){
   ];
 }
 function scene(id,extra=[]){return{schema_version:SCENE_VERSION,id,reference:{mode:'synthetic_fixture',label:'negative-control fixture',image_pixels_available:false},assumptions:['Software negative-control fixture; not real-photo reconstruction evidence.'],assets:baseAssets(extra)};}
-function taskSpec(){return{schema_version:TASK_VERSION,id:'transfer_sample',type:'dry_transfer',object_id:'sample',receiver_id:'receiver',side:'left',required_action_sequence:true,tolerances:{position_m:.015,orientation_rad:.35,settle_speed_ms:.035,settle_angular_speed_rads:.8,settle_dwell_s:.2,retreat_m:.05,max_penetration_m:.002}};}
 
 async function openBuilderWithTools(page){
   await page.goto('/tests/fixtures/openarm-lab-builder.html');
@@ -45,7 +44,7 @@ test('blocked intermediate corridor is rejected without scene auto-adjustment',a
   const blocker={id:'blocker',kind:'obstacle',position_m:[.67,.225,1.005],dimensions_m:[.060,.030,.160],mass_kg:.30,dynamic:false,supported_by:'bench',role:'placement-corridor obstruction',quantity_evidence:{source:'source_provided'}};
   const authored=await applySceneAndTask(page,scene('blocked_layout',[blocker]));expect(authored.applied.ok,JSON.stringify(authored.applied)).toBe(true);expect(authored.task.ok).toBe(true);
   const before=await page.evaluate(()=>({revision:sim.getPhysicalAuthorityToken().sceneRevision,scene:structuredClone(sim.sceneSpec),program:sim.programSpec}));
-  const plan=await page.evaluate(()=>callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'plan_transfer'}),{TOOL_VERSION});
+  const plan=await page.evaluate(({TOOL_VERSION})=>callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'plan_transfer'}),{TOOL_VERSION});
   expect(plan.ok,JSON.stringify(plan)).toBe(true);expect(plan.result.supported).toBe(false);expect(JSON.stringify(plan.result)).toContain('clearance');
   const after=await page.evaluate(()=>({revision:sim.getPhysicalAuthorityToken().sceneRevision,scene:structuredClone(sim.sceneSpec),program:sim.programSpec,staged:sim.getWorkcellState().staged}));
   expect(after.revision).toBe(before.revision);expect(after.scene).toEqual(before.scene);expect(after.program).toBeNull();expect(after.staged).toBeNull();
@@ -56,7 +55,7 @@ test('generated plan is rejected when a loose scene body moves materially withou
   test.setTimeout(120000);const errors=[];page.on('pageerror',error=>errors.push(String(error)));await openBuilderWithTools(page);
   const drifter={id:'drifter',kind:'block',position_m:[.35,-.35,1.30],dimensions_m:[.030,.030,.030],mass_kg:.04,dynamic:true,role:'free-body freshness control',quantity_evidence:{source:'source_provided'}};
   const authored=await applySceneAndTask(page,scene('stale_plan_layout',[drifter]));expect(authored.applied.ok,JSON.stringify(authored.applied)).toBe(true);expect(authored.task.ok).toBe(true);
-  const planned=await page.evaluate(async()=>{const result=await callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'plan_transfer'});return{result,program:structuredClone(sim.programSpec),authority:sim.getPhysicalAuthorityToken(),binding:sim.getWorkcellState().generatedPlanBinding,drifter:[...sim.lastObservation.bodies.lab_drifter.positionM]};},{TOOL_VERSION});
+  const planned=await page.evaluate(async({TOOL_VERSION})=>{const result=await callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'plan_transfer'});return{result,program:structuredClone(sim.programSpec),authority:sim.getPhysicalAuthorityToken(),binding:sim.getWorkcellState().generatedPlanBinding,drifter:[...sim.lastObservation.bodies.lab_drifter.positionM]};},{TOOL_VERSION});
   expect(planned.result.ok).toBe(true);expect(planned.result.result.supported,JSON.stringify(planned.result)).toBe(true);expect(planned.binding.relevantBodyPositionsM.drifter).toBeTruthy();
   const moved=await page.evaluate(async()=>{await sim.advanceTime(.08);return{authority:sim.getPhysicalAuthorityToken(),drifter:[...sim.lastObservation.bodies.lab_drifter.positionM]};});
   expect(moved.authority.sceneRevision).toBe(planned.authority.sceneRevision);expect(Math.hypot(...moved.drifter.map((value,index)=>value-planned.drifter[index]))).toBeGreaterThan(.01);
@@ -70,8 +69,8 @@ test('generated plan is rejected when a loose scene body moves materially withou
 test('exported project reopens without auto-starting its bounded program',async({page})=>{
   test.setTimeout(120000);const errors=[];page.on('pageerror',error=>errors.push(String(error)));await openBuilderWithTools(page);
   const authored=await applySceneAndTask(page,scene('roundtrip_layout'));expect(authored.applied.ok).toBe(true);
-  const plan=await page.evaluate(()=>callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'plan_transfer'}),{TOOL_VERSION});expect(plan.result.supported,JSON.stringify(plan)).toBe(true);
-  const exported=await page.evaluate(()=>callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'export_project'}),{TOOL_VERSION});expect(exported.ok).toBe(true);expect(exported.result.auto_start).toBe(false);
+  const plan=await page.evaluate(({TOOL_VERSION})=>callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'plan_transfer'}),{TOOL_VERSION});expect(plan.result.supported,JSON.stringify(plan)).toBe(true);
+  const exported=await page.evaluate(({TOOL_VERSION})=>callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'export_project'}),{TOOL_VERSION});expect(exported.ok).toBe(true);expect(exported.result.auto_start).toBe(false);
   const reopened=await page.evaluate(async({project,TOOL_VERSION})=>{const inspection=await callTool('inspect_openarm_workcell',{});const staged=await callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'stage_project',expected_scene_revision:inspection.authority.sceneRevision,project});const applied=await callTool('manage_openarm_workcell',{schema_version:TOOL_VERSION,command:'apply',stage_id:staged.result.id,acknowledge_reset:true});return{applied,state:sim.getWorkcellState(),evaluation:sim.getTaskEvaluation(),execution:testApp.getExecutionState()};},{project:exported.result,TOOL_VERSION});
   expect(reopened.applied.ok,JSON.stringify(reopened.applied)).toBe(true);expect(reopened.applied.result.autoStarted).toBe(false);expect(reopened.execution).toBe('idle');expect(reopened.state.taskSpec.id).toBe('transfer_sample');expect(reopened.state.programSpec.segments.length).toBeGreaterThan(7);expect(reopened.evaluation.success).toBe(false);
   expect(errors,errors.join('\n')).toEqual([]);
