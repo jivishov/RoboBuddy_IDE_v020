@@ -6,9 +6,16 @@
 <script type="module">
 import { OpenArmLabBuilderSimulator } from '/src/physics/openarm-lab-builder-simulator.js';
 import { OPENARM_LAB_BUILDER_SCENE_ID } from '/src/physics/openarm-lab-builder.js';
-window.sim = new OpenArmLabBuilderSimulator(document.querySelector('canvas'));
-await sim.setScenario('openarm', { simulationMode: 'physical_mujoco', physicalSceneId: OPENARM_LAB_BUILDER_SCENE_ID, labBuilder: true });
-window.ready = true;
-function frame() { sim.renderFrame(); requestAnimationFrame(frame); }
-frame();
+window.ready = false;
+window.startupError = null;
+try {
+  window.sim = new OpenArmLabBuilderSimulator(document.querySelector('canvas'));
+  await sim.setScenario('openarm', { simulationMode: 'physical_mujoco', physicalSceneId: OPENARM_LAB_BUILDER_SCENE_ID, labBuilder: true });
+  window.ready = true;
+  function frame() { sim.renderFrame(); requestAnimationFrame(frame); }
+  frame();
+} catch (error) {
+  window.startupError = String(error?.stack || error?.message || error);
+  console.error('Lab Builder startup failed', error);
+}
 </script></body></html>
