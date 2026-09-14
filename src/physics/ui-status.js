@@ -1,5 +1,7 @@
 import { capabilityLabel, physicsCapabilityFor } from './capabilities.js';
 
+const OPENARM_LAB_BUILDER_TASK_ID = 'openarm-image-assisted-lab-builder';
+
 const PHYSICAL_MODE_CHIP = Object.freeze({
   asimov: 'ASIMOV 1 PHYSICAL WORKSPACE · MUJOCO AUTHORITY',
   openarm: 'OPENARM V2 PHYSICAL WORKSPACE · MUJOCO AUTHORITY',
@@ -24,6 +26,10 @@ const PHYSICAL_SIDE_SUMMARY = Object.freeze({
   microduck: 'MicroDuck alpha. Browser MuJoCo is the single physical authority for the free trunk, fourteen actuated joints and the free ball; the official runtime visual follows observed state only, the root is never driven, and hardware validation remains pending.',
 });
 
+function labBuilderSelected(profileId) {
+  return profileId === 'openarm' && document.getElementById('taskSelect')?.value === OPENARM_LAB_BUILDER_TASK_ID;
+}
+
 export function applyPhysicsPreviewStatus(profileId, { physical = true } = {}) {
   const capability = physicsCapabilityFor(profileId, { physical });
   const backendBadge = document.getElementById('physicsBackendBadge');
@@ -31,19 +37,21 @@ export function applyPhysicsPreviewStatus(profileId, { physical = true } = {}) {
   const simBadge = document.getElementById('simBadge');
   const fidelityText = document.getElementById('fidelityText');
   const sideRobotSummary = document.getElementById('sideRobotSummary');
+  const labBuilder = labBuilderSelected(profileId);
   if (backendBadge) {
     backendBadge.textContent = capabilityLabel(capability);
     backendBadge.title = `${capability.capability} ${capability.limitations.join(' ')}`;
   }
-  if (modeChip && capability.backend === 'browser-mujoco' && PHYSICAL_MODE_CHIP[profileId]) {
-    modeChip.textContent = PHYSICAL_MODE_CHIP[profileId];
+  if (labBuilder && capability.backend === 'browser-mujoco') {
+    if (modeChip) modeChip.textContent = 'OPENARM LAB BUILDER · MUJOCO AUTHORITY';
+    if (simBadge) simBadge.textContent = 'ROBOT-ONLY START · AUTHORED DRY RIGID BODIES · NOT HARDWARE CALIBRATION';
+    if (sideRobotSummary) sideRobotSummary.textContent = 'OpenArm V2 Lab Builder. MuJoCo owns the source-derived robot and every authored rigid body. The workspace starts without the reference flask/beaker workcell; SceneSpec assumptions and fixed idealizations remain explicit, and hardware validation is pending.';
+    if (fidelityText) fidelityText.textContent = 'OpenArm Lab Builder uses one authoritative browser MuJoCo PhysicsSession. Only the source-derived OpenArm V2 robot, its declared world-fixed mount/pedestal, and ground are present before authoring. Laboratory geometry comes from the active SceneSpec; support metadata never welds a loose object. Dry-transfer success is evaluated from ordered MuJoCo contact/body evidence independently of the executing program. Image-derived dimensions, contact parameters and the synthetic estimator are pre-hardware assumptions, not camera perception or hardware fidelity.';
+    return capability;
   }
-  if (simBadge && capability.backend === 'browser-mujoco' && PHYSICAL_SIM_BADGE[profileId]) {
-    simBadge.textContent = PHYSICAL_SIM_BADGE[profileId];
-  }
-  if (sideRobotSummary && capability.backend === 'browser-mujoco' && PHYSICAL_SIDE_SUMMARY[profileId]) {
-    sideRobotSummary.textContent = PHYSICAL_SIDE_SUMMARY[profileId];
-  }
+  if (modeChip && capability.backend === 'browser-mujoco' && PHYSICAL_MODE_CHIP[profileId]) modeChip.textContent = PHYSICAL_MODE_CHIP[profileId];
+  if (simBadge && capability.backend === 'browser-mujoco' && PHYSICAL_SIM_BADGE[profileId]) simBadge.textContent = PHYSICAL_SIM_BADGE[profileId];
+  if (sideRobotSummary && capability.backend === 'browser-mujoco' && PHYSICAL_SIDE_SUMMARY[profileId]) sideRobotSummary.textContent = PHYSICAL_SIDE_SUMMARY[profileId];
   if (fidelityText && capability.backend === 'browser-mujoco' && profileId === 'asimov') {
     fidelityText.textContent = 'Asimov 1 uses one authoritative browser MuJoCo PhysicsSession. WebMCP may generate finite full-body joint-target trajectories in free-base scenes; movement, support changes and falls come from bounded joint actuation, gravity and contact. The optional 20 Hz ground-truth ankle-target stabilizer is explicit simulator feedback and never writes root pose, root velocity or external force. A completed trajectory is not evidence of a trained or hardware-valid gait; inspect measured displacement, contacts, support transitions and final stability.';
   }
