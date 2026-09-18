@@ -122,12 +122,25 @@ export class OpenArmPhysicalSimulator {
   }
   getTelemetry() {
     const o = this.lastObservation; if (!o) return {};
-    const result = { simulation_time_s: o.simulationTimeSeconds, maximum_task_penetration_mm: this.evaluator.snapshot().maximumPenetrationM * 1000 };
+    const result = { simulation_time_s: o.simulationTimeSeconds };
+    if (this.sceneMode === 'authored') {
+      const task = this.getTaskEvaluation();
+      result.authored_task_success = task.success === true;
+      result.authored_settled_dwell_s = task.settledDwellSeconds ?? 0;
+    } else result.maximum_task_penetration_mm = this.evaluator.snapshot().maximumPenetrationM * 1000;
     for (const [id, j] of Object.entries(o.joints)) result[`${id}_rad`] = j.positionRad;
     for (const id of ['flask', 'beaker']) o.bodies[id]?.positionM.forEach((v, i) => { result[`${id}_${'xyz'[i]}_m`] = v; });
     return result;
   }
-  getContacts() { const e = this.evaluator.snapshot(); return { contact_count: this.lastObservation?.contactCount || 0, flask_grasp_seen: e.flask.graspSeen, beaker_grasp_seen: e.beaker.graspSeen, flask_support_contact: e.flask.currentSupportContact, beaker_support_contact: e.beaker.currentSupportContact, maximum_penetration_m: e.maximumPenetrationM, excessive_penetration: e.excessivePenetrationSeen, task_success: e.success }; }
+  getContacts() {
+    if (this.sceneMode === 'authored') {
+      const task = this.getTaskEvaluation(), flags = task.status === 'invalidated' ? {} : task.observedSequence || {};
+      return { contact_count: this.lastObservation?.contactCount || 0, task_success: task.success === true,
+        authored_grasp_seen: Boolean(flags.grasp), authored_lift_seen: Boolean(flags.lift),
+        authored_carry_seen: Boolean(flags.carry), authored_release_seen: Boolean(flags.release),
+        task_invalidated: task.status === 'invalidated' };
+    }
+    const e = this.evaluator.snapshot(); return { contact_count: this.lastObservation?.contactCount || 0, flask_grasp_seen: e.flask.graspSeen, beaker_grasp_seen: e.beaker.graspSeen, flask_support_contact: e.flask.currentSupportContact, beaker_support_contact: e.beaker.currentSupportContact, maximum_penetration_m: e.maximumPenetrationM, excessive_penetration: e.excessivePenetrationSeen, task_success: e.success }; }
   getState() { return this.lastObservation ? { observation: clone(this.lastObservation), evaluation: this.getTaskEvaluation(), authority: this.getPhysicalAuthorityToken() } : null; }
   setProgramProgress(progress) { this.programProgress = clone(progress); this.#updateStatus(); }
   getWorkcellState() {
@@ -240,8 +253,16 @@ export class OpenArmPhysicalSimulator {
   #consumeObservation(observation) {
     if (this.disposed || !observation) return;
     this.lastObservation = observation; this.generalTask?.observe(observation); if (this.sceneMode === 'baseline') this.evaluator.observe(observation); this.presentationDirty = true;
-    const e = this.evaluator.snapshot();
-    Object.assign(this.canvas.dataset, { simulationClockS: String(observation.simulationTimeSeconds), physicalTaskSuccess: String(e.success), physicalTaskContact: String(e.flask.graspSeen || e.beaker.graspSeen), physicalTaskLift: String(e.flask.liftSeen || e.beaker.liftSeen), physicalTaskCarry: String(e.flask.carrySeen || e.beaker.carrySeen), physicalTaskRelease: String(e.flask.releaseSeen || e.beaker.releaseSeen), physicalTaskSettled: String(e.flask.settled && e.beaker.settled) });
+    const e = this.getTaskEvaluation(), authored = this.sceneMode === 'authored';
+    const flags = e.status === 'invalidated' ? {} : (e.observedSequence || {});
+    Object.assign(this.canvas.dataset, {
+      simulationClockS: String(observation.simulationTimeSeconds), physicalTaskSuccess: String(e.success), physicalTaskScope: this.sceneMode,
+      physicalTaskContact: String(authored ? Boolean(flags.grasp) : e.flask.graspSeen || e.beaker.graspSeen),
+      physicalTaskLift: String(authored ? Boolean(flags.lift) : e.flask.liftSeen || e.beaker.liftSeen),
+      physicalTaskCarry: String(authored ? Boolean(flags.carry) : e.flask.carrySeen || e.beaker.carrySeen),
+      physicalTaskRelease: String(authored ? Boolean(flags.release) : e.flask.releaseSeen || e.beaker.releaseSeen),
+      physicalTaskSettled: String(authored ? e.success === true : e.flask.settled && e.beaker.settled)
+    });
   }
   #rebuildPresentation() {
     this.presentation?.dispose();
@@ -306,9 +327,10 @@ export class OpenArmPhysicalSimulator {
     const v=validateGeneralTask(raw,this.lastObservation);
     if(assessOnly)return clone(v);
     this.generalTask=new GeneralTaskEvaluator(v,this.lastObservation,this.session.sceneRevision); this.generalTaskEpoch=this.session.epoch;
+    this.#consumeObservation(this.lastObservation);
     return this.generalTask.snapshot();
   }
-  clearGeneralTask() { this.#assertReady(); this.generalTask=null; return true; }
+  clearGeneralTask() { this.#assertReady(); this.generalTask=null; this.#consumeObservation(this.lastObservation); return true; }
   setCollisionView(value) { this.collisionView=Boolean(value); this.presentation?.setCollisionView?.(this.collisionView); return this.collisionView; }
   #funnelSeating() {
     const o = this.lastObservation; if (!o) return [];

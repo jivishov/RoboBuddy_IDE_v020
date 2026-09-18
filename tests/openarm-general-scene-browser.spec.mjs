@@ -25,7 +25,7 @@ async function apply(page,id){const result=await call(page,'manage_openarm_scene
 
 test('registered general builder validates novel geometry and completes a causal robot transfer',async({page},info)=>{
   test.setTimeout(240000);const errors=[];page.on('pageerror',e=>errors.push(String(e)));await setup(page);
-  const schema=await call(page,'inspect_openarm_scene',{view:'schema'});expect(schema.constructionShapes).toContain('convex_mesh');
+  const schema=await call(page,'inspect_openarm_scene',{view:'schema'});expect(schema.constructionShapes).toContain('convex_mesh');expect(schema.taskSchema.oneOf).toHaveLength(2);
   const before=await page.evaluate(()=>sim.getState());const id=await stage(page,scene);
   expect(await page.evaluate(()=>sim.getState())).toEqual(before);
   const check=await call(page,'manage_openarm_scene',{command:'check',stage_id:id,settle_seconds:.3});
@@ -51,10 +51,19 @@ test('registered general builder validates novel geometry and completes a causal
   expect(evidence.task.success,JSON.stringify(evidence.task)).toBe(true);
   expect(Object.values(evidence.task.observedSequence).every(Boolean)).toBe(true);
   expect(evidence.task.hardwareValidated).toBe(false);
+  expect(await page.evaluate(()=>sim.canvas.dataset.physicalTaskSuccess)).toBe('true');
+  expect(await page.evaluate(()=>sim.canvas.dataset.physicalTaskScope)).toBe('authored');
+  expect(await page.evaluate(()=>sim.getContacts().task_success)).toBe(true);
+  expect(await page.evaluate(()=>sim.getTelemetry().authored_task_success)).toBe(true);
+  expect(await page.evaluate(()=>sim.getContacts().flask_grasp_seen)).toBeUndefined();
   await page.screenshot({path:info.outputPath('novel-adapter-transfer.png')});
   await writeFile(info.outputPath('general-scene-webmcp-evidence.json'),JSON.stringify({check,built,run,evidence},null,2));
   const reset=await call(page,'control_openarm_simulation',{schema_version:'robobuddy.openarm.physical.v1',command:'reset'});expect(reset.ok).toBe(true);
   expect((await inspect(page)).task.success).toBe(false);expect((await inspect(page)).task.status).toBe('invalidated');
+  expect(await page.evaluate(()=>sim.canvas.dataset.physicalTaskSuccess)).toBe('false');
+  expect(await page.evaluate(()=>sim.canvas.dataset.physicalTaskLift)).toBe('false');
+  expect(await page.evaluate(()=>sim.getContacts().task_success)).toBe(false);
+  expect(await page.evaluate(()=>sim.getTelemetry().authored_task_success)).toBe(false);
   expect(errors).toEqual([]);
 });
 
@@ -105,4 +114,21 @@ test('photo-guided and novel-equipment examples compile through WebMCP without c
     await page.screenshot({path:info.outputPath(`${name}.png`)});
     await writeFile(info.outputPath(`${name}.json`),JSON.stringify({check,state},null,2));
   }
+});
+
+// A changed editor draft must never apply an older preview unnoticed.
+test('human check/apply requires the current draft to match the staged scene',async({page},info)=>{
+  await setup(page);await page.locator('#generalLabOpen').click();
+  await page.locator('#generalLabScene').fill(JSON.stringify(scene));
+  await page.locator('#generalLabStage').click();await expect(page.locator('#generalLabMessage')).toContainText('Operation completed');
+  const before=await page.evaluate(()=>sim.getState());
+  const changed=structuredClone(scene);changed.id='edited_after_staging';changed.objects[1].label='Edited sample';
+  await page.locator('#generalLabScene').fill(JSON.stringify(changed));
+  for(const button of ['#generalLabCheck','#generalLabApply']){
+    await page.locator(button).click();await expect(page.locator('#generalLabMessage')).toContainText('Draft differs from the staged scene');
+    expect(await page.evaluate(()=>sim.getState())).toEqual(before);
+  }
+  await page.locator('#generalLabStage').click();await expect(page.locator('#generalLabMessage')).toContainText('Operation completed');
+  await page.locator('#generalLabApply').click();await expect.poll(()=>page.evaluate(()=>sim.generalSpec?.id)).toBe(changed.id);
+  await page.screenshot({path:info.outputPath('review-draft-match.png')});
 });

@@ -135,6 +135,7 @@ function observation() {
     const quatOffset = body.id * 4;
     const record = {
       frame: 'mujoco_world',
+      centerOfMassM: Array.from(data.xipos.slice(posOffset, posOffset + 3)),
       positionM: [Number(data.xpos[posOffset]), Number(data.xpos[posOffset + 1]), Number(data.xpos[posOffset + 2])],
       quaternionWxyz: [Number(data.xquat[quatOffset]), Number(data.xquat[quatOffset + 1]), Number(data.xquat[quatOffset + 2]), Number(data.xquat[quatOffset + 3])],
     };

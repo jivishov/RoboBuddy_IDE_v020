@@ -33,6 +33,13 @@ function normalizeObject(raw){
   if(e.role==='bench'&&e.motion!=='fixed')throw new TypeError('A bench must explicitly declare its fixed support boundary');
   const qe=raw.quantity_evidence??{};object(qe,['geometry','pose','mass','friction'],'quantity_evidence');
   e.quantity_evidence=Object.fromEntries(['geometry','pose','mass','friction'].map(k=>[k,evidence(qe[k],`quantity_evidence.${k}`)]));
+  // Do not label a compiler-supplied default as a sourced or measured value.
+  for (const [quantity, field] of [['mass','mass_kg'], ['friction','friction']]) {
+    if (raw[field] === undefined && qe[quantity] && qe[quantity].source !== 'assumed')
+      throw new TypeError(`${quantity} provenance requires an explicit ${field}; omitted values are assumed defaults`);
+  }
+  if (raw.catalog && raw.catalog.dimensions_m === undefined && qe.geometry && qe.geometry.source !== 'assumed')
+    throw new TypeError('Sourced catalog geometry requires explicit dimensions_m; catalog defaults are assumed');
   e.mass_kg=number(raw.mass_kg??(e.motion==='free'?.05:1),.005,e.motion==='free'?2:100,'mass_kg (not a robot payload rating)');
   e.friction=vector(raw.friction??[.8,.005,.0005],3,'friction',0,2);
   if(e.friction[1]>.05||e.friction[2]>.01)throw new RangeError('Torsional/rolling friction bounds exceeded');
@@ -148,7 +155,7 @@ export function compileGeneralScene(raw){
         return `<geom name="${id}" type="${c.type}" ${g.mesh?`mesh="${g.mesh}"`:`size="${join(g.sizeM)}"`} pos="${join(g.positionM)}" quat="${join(g.quaternionWxyz)}" mass="${mass}" contype="3" conaffinity="3" friction="${join(e.friction)}" solref=".005 1" rgba="${join(g.rgba)}"/>`;
       }).join('');
       compiled.xml=`<body name="${bodyId}" pos="${join(e.position_m)}" quat="${join(e.quaternion_wxyz)}">${free?`<freejoint name="${bodyId}_free"/>`:''}${geomXml}</body>`;
-      if(e.parts.length>1)warnings.push({objectId:e.id,code:'COMPOUND_MASS_ASSUMPTION',message:'Parts share one rigid body even when disconnected. Mass is weighted by component volume and density; overlapping volumes are counted separately. This is an authored rigid-coupling assumption.'});
+      if(e.parts.length>1 || e.parts.some(p=>p.grid && p.grid.counts.reduce((a,b)=>a*b,1)>1))warnings.push({objectId:e.id,code:'COMPOUND_MASS_ASSUMPTION',message:'Parts share one rigid body even when disconnected. Mass is weighted by component volume and density; overlapping volumes are counted separately. This is an authored rigid-coupling assumption.'});
     }
     const localBounds=bounds(points),worldBounds=bounds(points.map(p=>transform(p,e.position_m,e.quaternion_wxyz)));
     if(worldBounds.min.some((v,i)=>v<GENERAL_LIMITS.worldMin[i]-1e-8)||worldBounds.max.some((v,i)=>v>GENERAL_LIMITS.worldMax[i]+1e-8))throw new RangeError(`${e.id}: geometry exceeds the bounded 2.4 x 2.4 x 2.2 m construction volume`);
@@ -156,7 +163,11 @@ export function compileGeneralScene(raw){
     // Port-specific geom lists prevent a different part of the receiver from falsely satisfying a contact test.
     for(const port of ports)port.geometryIds=compiled.geoms.filter(g=>g.partId===port.part_id).map(g=>g.id);
     const legacy=compiled.records?.[0]??{};
-    records.push({id:e.id,label:e.label,bodyId,kind:e.catalog?.kind??'constructed',dynamic:free,role:e.role,mass_kg:e.mass_kg,friction:e.friction,position_m:e.position_m,quaternion_wxyz:e.quaternion_wxyz,localBounds,worldBounds,ports,quantityEvidence:e.quantity_evidence,geometryIds:compiled.geoms.map(g=>g.id),affordances:legacy.affordances??{},mounting:free?'free body':e.fixed_reason,processModel:'dry rigid body; not instrument operation',limitations:e.limitations});
+    // A single analytic primitive must not be tested against square AABB corners on a
+    // circular receiving surface. Complex bodies retain an explicitly conservative envelope.
+    const primitive = compiled.geoms.length === 1 && ['box','sphere','cylinder'].includes(compiled.geoms[0].type)
+      ? (({type,positionM,quaternionWxyz,sizeM})=>({type,positionM,quaternionWxyz,sizeM}))(compiled.geoms[0]) : null;
+    records.push({id:e.id,label:e.label,bodyId,kind:e.catalog?.kind??'constructed',dynamic:free,role:e.role,mass_kg:e.mass_kg,friction:e.friction,position_m:e.position_m,quaternion_wxyz:e.quaternion_wxyz,localBounds,worldBounds,...(primitive ? {placementPrimitive:primitive} : {}),ports,quantityEvidence:e.quantity_evidence,geometryIds:compiled.geoms.map(g=>g.id),affordances:legacy.affordances??{},mounting:free?'free body':e.fixed_reason,processModel:'dry rigid body; not instrument operation',limitations:e.limitations});
     if(e.motion==='fixed')warnings.push({objectId:e.id,code:'FIXED_BOUNDARY',message:e.fixed_reason});
     for(const [quantity,ev]of Object.entries(e.quantity_evidence))if(['image_estimated','assumed','fitted'].includes(ev.source)||quantity==='geometry'&&ev.uncertainty_m===undefined)warnings.push({objectId:e.id,code:'UNVERIFIED_QUANTITY',quantity,source:ev.source,message:ev.source_detail});
     if(e.appearance)for(const g of compiled.geoms){g.rgba=e.appearance.rgba;g.roughness=e.appearance.roughness;g.metalness=e.appearance.metalness;}

@@ -63,7 +63,14 @@ export function installGeneralLabBuilder(app) {
     try{guard();const result=await fn(b,guard);guard();message('Operation completed. Review reconstruction assumptions and physical evidence separately.');return result;}
     finally{app.finishExecution(token);refresh();}
   }
-  const getStage=b=>{const staged=b.getGeneralSceneState().staged;if(!staged)throw new Error('Stage the scene before checking or applying it.');return staged.id;};
+  const getStage=b=>{
+    const staged=b.getGeneralSceneState().staged;
+    if(!staged)throw new Error('Stage the scene before checking or applying it.');
+    const stagedSpec=b.getGeneralSceneState('spec').stagedScene;
+    if(JSON.stringify(normalizeGeneralScene(JSON.parse(editor.value)))!==JSON.stringify(stagedSpec))
+      throw new Error('Draft differs from the staged scene. Stage again, or read the staged scene before checking/applying.');
+    return staged.id;
+  };
   addButton(actions,'Stage','generalLabStage',()=>mutate(b=>b.stageGeneralScene(JSON.parse(editor.value))),true);
   addButton(actions,'Check candidate','generalLabCheck',()=>mutate((b,guard)=>b.checkStagedGeneralScene(getStage(b),.3,guard)),true);
   addButton(actions,'Apply + reset','generalLabApply',()=>mutate((b,guard)=>b.applyStagedEquipment(getStage(b),true,guard)),true);
