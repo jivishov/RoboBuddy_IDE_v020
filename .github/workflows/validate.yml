@@ -224,10 +224,10 @@ jobs:
           from html.parser import HTMLParser
           from pathlib import Path
           class P(HTMLParser): pass
-          for name in ('index.html', 'physics-slice.html'):
+          for name in ('index.html', 'ide.html', 'guides/openarm.html', 'guides/webmcp.html', 'physics-slice.html'):
               P().feed(Path(name).read_text())
-          assert 'id="taskSelect"' in Path('index.html').read_text()
-          assert './src/app-v2.js' in Path('index.html').read_text()
+          assert 'id="taskSelect"' in Path('ide.html').read_text()
+          assert './src/app-v2.js' in Path('ide.html').read_text()
           assert './src/physics/session.js' in Path('physics-slice.html').read_text()
           assert './src/physics/phase1-scene.js' in Path('physics-slice.html').read_text()
           print('HTML parse: OK')

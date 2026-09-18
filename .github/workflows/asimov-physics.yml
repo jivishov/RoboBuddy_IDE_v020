@@ -9,6 +9,7 @@ on:
       - 'scripts/generate_asimov_models.py'
       - 'scripts/generate_asimov_actuator_models.py'
       - 'index.html'
+      - 'ide.html'
       - '.github/workflows/asimov-physics.yml'
   pull_request:
     paths:
@@ -18,6 +19,7 @@ on:
       - 'scripts/generate_asimov_models.py'
       - 'scripts/generate_asimov_actuator_models.py'
       - 'index.html'
+      - 'ide.html'
       - '.github/workflows/asimov-physics.yml'
 permissions:
   contents: read
