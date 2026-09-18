@@ -1,0 +1,47 @@
+name: Materialize visitor pages and manuals
+on:
+  push:
+    branches: [feat/openarm-general-scene-builder]
+    paths: ['.github/visitor-source/**', '.github/workflows/materialize-visitor-source.yml']
+permissions:
+  contents: write
+jobs:
+  materialize:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020' && github.ref == 'refs/heads/feat/openarm-general-scene-builder'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Materialize checksum-pinned visitor implementation on feature branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "54ca10830f553d69a7bc207d6ae3581aa56aeaec"
+          python - <<'PYCODE'
+          import base64, hashlib, lzma, pathlib, subprocess, tempfile
+          hashes = ['a9f39b165e5f55e52c41ada4903573335a22a394af2e5554598e9f57e2c1481f','1c989abc35824f82a28a828a626a1f4e2cfd2378a3400640483d6fac01c20115','a4b2c43a232c3109c21cc299bdb7e25dbb1159b937021160fa9f29310b114b99','88420dcdd5a734fd731065fbd81171c015c74dd5fa4b7f85d83ce1e485318273','42163fe3e011746eb07736d5b8d80601e11cb5ab28fbba74aa0bb2edab5e961e']
+          chunks=[]
+          for i, expected in enumerate(hashes):
+              content=pathlib.Path(f'.github/visitor-source/part-{i}.txt').read_text().strip()
+              assert hashlib.sha256(content.encode()).hexdigest()==expected, f'Chunk {i} checksum mismatch'
+              chunks.append(content)
+          patch=lzma.decompress(base64.b64decode(''.join(chunks),validate=True),memlimit=128*1024*1024)
+          assert len(patch)==159982
+          assert hashlib.sha256(patch).hexdigest()=='49e33a610f408255ee7ecf1e606d66a5b09838e700f31f8ffbf8f975cf1184ec'
+          with tempfile.NamedTemporaryFile() as f:
+              f.write(patch);f.flush()
+              args=['git','apply','--index','--exclude=.github/workflows/*']
+              subprocess.run(args+['--check',f.name],check=True)
+              subprocess.run(args+[f.name],check=True)
+          PYCODE
+          git rm .github/visitor-source/part-*.txt
+          test -z "$(git diff --cached --name-only -- .github/workflows)"
+          node tests/validate.mjs
+          node tests/visitor-docs.mjs
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat: visitor front page and OpenArm and WebMCP manuals" -m "Preserve the IDE at ide.html with guide links in Help. Add truthful visitor overview, accessible manuals, checked example scenes/programs and browser regressions. Static contracts pass; browser validation follows separately. No main or Pages changes."
+          test "$(git ls-remote origin refs/heads/feat/openarm-general-scene-builder | cut -f1)" = "$GITHUB_SHA"
+          git push origin HEAD:refs/heads/feat/openarm-general-scene-builder
