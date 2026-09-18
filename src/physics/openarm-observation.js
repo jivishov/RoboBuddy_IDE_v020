@@ -15,7 +15,7 @@ export function contactEvidenceComplete(observation) {
     && observation.contactCount === observation.contacts.length;
 }
 export function usableContact(c) { return Number.isFinite(c.normalForceN) && c.normalForceN > .01 && Number.isFinite(c.distanceM) && c.distanceM >= -.002; }
-function activeOrUncertainContact(c) {
+export function activeOrUncertainContact(c) {
   // Excessive penetration must REJECT a good-grasp claim, never erase contact
   // from the release test. Zero-force geometric touch and malformed telemetry
   // also conservatively prevent a release claim. A positive gap with zero load

@@ -11,6 +11,8 @@ import { OpenArmBimanualStackEvaluator } from './openarm-task-evaluator.js';
 import { OpenArmPresentation, toThreePosition } from './openarm-presentation.js';
 import { validateOpenArmEquipment, compileEquipmentDefinitions, appendEquipmentXml, OPENARM_EQUIPMENT_VERSION, EQUIPMENT_LIMITS, EQUIPMENT_KINDS } from './openarm-equipment.js';
 import { OPENARM_CONTROL_PROFILE } from './openarm-servo.js';
+import { GENERAL_SCENE_VERSION, GENERAL_LIMITS, compileGeneralScene, appendGeneralSceneXml } from './openarm-general-scene.js';
+import { GeneralTaskEvaluator, validateGeneralTask, worldPort } from './openarm-general-task.js';
 import { OPENARM_LAB_ASSETS } from './openarm-lab-assets.js';
 import { OPENARM_SCENE_MODES, validateOpenArmSceneMode, workcellBaseXml, workcellBodies, workcellConstraints, workcellGeometry } from './openarm-workcell-scene.js';
 
@@ -32,6 +34,7 @@ export class OpenArmPhysicalSimulator {
     this.canvas = canvas; this.disposed = false; this.ready = false; this.generation = 0;
     this.session = null; this.unsubscribeSession = null; this.lastObservation = null; this.presentationDirty = false;
     this.selectedScene = clone(BASE_SCENE); this.selectedPackage = BASE_PACKAGE; this.equipment = []; this.sceneMode = 'baseline';
+    this.generalSpec = null; this.generalCompiled = null; this.generalTask = null; this.generalReport = null;
     this.staged = null; this.workcellMutation = false; this.candidate = null; this.baseGeometry = null;
     this.presentation = null; this.preview = null; this.objectMeshes = new Map(); this.highContrast = true;
     this.evaluator = new OpenArmBimanualStackEvaluator();
@@ -63,6 +66,7 @@ export class OpenArmPhysicalSimulator {
     this.#assertGeneration(token);
     if (geometry.modelSha256 !== OPENARM_MODEL_SHA256) throw new Error('OpenArm visual/physical model identity mismatch');
     this.baseGeometry = geometry; this.#disposeSession(); this.selectedPackage = BASE_PACKAGE; this.selectedScene = clone(BASE_SCENE); this.equipment = []; this.sceneMode = 'baseline';
+    this.generalSpec = null; this.generalCompiled = null; this.generalReport = null; this.generalTask = null;
     await this.#createSession(token); this.#rebuildPresentation(); this.ready = true;
     Object.assign(this.canvas.dataset, { simulatorBackend: 'browser-mujoco', simulationAuthority: 'physics-session', physicalSceneId: this.selectedScene.id, modelPackageId: this.selectedPackage.id, openarmVisualSource: 'shared-source-collision-geometry-v3', openarmLegacyBaseYawRendered: 'false', presentationGroundColor: '#687378' });
     this.fit(); this.#updateStatus(); return true;
@@ -70,6 +74,7 @@ export class OpenArmPhysicalSimulator {
   async reset() {
     this.#assertLive(); const token = ++this.generation; this.ready = false; this.workcellMutation = false;
     this.candidate?.dispose(); this.candidate = null;
+    this.generalTask?.invalidate('Explicit reset invalidates the trial; define a new task before manipulation');
     this.evaluator = new OpenArmBimanualStackEvaluator(); this.programProgress = null;
     const diagnostics = this.session ? await this.session.getDiagnostics().catch(() => null) : null;
     this.#assertGeneration(token);
@@ -96,7 +101,7 @@ export class OpenArmPhysicalSimulator {
   setHighContrastScene(value) {
     // Presentation only: report the real visible markers, never advance/reset the plant.
     this.highContrast = Boolean(value);
-    for (const marker of this.targetMarkers) marker.visible = this.highContrast && this.sceneMode !== 'blank';
+    for (const marker of this.targetMarkers) marker.visible = this.highContrast && this.sceneMode === 'baseline';
     Object.assign(this.canvas.dataset, {
       highContrastScene: String(this.highContrast),
       highContrastPerimeterCount: String(this.targetMarkers.filter(marker => marker.visible).length),
@@ -109,10 +114,11 @@ export class OpenArmPhysicalSimulator {
   getPhysicalSession() { return this.session; }
   getPhysicalAuthorityToken() { return this.isReady() ? { sessionId: this.session.sessionId, epoch: this.session.epoch, sceneRevision: this.session.sceneRevision, robotId: this.session.robotId, simulationTimeSeconds: this.lastObservation.simulationTimeSeconds } : null; }
   getTaskEvaluation() {
+    if (this.sceneMode === 'authored') return { ...(this.generalTask?.snapshot() || { success: false, status: 'no-task', scope: 'Authored scene; define a task before manipulation.' }), hardwareValidated: false };
     if (this.sceneMode === 'blank') return { ...this.evaluator.snapshot(), success: false, status: 'custom-scene', scope: 'No baseline task in a blank workcell. Use explicit program outcome predicates; a seated state alone does not prove a robot transfer.', hardwareValidated: false };
     return { ...this.evaluator.snapshot(), scope: this.equipment.length ? 'baseline flask/beaker task in an extended workcell; does not evaluate custom goals' : 'default flask/beaker transfer task', hardwareValidated: false }; }
   getPresentationAudit() {
-    return { source: this.baseGeometry?.source, geometrySha256: OPENARM_GEOMETRY_SHA256, physicalAuthority: 'MuJoCo PhysicsSession only', jointPresentationSource: 'observed MuJoCo body transforms, including each passive finger', sharedCollisionGeometry: true, geometryCount: this.presentation?.geomMeshes.size ?? 0, legacyBaseYawControlled: false, legacyBaseYawRendered: false, observationBatchSteps: OBSERVATION_BATCH_STEPS, observationPeriodSeconds: .002, observationPhase: this.lastObservation?.openarm?.observationPhase, workcellRevision: this.session?.sceneRevision };
+    return { source: this.baseGeometry?.source, geometrySha256: OPENARM_GEOMETRY_SHA256, physicalAuthority: 'MuJoCo PhysicsSession only', jointPresentationSource: 'observed MuJoCo body transforms, including each passive finger', sharedCollisionGeometry: !this.generalSpec?.objects.some(e=>e.visual_mesh), collisionGeometryAuthoritative:true, geometryCount: this.presentation?.geomMeshes.size ?? 0, legacyBaseYawControlled: false, legacyBaseYawRendered: false, observationBatchSteps: OBSERVATION_BATCH_STEPS, observationPeriodSeconds: .002, observationPhase: this.lastObservation?.openarm?.observationPhase, workcellRevision: this.session?.sceneRevision };
   }
   getTelemetry() {
     const o = this.lastObservation; if (!o) return {};
@@ -125,7 +131,7 @@ export class OpenArmPhysicalSimulator {
   getState() { return this.lastObservation ? { observation: clone(this.lastObservation), evaluation: this.getTaskEvaluation(), authority: this.getPhysicalAuthorityToken() } : null; }
   setProgramProgress(progress) { this.programProgress = clone(progress); this.#updateStatus(); }
   getWorkcellState() {
-    return { schemaVersion: OPENARM_EQUIPMENT_VERSION, sceneMode: this.sceneMode, sceneModes: OPENARM_SCENE_MODES, assetCatalog: clone(OPENARM_LAB_ASSETS), funnelSeating: this.#funnelSeating(), program: clone(this.programProgress || null), authority: this.getPhysicalAuthorityToken(), frame: 'mujoco_world', units: { length: 'm', angle: 'rad', time: 's', force: 'N' }, controlProfile: OPENARM_CONTROL_PROFILE, limits: EQUIPMENT_LIMITS, kinds: EQUIPMENT_KINDS, pinchReferences: clone(this.lastObservation?.openarm?.pinchReferences || {}), grasp: this.lastObservation ? { flask: graspState(this.lastObservation, 'left', 'flask'), beaker: graspState(this.lastObservation, 'right', 'beaker') } : {}, equipment: (this.lastObservation?.openarm?.equipment || []).map(e => ({ ...clone(e), referencePointsWorldM: Object.fromEntries(Object.entries(e.affordances).filter(([key, v]) => key !== 'axisM' && Array.isArray(v) && v.length === 3).map(([key, v]) => [key, worldPoint(this.lastObservation.bodies[e.bodyId], v)])) })), equipmentJoints: clone(this.lastObservation?.openarm?.equipmentJoints || []), staged: this.staged ? { id: this.staged.id, sceneMode: this.staged.sceneMode, equipment: clone(this.staged.equipment), status: 'preview-only; apply explicitly resets the physical scene' } : null, bodies: clone(this.lastObservation?.bodies || {}), joints: clone(this.lastObservation?.joints || {}), contacts: clone(this.lastObservation?.contacts || []), taskEvaluation: this.getTaskEvaluation(), geometryIds: [...(this.presentation?.geomMeshes.keys() || [])], hardwareValidated: false, collisionFreePlanning: false };
+    return { schemaVersion: OPENARM_EQUIPMENT_VERSION, sceneMode: this.sceneMode, sceneModes: OPENARM_SCENE_MODES, assetCatalog: clone(OPENARM_LAB_ASSETS), funnelSeating: this.#funnelSeating(), program: clone(this.programProgress || null), authority: this.getPhysicalAuthorityToken(), frame: 'mujoco_world', units: { length: 'm', angle: 'rad', time: 's', force: 'N' }, controlProfile: OPENARM_CONTROL_PROFILE, limits: EQUIPMENT_LIMITS, kinds: EQUIPMENT_KINDS, pinchReferences: clone(this.lastObservation?.openarm?.pinchReferences || {}), grasp: this.lastObservation ? { flask: graspState(this.lastObservation, 'left', 'flask'), beaker: graspState(this.lastObservation, 'right', 'beaker') } : {}, equipment: (this.lastObservation?.openarm?.equipment || []).map(e => ({ ...clone(e), referencePointsWorldM: Object.fromEntries(Object.entries(e.affordances).filter(([key, v]) => key !== 'axisM' && Array.isArray(v) && v.length === 3).map(([key, v]) => [key, worldPoint(this.lastObservation.bodies[e.bodyId], v)])) })), equipmentJoints: clone(this.lastObservation?.openarm?.equipmentJoints || []), staged: this.staged ? { id: this.staged.id, sceneMode: this.staged.sceneMode, equipment: clone(this.staged.equipment), ...(this.staged.generalScene ? { generalScene: true, report: clone(this.staged.report) } : {}), status: 'preview-only; apply explicitly resets the physical scene' } : null, bodies: clone(this.lastObservation?.bodies || {}), joints: clone(this.lastObservation?.joints || {}), contacts: clone(this.lastObservation?.contacts || []), taskEvaluation: this.getTaskEvaluation(), geometryIds: [...(this.presentation?.geomMeshes.keys() || [])], hardwareValidated: false, collisionFreePlanning: false };
   }
   async applyAction() { throw new Error('Use the live OpenArm SI/radian simulation API, not legacy .pos replay'); }
   #validateAdvance(seconds, maxSteps) {
@@ -162,12 +168,13 @@ export class OpenArmPhysicalSimulator {
   pause() { return this.session?.pause() ?? false; }
   resume() { return this.session?.resume() ?? false; }
   async stop() {
+    this.generalTask?.invalidate('Human Stop invalidated the trial');
     ++this.generation; this.ready = false; this.workcellMutation = false; this.candidate?.dispose(); this.candidate = null;
     if (!this.session) return false;
     try { await this.session.cancelRun('human-stop'); return true; } catch { return false; }
   }
   stageEquipment(items, sceneMode = this.sceneMode) {
-    this.#assertReady(); validateOpenArmSceneMode(sceneMode); const equipment = validateOpenArmEquipment(items);
+    this.#assertReady(); validateOpenArmSceneMode(sceneMode); if (sceneMode === 'authored') throw new Error('Use manage_openarm_scene for authored scenes, or explicitly restore baseline/blank'); const equipment = validateOpenArmEquipment(items);
     const compiled = compileEquipmentDefinitions(equipment);
     this.preview?.dispose(); this.preview = new OpenArmPresentation({ meshes: compiled.meshes, geoms: compiled.geoms }, { preview: true });
     const bodies = {};
@@ -190,18 +197,22 @@ export class OpenArmPhysicalSimulator {
     try {
       guard(); const baseXml = await fetchVerified(new URL('../../models/openarm_v2/manipulation.xml', import.meta.url), OPENARM_MODEL_SHA256);
       this.#assertGeneration(token); guard();
-      const compiled = appendEquipmentXml(workcellBaseXml(baseXml, staged.sceneMode), staged.equipment);
+      const compiled = staged.generalScene ? appendGeneralSceneXml(baseXml, staged.generalScene) : appendEquipmentXml(workcellBaseXml(baseXml, staged.sceneMode), staged.equipment);
+      const specHash = staged.generalScene ? await hashText(JSON.stringify(compiled.spec)) : null;
+      this.#assertGeneration(token); guard();
       const constraints = workcellConstraints(clone(BASE_PACKAGE.sceneConstraints), staged.sceneMode);
       const sha256 = await hashText(compiled.xml);
       const sequence = ++sessionSequence;
       const packageId = `openarm-custom-${sha256.slice(0, 12)}-${sequence}`;
-      candidatePackage = registerModelPackage({ ...clone(BASE_PACKAGE), id: packageId, modelId: packageId, transient: true, baseSha256: OPENARM_MODEL_SHA256, sha256, sceneMode: staged.sceneMode, sceneConstraints: constraints, equipment: staged.equipment, bodies: [...workcellBodies(clone(BASE_PACKAGE.bodies), staged.sceneMode), ...compiled.bodies] });
-      const scene = { ...clone(BASE_SCENE), modelPackage: packageId, fixtures: constraints.fixtures.map(id=>({id})), objects: constraints.objects.map(id=>({id})), revision: `${BASE_SCENE.revision}-${staged.sceneMode}-equipment-${sha256.slice(0, 16)}`, ...(staged.sceneMode === 'blank' ? { taskGoal: { type: 'custom-workcell-outcome-predicates' } } : {}) };
+      candidatePackage = registerModelPackage({ ...clone(BASE_PACKAGE), id: packageId, modelId: packageId, transient: true, baseSha256: OPENARM_MODEL_SHA256, sha256, ...(staged.generalScene ? { generalScene: compiled.spec, sceneSpecSha256: specHash } : {}), sceneMode: staged.sceneMode, sceneConstraints: constraints, equipment: staged.equipment, bodies: [...workcellBodies(clone(BASE_PACKAGE.bodies), staged.sceneMode), ...compiled.bodies] });
+      const scene = { ...clone(BASE_SCENE), modelPackage: packageId, fixtures: constraints.fixtures.map(id=>({id})), objects: constraints.objects.map(id=>({id})), revision: `${BASE_SCENE.revision}-${staged.sceneMode}-equipment-${sha256.slice(0, 16)}${specHash ? '-'+specHash.slice(0,16) : ''}`, ...(staged.sceneMode !== 'baseline' ? { taskGoal: { type: 'custom-workcell-outcome-predicates' } } : {}) };
       candidate = this.#newSession(); this.candidate = candidate;
       const loaded = await candidate.loadScene(scene); this.#assertGeneration(token); guard();
       // Commit only after model compilation AND all initial penetration checks succeed.
       this.#disposeSession(); this.session = candidate; this.candidate = null; candidate = null;
       this.selectedPackage = candidatePackage; candidatePackage = null; this.selectedScene = scene; this.equipment = staged.equipment; this.sceneMode = staged.sceneMode;
+      this.generalSpec = staged.generalScene ? compiled.spec : null; this.generalCompiled = staged.generalScene ? compiled : null; this.generalTask = null;
+      this.generalReport = staged.generalScene ? { ...compiled.report, sceneSpecSha256: specHash, physicalModelSha256: sha256, physicalValidation: 'MuJoCo compile and initial overlap checks passed; settling and manipulation are separate', candidateCheck: staged.candidateCheck || null } : null;
       this.evaluator = new OpenArmBimanualStackEvaluator(); this.programProgress = null; this.#subscribe(); this.#consumeObservation(loaded.observation);
       this.#rebuildPresentation(); this.discardStagedEquipment(); this.ready = true;
       this.canvas.dataset.modelPackageId = this.selectedPackage.id;
@@ -220,7 +231,7 @@ export class OpenArmPhysicalSimulator {
   }
   #newSession() { return new PhysicsSession(new BrowserMuJoCoBackend({ workerUrl: new URL('./openarm-mujoco-worker.js', import.meta.url) }), { sessionId: `ide-openarm-v3-${++sessionSequence}`, observationBatchSteps: OBSERVATION_BATCH_STEPS }); }
   async #createSession(token) { this.session = this.#newSession(); this.#subscribe(); await this.session.loadScene(this.selectedScene); this.#assertGeneration(token); }
-  #subscribe() { this.unsubscribeSession?.(); this.unsubscribeSession = this.session.subscribe(({ observation }) => this.#consumeObservation(observation)); }
+  #subscribe() { this.unsubscribeSession?.(); this.unsubscribeSession = this.session.subscribe(({ observation, epoch }) => { if (this.generalTask && epoch !== this.generalTaskEpoch) this.generalTask.invalidate('Physical session epoch changed'); this.#consumeObservation(observation); }); }
   #disposeSession() {
     this.unsubscribeSession?.(); this.unsubscribeSession = null; this.session?.dispose(); this.session = null;
     if (this.selectedPackage?.transient) unregisterTransientModelPackage(this.selectedPackage.id);
@@ -228,18 +239,77 @@ export class OpenArmPhysicalSimulator {
   }
   #consumeObservation(observation) {
     if (this.disposed || !observation) return;
-    this.lastObservation = observation; if (this.sceneMode !== 'blank') this.evaluator.observe(observation); this.presentationDirty = true;
+    this.lastObservation = observation; this.generalTask?.observe(observation); if (this.sceneMode === 'baseline') this.evaluator.observe(observation); this.presentationDirty = true;
     const e = this.evaluator.snapshot();
     Object.assign(this.canvas.dataset, { simulationClockS: String(observation.simulationTimeSeconds), physicalTaskSuccess: String(e.success), physicalTaskContact: String(e.flask.graspSeen || e.beaker.graspSeen), physicalTaskLift: String(e.flask.liftSeen || e.beaker.liftSeen), physicalTaskCarry: String(e.flask.carrySeen || e.beaker.carrySeen), physicalTaskRelease: String(e.flask.releaseSeen || e.beaker.releaseSeen), physicalTaskSettled: String(e.flask.settled && e.beaker.settled) });
   }
   #rebuildPresentation() {
     this.presentation?.dispose();
-    const compiled = compileEquipmentDefinitions(this.equipment);
-    this.presentation = new OpenArmPresentation({ meshes: { ...this.baseGeometry.meshes, ...compiled.meshes }, geoms: [...workcellGeometry(this.baseGeometry.geoms, this.sceneMode), ...compiled.geoms] });
+    const compiled = this.generalCompiled || compileEquipmentDefinitions(this.equipment);
+    this.presentation = new OpenArmPresentation({ visualGeoms: compiled.visualGeoms || [], meshes: { ...this.baseGeometry.meshes, ...compiled.meshes }, geoms: [...workcellGeometry(this.baseGeometry.geoms, this.sceneMode), ...compiled.geoms] });
+    this.presentation.setCollisionView?.(this.collisionView || false);
     this.setHighContrastScene(this.highContrast);
     this.objectMeshes = this.presentation.bodyGroups; this.scene.add(this.presentation.root);
     if (this.lastObservation) this.presentation.applyObservation(this.lastObservation);
   }
+  stageGeneralScene(raw) {
+    this.#assertReady(); const c = compileGeneralScene(raw);
+    const preview = new OpenArmPresentation({ meshes: c.meshes, geoms: c.geoms }, { preview: true });
+    try { preview.applyObservation({ bodies: Object.fromEntries(c.spec.objects.map(e => [`lab_${e.id}`, { positionM:e.position_m, quaternionWxyz:e.quaternion_wxyz }])) }); }
+    catch (error) { preview.dispose(); throw error; }
+    this.preview?.dispose(); this.preview = preview; this.scene.add(preview.root);
+    this.staged = { id:crypto.randomUUID(), equipment:[], sceneMode:'authored', generalScene:c.spec, report:c.report, expectedRevision:this.session.sceneRevision, expectedEpoch:this.session.epoch };
+    this.#updateStatus(); return { id:this.staged.id, report:clone(c.report), status:'preview-only; explicit apply resets the physical scene' };
+  }
+  async checkStagedGeneralScene(stageId, settleSeconds = .3, guard = () => {}) {
+    this.#assertReady(); number(settleSeconds, .02, .5, 'candidate settle seconds');
+    if(Math.abs(settleSeconds/.001-Math.round(settleSeconds/.001))>1e-7)throw new RangeError('Settle check time must align to 1 ms');
+    if (!this.staged?.generalScene || this.staged.id !== stageId || this.staged.expectedRevision !== this.session.sceneRevision || this.staged.expectedEpoch !== this.session.epoch) throw new Error('Staged scene is missing or stale');
+    const token = this.generation, staged = this.staged; this.workcellMutation = true;
+    let candidate = null, pkg = null;
+    try {
+      guard(); const baseXml = await fetchVerified(new URL('../../models/openarm_v2/manipulation.xml', import.meta.url), OPENARM_MODEL_SHA256);
+      const c = appendGeneralSceneXml(baseXml, staged.generalScene), sha256 = await hashText(c.xml), id = `openarm-check-${++sessionSequence}`;
+      this.#assertGeneration(token); guard();
+      const constraints = workcellConstraints(clone(BASE_PACKAGE.sceneConstraints),'authored');
+      pkg = registerModelPackage({ ...clone(BASE_PACKAGE), id, modelId:id, transient:true, sha256, baseSha256:OPENARM_MODEL_SHA256, sceneMode:'authored', generalScene:c.spec, sceneSpecSha256:await hashText(JSON.stringify(c.spec)), sceneConstraints:constraints, bodies:[...workcellBodies(clone(BASE_PACKAGE.bodies),'authored'),...c.bodies] });
+      candidate = this.#newSession(); this.candidate = candidate;
+      const scene = { ...clone(BASE_SCENE), modelPackage:id, fixtures:constraints.fixtures.map(id=>({id})), objects:[], revision:`check-${sha256}`, taskGoal:{type:'validation-only'} };
+      const started = performance.now(), initial = (await candidate.loadScene(scene)).observation;
+      this.#assertGeneration(token); guard();
+      const final = await candidate.advanceSteps(Math.round(settleSeconds/.001));
+      this.#assertGeneration(token); guard();
+      if (this.staged !== staged) throw new Error('Candidate scene changed during validation');
+      const objects = c.records.map(e=>{
+        const a=initial.bodies[e.bodyId], b=final.bodies[e.bodyId];
+        return { id:e.id, motion:e.dynamic?'free':'fixed', displacementM:Math.hypot(...b.positionM.map((v,i)=>v-a.positionM[i])), linearSpeedMS:e.dynamic?Math.hypot(...b.linearVelocityMS):0, angularSpeedRadS:e.dynamic?Math.hypot(...b.angularVelocityRadS):0 };
+      });
+      const relationships = c.spec.relationships.map(r=>{ const a=c.records.find(e=>e.id===r.subject_id),b=c.records.find(e=>e.id===r.object_id); return {...r,contactObserved:final.contacts.some(x=>a.geometryIds.includes(x.geom1Name)&&b.geometryIds.includes(x.geom2Name)||a.geometryIds.includes(x.geom2Name)&&b.geometryIds.includes(x.geom1Name)),scope:'Contact only; a declared relationship does not impose a joint, weld, support or insert constraint'}; });
+      const result = { relationships, physicalCompilePassed:true, initialOverlapCheckPassed:true, candidateSimulationSeconds:settleSeconds, wallTimeMs:performance.now()-started, activeSceneUnchanged:true, objects, allFreeObjectsLowMotion:objects.every(e=>e.linearSpeedMS<.01&&e.angularSpeedRadS<.15), scope:'Separate disposable candidate; low motion is not proof of correct support, reconstruction or manipulation', hardwareValidated:false };
+      staged.candidateCheck = result; return clone(result);
+    } finally {
+      candidate?.dispose(); if(pkg) unregisterTransientModelPackage(pkg.id);
+      if(token===this.generation){this.candidate=null;this.workcellMutation=false;this.#updateStatus();}
+    }
+  }
+  getGeneralSceneState(view = 'summary', objectId = null) {
+    const c=this.generalCompiled;
+    if(view==='spec')return { scene:clone(this.generalSpec), stagedScene:clone(this.staged?.generalScene || null), autoStart:false };
+    if(view==='object'){
+      const e=c?.records.find(e=>e.id===objectId); if(!e)throw new Error('Unknown authored object');
+      return { ...clone(e), portsWorld:e.ports.map(p=>worldPort(this.lastObservation.bodies[e.bodyId],p)), observedBody:clone(this.lastObservation?.bodies[e.bodyId] || null) };
+    }
+    return { schemaVersion:GENERAL_SCENE_VERSION, authority:this.getPhysicalAuthorityToken(), sceneMode:this.sceneMode, reference:clone(this.generalSpec?.reference || null), report:clone(this.generalReport), staged:this.staged?.generalScene?{ id:this.staged.id,report:clone(this.staged.report),candidateCheck:clone(this.staged.candidateCheck || null) }:null, objects:(c?.records||[]).map(e=>({id:e.id,label:e.label,kind:e.kind,motion:e.dynamic?'free':'fixed',ports:clone(e.ports),portsWorld:e.ports.map(p=>worldPort(this.lastObservation.bodies[e.bodyId],p))})), task:this.generalTask?.snapshot() || null, limits:GENERAL_LIMITS, imageInterpretation:'external agent; pixels and author claims are not independently verified', hardwareValidated:false };
+  }
+  defineGeneralTask(raw, assessOnly = false) {
+    this.#assertReady(); if(!this.generalSpec)throw new Error('Apply an authored scene before defining its task');
+    const v=validateGeneralTask(raw,this.lastObservation);
+    if(assessOnly)return clone(v);
+    this.generalTask=new GeneralTaskEvaluator(v,this.lastObservation,this.session.sceneRevision); this.generalTaskEpoch=this.session.epoch;
+    return this.generalTask.snapshot();
+  }
+  clearGeneralTask() { this.#assertReady(); this.generalTask=null; return true; }
+  setCollisionView(value) { this.collisionView=Boolean(value); this.presentation?.setCollisionView?.(this.collisionView); return this.collisionView; }
   #funnelSeating() {
     const o = this.lastObservation; if (!o) return [];
     const assets = o.openarm?.equipment || [];
@@ -247,7 +317,7 @@ export class OpenArmPhysicalSimulator {
   }
   #updateStatus() {
     if (!this.statusPanel) return;
-    this.statusPanel.textContent = this.programProgress?.status === 'running' ? `OpenArm program ${this.programProgress.index}/${this.programProgress.segments}: ${this.programProgress.label}` : this.workcellMutation ? 'Compiling physical workcell; existing scene retained until checks pass.' : this.staged ? `Staged ${this.staged.sceneMode} scene with ${this.staged.equipment.length} items. Apply resets; blank removes the reference fixtures and vessels.` : `OpenArm · ${this.sceneMode} workcell · ${this.equipment.length} equipment items · simulation only`;
+    this.statusPanel.textContent = this.programProgress?.status === 'running' ? `OpenArm program ${this.programProgress.index}/${this.programProgress.segments}: ${this.programProgress.label}` : this.workcellMutation ? 'Compiling physical workcell; existing scene retained until checks pass.' : this.staged ? `Staged ${this.staged.sceneMode} scene with ${this.staged.generalScene?.objects.length ?? this.staged.equipment.length} items. Apply resets; blank removes the reference fixtures and vessels.` : `OpenArm · ${this.sceneMode} workcell · ${this.generalSpec?.objects.length ?? this.equipment.length} equipment items · simulation only`;
   }
   #assertLive() { if (this.disposed) throw new Error('OpenArm simulator is disposed'); }
   #assertReady() { this.#assertLive(); if (!this.isReady() || this.workcellMutation) throw new Error('OpenArm physical session is not ready or is compiling a workcell'); }

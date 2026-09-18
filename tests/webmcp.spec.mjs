@@ -45,8 +45,8 @@ const BASE_TOOLS = [
   'describe_robobuddy_task', 'read_robobuddy_workspace', 'inspect_robobuddy_simulation',
   'focus_robobuddy_workspace', 'run_robobuddy_program', 'draft_robobuddy_cooperative_edit',
 ];
-const OPENARM_TOOLS = [...BASE_TOOLS, 'control_openarm_simulation', 'inspect_openarm_workcell', 'manage_openarm_workcell', 'run_openarm_program'];
-const READ_ONLY_TOOLS = new Set([...BASE_TOOLS.slice(0, 3), 'inspect_openarm_workcell']);
+const OPENARM_TOOLS = [...BASE_TOOLS, 'control_openarm_simulation', 'inspect_openarm_workcell', 'manage_openarm_workcell', 'run_openarm_program', 'inspect_openarm_scene', 'manage_openarm_scene', 'manage_openarm_task'];
+const READ_ONLY_TOOLS = new Set([...BASE_TOOLS.slice(0, 3), 'inspect_openarm_workcell', 'inspect_openarm_scene']);
 
 test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBuddy WebMCP surface', async ({ page }) => {
   const pageErrors = [];

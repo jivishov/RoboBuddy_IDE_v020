@@ -1,3 +1,5 @@
+import { installGeneralLabBuilder } from '../ui/general-lab-builder.js';
+import { getGeneralSceneDefinitions, inspectGeneralScene, mutateGeneralScene, mutateGeneralTask } from './openarm-scene-builder.js';
 import { getOpenArmWorkcellDefinitions, inspectOpenArmWorkcell, manageOpenArmWorkcell, runOpenArmProgram } from './openarm-workcell.js';
 import { executeAsimovPhysicalControl, getAsimovPhysicalControlDefinition } from './asimov-physical-control.js';
 import { cancelledResult, domainErrorResult } from './agent-facade.js';
@@ -102,6 +104,10 @@ function createTools(facade, epoch) {
     const execute = definition.name === 'inspect_openarm_workcell' ? (input, signal) => inspectOpenArmWorkcell(facade, input, epoch) : definition.name === 'manage_openarm_workcell' ? (input, signal) => manageOpenArmWorkcell(facade, input, signal, epoch) : (input, signal) => runOpenArmProgram(facade, input, signal, epoch);
     tools.push({ ...definition, annotations: readOnly ? READ_ONLY_ANNOTATIONS : RUN_ANNOTATIONS, execute: safeHandler(execute) });
   }
+  for (const { readOnly, ...definition } of getGeneralSceneDefinitions(facade)) {
+    const handler = definition.name === 'inspect_openarm_scene' ? (input, signal) => inspectGeneralScene(facade,input,epoch) : definition.name === 'manage_openarm_scene' ? (input, signal) => mutateGeneralScene(facade,input,signal,epoch) : (input, signal) => mutateGeneralTask(facade,input,signal,epoch);
+    tools.push({ ...definition, annotations:readOnly ? READ_ONLY_ANNOTATIONS : RUN_ANNOTATIONS, execute:safeHandler(handler) });
+  }
   const lekiwiControl = getLeKiwiPhysicalControlDefinition(facade);
   if (lekiwiControl) tools.push({ ...lekiwiControl, annotations: RUN_ANNOTATIONS, execute: safeHandler((input, signal) => executeLeKiwiPhysicalControl(facade, input, signal, epoch)) });
   // Present only for the ready Unitree G1 PHYSICAL workspace. The retained kinematic pose
@@ -133,6 +139,9 @@ function createTools(facade, epoch) {
 
 function webMcpAvailable() { return typeof document?.modelContext?.registerTool === 'function'; }
 export function createWebMcpRegistration(facade, { onRegistrationChange = () => {} } = {}) {
+  // The existing shared bootstrap has the app instance. Human review remains available
+  // independently of native WebMCP support or opt-in agent access.
+  if (typeof facade.app?.onAgentContextChange === 'function') installGeneralLabBuilder(facade.app);
   let epoch = 0;
   let registrationController = null;
   let currentAccess = 'off';
