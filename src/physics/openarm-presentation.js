@@ -14,7 +14,8 @@ export class OpenArmPresentation {
     this.root.name = preview ? 'openarm-staged-equipment-preview' : 'openarm-authoritative-contact-geometry';
     this.bodyGroups = new Map(); this.geomMeshes = new Map(); this.geometries = new Set(); this.materials = new Set();
     const cache = new Map();
-    for (const geom of definition.geoms) {
+    this.visualBodies = new Set((definition.visualGeoms || []).map(g=>g.bodyId)); this.visualMeshes = []; this.collisionMeshes = []; this.preview = preview;
+    for (const geom of [...definition.geoms, ...(preview ? [] : definition.visualGeoms || [])]) {
       if (geom.id === 'floor') continue; // The physical floor is presented by the ground grid.
       let geometry;
       const size = geom.sizeM || [];
@@ -42,7 +43,7 @@ export class OpenArmPresentation {
       const robot = geom.bodyId.startsWith('openarm_');
       const color = robot ? (geom.id.includes('finger') || geom.id.includes('ee_base') ? 0x36434a : 0x75818a) : new THREE.Color(...(geom.rgba || [.45, .51, .54]).slice(0, 3));
       const opacity = preview ? .65 : (geom.rgba?.[3] ?? 1);
-      const material = new THREE.MeshStandardMaterial({ color, roughness: opacity < 1 ? .23 : .64, metalness: robot ? .26 : .06, wireframe: preview, transparent: opacity < 1, opacity, depthWrite: opacity === 1, side: opacity < 1 ? THREE.DoubleSide : THREE.FrontSide });
+      const material = new THREE.MeshStandardMaterial({ color, roughness: geom.roughness ?? (opacity < 1 ? .23 : .64), metalness: geom.metalness ?? (robot ? .26 : .06), wireframe: preview, transparent: opacity < 1, opacity, depthWrite: opacity === 1, side: opacity < 1 ? THREE.DoubleSide : THREE.FrontSide });
       this.materials.add(material);
       const mesh = new THREE.Mesh(geometry, material); mesh.name = geom.id;
       mesh.position.copy(toThreePosition(geom.positionM)); mesh.quaternion.copy(toThreeQuaternion(geom.quaternionWxyz));
@@ -50,8 +51,13 @@ export class OpenArmPresentation {
       mesh.userData.physicalGeometryId = geom.id; mesh.userData.physicalBodyId = geom.bodyId;
       let group = this.bodyGroups.get(geom.bodyId);
       if (!group) { group = new THREE.Group(); group.name = geom.bodyId; this.root.add(group); this.bodyGroups.set(geom.bodyId, group); }
-      group.add(mesh); this.geomMeshes.set(geom.id, mesh);
+      group.add(mesh);
+      if (geom.visualOnly) { this.visualMeshes.push(mesh); } else { this.geomMeshes.set(geom.id, mesh); this.collisionMeshes.push(mesh); }
     }
+  }
+  setCollisionView(value) {
+    for (const mesh of this.visualMeshes) mesh.visible = !value;
+    for (const mesh of this.collisionMeshes) mesh.visible = Boolean(value || this.preview || !this.visualBodies.has(mesh.userData.physicalBodyId));
   }
   applyObservation(observation) {
     for (const [bodyId, group] of this.bodyGroups) {

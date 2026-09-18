@@ -1,6 +1,7 @@
 import { OpenArmServo, OPENARM_CONTROL_PROFILE } from './openarm-servo.js';
 import { validateOpenArmEquipment, appendEquipmentXml } from './openarm-equipment.js';
 import { workcellBaseXml, validateOpenArmSceneMode } from './openarm-workcell-scene.js';
+import { appendGeneralSceneXml } from './openarm-general-scene.js';
 import { solveOpenArmIK } from './openarm-ik.js';
 import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
 import { MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, sampledObservationCount } from './backend-contract.js';
@@ -134,6 +135,7 @@ function observation() {
     const quatOffset = body.id * 4;
     const record = {
       frame: 'mujoco_world',
+      centerOfMassM: Array.from(data.xipos.slice(posOffset, posOffset + 3)),
       positionM: [Number(data.xpos[posOffset]), Number(data.xpos[posOffset + 1]), Number(data.xpos[posOffset + 2])],
       quaternionWxyz: [Number(data.xquat[quatOffset]), Number(data.xquat[quatOffset + 1]), Number(data.xquat[quatOffset + 2]), Number(data.xquat[quatOffset + 3])],
     };
@@ -145,7 +147,7 @@ function observation() {
     bodies[name] = record;
   }
   const contactState = readContacts();
-  return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts, openarm: { sceneMode: descriptor.sceneMode || 'baseline', pinchReferences: Object.fromEntries(['left', 'right'].map(side => { const site = idFor('mjOBJ_SITE', `${side}_pinch_reference`); const ee = bodies[`openarm_${side}_ee_base_link`]; return [side, { frame: 'mujoco_world', positionM: Array.from(data.site_xpos.slice(site * 3, site * 3 + 3)), quaternionWxyz: ee.quaternionWxyz }]; })), observationPhase: 'post-step forward dynamics; all quantities at simulationTime', controlProfile: OPENARM_CONTROL_PROFILE, motionPlan, equipment: equipment?.records || [], equipmentJoints: (equipment?.passiveJoints || []).map(j => { const id = idFor('mjOBJ_JOINT', j.id); const q = Number(data.qpos[model.jnt_qposadr[id]]); return { ...j, position: q, velocity: Number(data.qvel[model.jnt_dofadr[id]]), pressed: q >= j.pressedThresholdM }; }) }, setupLog: descriptor.equipment?.length || descriptor.sceneMode === 'blank' ? [{ type: 'explicit-workcell-compile-and-reset', simulationTimeSeconds: 0, sceneMode: descriptor.sceneMode || 'baseline', equipmentIds: (descriptor.equipment || []).map(e => e.id), modelSha256: modelInfo.modelSha256 }] : [] };
+  return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts, openarm: { sceneMode: descriptor.sceneMode || 'baseline', pinchReferences: Object.fromEntries(['left', 'right'].map(side => { const site = idFor('mjOBJ_SITE', `${side}_pinch_reference`); const ee = bodies[`openarm_${side}_ee_base_link`]; return [side, { frame: 'mujoco_world', positionM: Array.from(data.site_xpos.slice(site * 3, site * 3 + 3)), quaternionWxyz: ee.quaternionWxyz }]; })), observationPhase: 'post-step forward dynamics; all quantities at simulationTime', controlProfile: OPENARM_CONTROL_PROFILE, motionPlan, equipment: equipment?.records || [], equipmentJoints: (equipment?.passiveJoints || []).map(j => { const id = idFor('mjOBJ_JOINT', j.id); const q = Number(data.qpos[model.jnt_qposadr[id]]); return { ...j, position: q, velocity: Number(data.qvel[model.jnt_dofadr[id]]), pressed: q >= j.pressedThresholdM }; }) }, setupLog: descriptor.equipment?.length || descriptor.sceneMode === 'blank' || descriptor.generalScene ? [{ type: 'explicit-workcell-compile-and-reset', simulationTimeSeconds: 0, sceneMode: descriptor.sceneMode || 'baseline', equipmentIds: (descriptor.generalScene?.objects || descriptor.equipment || []).map(e => e.id), modelSha256: modelInfo.modelSha256 }] : [] };
 }
 
 function applyDeclaredInitialState() {
@@ -187,11 +189,19 @@ async function load(modelPackage) {
   const baseHash = await sha256Text(xml);
   if (baseHash !== (modelPackage.baseSha256 || modelPackage.sha256)) throw new Error(`Base model SHA-256 mismatch for ${modelPackage.id}`);
   const sceneMode = validateOpenArmSceneMode(modelPackage.sceneMode);
+  if (modelPackage.generalScene) {
+    if (sceneMode !== 'authored') throw new Error('General SceneSpec requires authored mode');
+    equipment = appendGeneralSceneXml(xml, modelPackage.generalScene);
+    if (await sha256Text(JSON.stringify(equipment.spec)) !== modelPackage.sceneSpecSha256) throw new Error('Authored SceneSpec checksum mismatch');
+    xml = equipment.xml;
+  } else {
+  if (sceneMode === 'authored') throw new Error('Authored mode requires a validated SceneSpec');
   xml = workcellBaseXml(xml, sceneMode);
   if (modelPackage.equipment?.length || sceneMode === 'blank') {
     const normalized = validateOpenArmEquipment(modelPackage.equipment || []);
     equipment = appendEquipmentXml(xml, normalized);
     xml = equipment.xml;
+  }
   }
   const modelSha256 = await sha256Text(xml);
   if (modelSha256 !== modelPackage.sha256) throw new Error(`Model SHA-256 mismatch for ${modelPackage.id}`);
@@ -221,12 +231,14 @@ function step(count = 1) {
 }
 function validateInitialEquipmentClearance() {
   const names = Array.from({ length: Number(model.ngeom) }, (_, i) => nameForGeom(i));
-  const owner = name => equipment.records.find(e => e.geometryIds.includes(name))?.id;
+  const owners = new Map(equipment.records.flatMap(e => e.geometryIds.map(name => [name, e.id])));
+  const owner = name => owners.get(name);
+  const segment = new Float64Array(6);
   for (let a = 0; a < names.length; a++) {
     const ownA = owner(names[a]); if (!ownA) continue;
     for (let b = 0; b < names.length; b++) {
       if (a === b || owner(names[b]) === ownA || (owner(names[b]) && b < a)) continue;
-      const distance = Number(mujoco.mj_geomDistance(model, data, a, b, .001, new Float64Array(6)));
+      const distance = Number(mujoco.mj_geomDistance(model, data, a, b, .001, segment));
       if (distance < -.0005) throw new RangeError(`Initial equipment overlaps ${names[a]} / ${names[b]} by ${(-distance * 1000).toFixed(2)} mm. The existing workcell was not changed.`);
     }
   }

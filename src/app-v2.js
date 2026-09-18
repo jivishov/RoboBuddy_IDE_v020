@@ -20,7 +20,9 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 class App {
   constructor() {
-    this.profileId = localStorage.getItem('rbide.profile') || 'openarm';
+    const requestedProfile = new URLSearchParams(window.location.search).get('robot');
+    this.profileId = requestedProfile && Object.hasOwn(PROFILES, requestedProfile)
+      ? requestedProfile : (localStorage.getItem('rbide.profile') || 'openarm');
     if (!PROFILES[this.profileId]) this.profileId = 'openarm';
     this.taskId = localStorage.getItem(`rbide.task.${this.profileId}`) || defaultTaskId(this.profileId);
     this.scenario = null;

@@ -1,5 +1,13 @@
 # RoboBuddy IDE — Physics Preview
 
+## Visitors and help
+
+The root [visitor overview](index.html) introduces the available workspaces without loading the physics runtime. [Launch the IDE](ide.html) or [open OpenArm directly](ide.html?robot=openarm). The IDE Help menu opens the [OpenArm manual](guides/openarm.html) and [WebMCP manual](guides/webmcp.html) in separate tabs so the active workcell is not replaced. Both manuals support printing and include tested example files. Explicit older root URLs (`?ci=...`, `?view=ide`, `?robot=...` or `#ide`) redirect to the IDE at the same directory depth.
+
+The general OpenArm laboratory builder is **library-optional**: agents can author unfamiliar rigid equipment through rotated primitives, hollow profiles, repetition, convex extrusions and validated numeric convex meshes. The authored bench, inventory, unresolved items, provenance and physical task evidence are kept separate. See [SceneSpec v2 scope and contracts](docs/physics/GENERAL_LAB_SCENE_BUILDER.md). There is no independent arbitrary-photo reconstruction, liquid/chemistry model, general articulated-equipment authoring or hardware validation.
+
+## Physics workspaces
+
 Version `0.2.0-alpha.2` completes the SO-101 physical migration milestone: the normal SO-101 workspace, live Python, renderer, task evaluator, and bounded WebMCP controls share one authoritative browser MuJoCo PhysicsSession.
 
 OpenArm V2 now uses the same source-matched convex collision components for both physics and rendering, including the palm and each independently observed finger. The workcell has physical table legs, a robot mounting column and a connected ring support. The dry-vessel reference sequence uses bounded quintic targets and an explicitly simulator-designed bias-assisted servo; grasp/placement evaluation requires sustained contacts and stable support. No object attachment or teleportation is used.
