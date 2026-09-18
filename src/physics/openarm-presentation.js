@@ -41,7 +41,8 @@ export class OpenArmPresentation {
       geometry.computeBoundingBox(); this.geometries.add(geometry);
       const robot = geom.bodyId.startsWith('openarm_');
       const color = robot ? (geom.id.includes('finger') || geom.id.includes('ee_base') ? 0x36434a : 0x75818a) : new THREE.Color(...(geom.rgba || [.45, .51, .54]).slice(0, 3));
-      const material = new THREE.MeshStandardMaterial({ color, roughness: .64, metalness: robot ? .26 : .06, wireframe: preview, transparent: preview, opacity: preview ? .65 : 1 });
+      const opacity = preview ? .65 : (geom.rgba?.[3] ?? 1);
+      const material = new THREE.MeshStandardMaterial({ color, roughness: opacity < 1 ? .23 : .64, metalness: robot ? .26 : .06, wireframe: preview, transparent: opacity < 1, opacity, depthWrite: opacity === 1, side: opacity < 1 ? THREE.DoubleSide : THREE.FrontSide });
       this.materials.add(material);
       const mesh = new THREE.Mesh(geometry, material); mesh.name = geom.id;
       mesh.position.copy(toThreePosition(geom.positionM)); mesh.quaternion.copy(toThreeQuaternion(geom.quaternionWxyz));
