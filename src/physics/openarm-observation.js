@@ -47,6 +47,7 @@ export function worldPoint(body, local) {
 const finiteVec3 = p => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite);
 export function conditionMet(observation, condition) {
   const o = observation;
+  if (condition.type === 'funnel_seated') return funnelSeatingState(o, condition.object_id, condition.receiver_id).seated;
   if (condition.type === 'bilateral_grasp' || condition.type === 'released' || condition.type === 'supported') {
     if (!contactEvidenceComplete(o) || !o.bodies?.[condition.object_id] || !objectGeometryIds(o, condition.object_id).length) return false;
   }
@@ -68,4 +69,41 @@ export function conditionMet(observation, condition) {
     return Boolean(finiteVec3(p) && Math.hypot(...p.map((v, i) => v - condition.position_m[i])) <= condition.tolerance_m);
   }
   return false;
+}
+
+/** Instantaneous seating evidence, not proof of the preceding pick-and-place.
+ * A program must separately require grasp/lift and a sustained seating dwell.
+ * Fail closed on incomplete contacts, held objects, motion or impossible fit.
+ */
+export function funnelSeatingState(o, objectId, receiverId) {
+  const no = reason => ({ seated: false, reason, evidence: 'instantaneous simulator ground truth; not transfer history' });
+  const items = o.openarm?.equipment || [];
+  const f = items.find(e=>e.bodyId===objectId), b = items.find(e=>e.bodyId===receiverId);
+  if (f?.kind !== 'funnel' || f.dynamic !== true || b?.kind !== 'burette' || b.dynamic !== false) return no('requires a dynamic funnel and fixed burette');
+  const fb = o.bodies?.[objectId], bb = o.bodies?.[receiverId];
+  const validBody = body => body && finiteVec3(body.positionM) && Array.isArray(body.quaternionWxyz) && body.quaternionWxyz.length===4 && body.quaternionWxyz.every(Number.isFinite) && Math.abs(Math.hypot(...body.quaternionWxyz)-1)<.001;
+  if (!validBody(fb) || !validBody(bb) || !contactEvidenceComplete(o)) return no('unreadable or incomplete physical state');
+  if (!finiteVec3(fb.linearVelocityMS) || !finiteVec3(fb.angularVelocityRadS)) return no('missing free-body velocities');
+  const axis = body => worldPoint(body,[0,0,1]).map((v,i)=>v-body.positionM[i]);
+  const fa=axis(fb), ba=axis(bb), dot=(a,b)=>a.reduce((s,v,i)=>s+v*b[i],0);
+  const tip=worldPoint(fb,f.affordances.stemTipM), mouth=worldPoint(bb,b.affordances.openingCenterM);
+  const relative=tip.map((v,i)=>v-mouth[i]);
+  const depth=-dot(relative,ba), radial=Math.hypot(...relative.map((v,i)=>v+depth*ba[i]));
+  const alignment=Math.max(-1,Math.min(1,dot(fa,ba)));
+  const tilt=Math.acos(alignment), clearance=b.affordances.innerRadiusM-f.affordances.stemRadiusM;
+  const maxDepth=f.affordances.stemLengthM + (b.affordances.outerRadiusM-f.affordances.stemRadiusM) * (f.affordances.heightM-f.affordances.stemLengthM)/(f.affordances.bowlRadiusM-f.affordances.stemRadiusM) + .002;
+  const geometryFits=ba[2]>.98 && alignment>0 && clearance>0 && depth>=f.affordances.stemLengthM*.7 && depth<=maxDepth && radial+Math.sin(tilt)*f.affordances.stemLengthM<=clearance+.0005;
+  const contacts=contactsForObject(o,objectId), receiverGeoms=new Set(b.geometryIds), funnelGeoms=new Set(f.geometryIds);
+  const other=c=>funnelGeoms.has(c.geom1Name)?c.geom2Name:c.geom1Name;
+  const receiverContacts=contacts.filter(c=>receiverGeoms.has(other(c)) && usableContact(c));
+  const receiverForceN=receiverContacts.reduce((s,c)=>s+c.normalForceN,0);
+  const released=['left','right'].every(side=>!graspState(o,side,objectId).anyGripperContact);
+  const excessivePenetration=contacts.some(c=>!Number.isFinite(c.distanceM) || c.distanceM<-.002);
+  const otherSupport=contacts.some(c=>!receiverGeoms.has(other(c)) && activeOrUncertainContact(c));
+  const settled=Math.hypot(...fb.linearVelocityMS)<.01 && Math.hypot(...fb.angularVelocityRadS)<.15;
+  const supported=receiverForceN>Math.max(.01,f.mass_kg*9.81*.2);
+  return { seated: geometryFits && released && !excessivePenetration && !otherSupport && settled && supported,
+    geometryFits, released, settled, supported, excessivePenetration, otherSupport,
+    insertionDepthM: depth, radialOffsetM: radial, tiltRad: tilt, receiverForceN,
+    evidence: 'instantaneous simulator ground truth; require dwell and independent grasp/lift observations to establish a transfer' };
 }

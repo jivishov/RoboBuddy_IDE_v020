@@ -1,5 +1,6 @@
 import { OpenArmServo, OPENARM_CONTROL_PROFILE } from './openarm-servo.js';
 import { validateOpenArmEquipment, appendEquipmentXml } from './openarm-equipment.js';
+import { workcellBaseXml, validateOpenArmSceneMode } from './openarm-workcell-scene.js';
 import { solveOpenArmIK } from './openarm-ik.js';
 import loadMujoco from '../../assets/microduck/runtime/mujoco/mujoco.js';
 import { MAX_ADVANCE_STEPS_PER_REQUEST, MAX_SAMPLED_OBSERVATIONS_PER_ADVANCE, sampledObservationCount } from './backend-contract.js';
@@ -144,7 +145,7 @@ function observation() {
     bodies[name] = record;
   }
   const contactState = readContacts();
-  return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts, openarm: { pinchReferences: Object.fromEntries(['left', 'right'].map(side => { const site = idFor('mjOBJ_SITE', `${side}_pinch_reference`); const ee = bodies[`openarm_${side}_ee_base_link`]; return [side, { frame: 'mujoco_world', positionM: Array.from(data.site_xpos.slice(site * 3, site * 3 + 3)), quaternionWxyz: ee.quaternionWxyz }]; })), observationPhase: 'post-step forward dynamics; all quantities at simulationTime', controlProfile: OPENARM_CONTROL_PROFILE, motionPlan, equipment: equipment?.records || [], equipmentJoints: (equipment?.passiveJoints || []).map(j => { const id = idFor('mjOBJ_JOINT', j.id); const q = Number(data.qpos[model.jnt_qposadr[id]]); return { ...j, position: q, velocity: Number(data.qvel[model.jnt_dofadr[id]]), pressed: q >= j.pressedThresholdM }; }) }, setupLog: descriptor.equipment?.length ? [{ type: 'explicit-workcell-compile-and-reset', simulationTimeSeconds: 0, equipmentIds: descriptor.equipment.map(e => e.id), modelSha256: modelInfo.modelSha256 }] : [] };
+  return { simulationTime: Number(data.time || 0), model: { id: descriptor.modelId || descriptor.id, asset: descriptor.asset, sha256: modelInfo.modelSha256 }, engine: { version: modelInfo.engineVersion, versionEvidence: modelInfo.engineVersionEvidence, timestepSeconds: modelInfo.timestepSeconds }, joints, bodies, contactCount: contactState.count, contactsReadable: contactState.readable, contacts: contactState.contacts, openarm: { sceneMode: descriptor.sceneMode || 'baseline', pinchReferences: Object.fromEntries(['left', 'right'].map(side => { const site = idFor('mjOBJ_SITE', `${side}_pinch_reference`); const ee = bodies[`openarm_${side}_ee_base_link`]; return [side, { frame: 'mujoco_world', positionM: Array.from(data.site_xpos.slice(site * 3, site * 3 + 3)), quaternionWxyz: ee.quaternionWxyz }]; })), observationPhase: 'post-step forward dynamics; all quantities at simulationTime', controlProfile: OPENARM_CONTROL_PROFILE, motionPlan, equipment: equipment?.records || [], equipmentJoints: (equipment?.passiveJoints || []).map(j => { const id = idFor('mjOBJ_JOINT', j.id); const q = Number(data.qpos[model.jnt_qposadr[id]]); return { ...j, position: q, velocity: Number(data.qvel[model.jnt_dofadr[id]]), pressed: q >= j.pressedThresholdM }; }) }, setupLog: descriptor.equipment?.length || descriptor.sceneMode === 'blank' ? [{ type: 'explicit-workcell-compile-and-reset', simulationTimeSeconds: 0, sceneMode: descriptor.sceneMode || 'baseline', equipmentIds: (descriptor.equipment || []).map(e => e.id), modelSha256: modelInfo.modelSha256 }] : [] };
 }
 
 function applyDeclaredInitialState() {
@@ -185,8 +186,10 @@ async function load(modelPackage) {
   let xml = await fetch(modelUrl, { cache: 'no-store' }).then((response) => { if (!response.ok) throw new Error(`MuJoCo model returned HTTP ${response.status}`); return response.text(); });
   const baseHash = await sha256Text(xml);
   if (baseHash !== (modelPackage.baseSha256 || modelPackage.sha256)) throw new Error(`Base model SHA-256 mismatch for ${modelPackage.id}`);
-  if (modelPackage.equipment?.length) {
-    const normalized = validateOpenArmEquipment(modelPackage.equipment);
+  const sceneMode = validateOpenArmSceneMode(modelPackage.sceneMode);
+  xml = workcellBaseXml(xml, sceneMode);
+  if (modelPackage.equipment?.length || sceneMode === 'blank') {
+    const normalized = validateOpenArmEquipment(modelPackage.equipment || []);
     equipment = appendEquipmentXml(xml, normalized);
     xml = equipment.xml;
   }

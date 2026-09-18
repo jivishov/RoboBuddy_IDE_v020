@@ -1,19 +1,21 @@
-import { OPENARM_EQUIPMENT_VERSION, validateOpenArmEquipment } from '../physics/openarm-equipment.js';
+import { OPENARM_EQUIPMENT_VERSION, validateOpenArmEquipment, EQUIPMENT_KINDS } from '../physics/openarm-equipment.js';
 import { conditionMet, objectGeometryIds } from '../physics/openarm-observation.js';
 import { WebMcpDomainError } from './agent-facade.js';
 import { plain, onlyKeys, finite, vec, vecSchema, invalid, targetsSchema, validateTargets, validateTool, captureOpenArm, assertOpenArmCurrent, sameAuthority, backendFor } from './openarm-physical-control.js';
+
+import { OPENARM_SCENE_MODES, validateOpenArmSceneMode } from '../physics/openarm-workcell-scene.js';
 
 export const OPENARM_PROGRAM_VERSION = 'robobuddy.openarm.program.v1';
 const toolSchema = { type: 'object', properties: { side: { enum: ['left', 'right'] }, position_m: vecSchema(3), quaternion_wxyz: vecSchema(4) }, required: ['side', 'position_m'], additionalProperties: false };
 export function createOpenArmWorkcellSchema() {
   const item = { type: 'object', properties: {
-    id: { type: 'string', pattern: '^[a-z][a-z0-9_]{0,23}$' }, label: { type: 'string', maxLength: 64 }, kind: { enum: ['platform', 'tray', 'rack', 'vial', 'block', 'button', 'assembly'] },
-    position_m: vecSchema(3), yaw_rad: { type: 'number', minimum: -Math.PI, maximum: Math.PI }, dimensions_m: vecSchema(3), mass_kg: { type: 'number', minimum: .005, maximum: 2 }, dynamic: { type: 'boolean' },
+    id: { type: 'string', pattern: '^[a-z][a-z0-9_]{0,23}$' }, label: { type: 'string', maxLength: 64 }, kind: { enum: [...EQUIPMENT_KINDS] },
+    position_m: vecSchema(3), quaternion_wxyz: vecSchema(4), yaw_rad: { type: 'number', minimum: -Math.PI, maximum: Math.PI }, dimensions_m: vecSchema(3), mass_kg: { type: 'number', minimum: .005, maximum: 2 }, dynamic: { type: 'boolean' },
     parts: { type: 'array', minItems: 1, maxItems: 12, items: { type: 'object', properties: { shape: { enum: ['box', 'sphere', 'cylinder'] }, position_m: vecSchema(3), dimensions_m: vecSchema(3), radius_m: { type: 'number', minimum: .001, maximum: .2 }, height_m: { type: 'number', minimum: .002, maximum: .4 } }, required: ['shape', 'position_m'], additionalProperties: false } },
-  }, required: ['id', 'kind', 'position_m'], additionalProperties: false };
+  }, required: ['id', 'kind', 'position_m'], not: { required: ['yaw_rad', 'quaternion_wxyz'] }, additionalProperties: false };
   const version = { type: 'string', const: OPENARM_EQUIPMENT_VERSION };
   return { type: 'object', oneOf: [
-    { type: 'object', properties: { schema_version: version, command: { const: 'stage' }, expected_scene_revision: { type: 'string' }, equipment: { type: 'array', maxItems: 12, items: item } }, required: ['schema_version', 'command', 'expected_scene_revision', 'equipment'], additionalProperties: false },
+    { type: 'object', properties: { schema_version: version, command: { const: 'stage' }, expected_scene_revision: { type: 'string' }, scene_mode: { enum: [...OPENARM_SCENE_MODES] }, equipment: { type: 'array', maxItems: 12, items: item } }, required: ['schema_version', 'command', 'expected_scene_revision', 'equipment'], additionalProperties: false },
     { type: 'object', properties: { schema_version: version, command: { const: 'apply' }, stage_id: { type: 'string' }, acknowledge_reset: { const: true } }, required: ['schema_version', 'command', 'stage_id', 'acknowledge_reset'], additionalProperties: false },
     { type: 'object', properties: { schema_version: version, command: { const: 'discard' } }, required: ['schema_version', 'command'], additionalProperties: false },
   ] };
@@ -21,6 +23,7 @@ export function createOpenArmWorkcellSchema() {
 function conditionSchema() {
   const common = { dwell_seconds: { type: 'number', minimum: .02, maximum: 1 }, timeout_seconds: { type: 'number', minimum: 0, maximum: 5 } };
   const variants = [
+    [{ type: { const: 'funnel_seated' }, object_id: { type: 'string' }, receiver_id: { type: 'string' } }, ['type', 'object_id', 'receiver_id']],
     [{ type: { enum: ['bilateral_grasp', 'released'] }, side: { enum: ['left', 'right'] }, object_id: { type: 'string' } }, ['type', 'side', 'object_id']],
     [{ type: { const: 'supported' }, object_id: { type: 'string' }, support_geom: { type: 'string' } }, ['type', 'object_id', 'support_geom']],
     [{ type: { const: 'in_region' }, object_id: { type: 'string' }, center_m: vecSchema(3), half_extents_m: vecSchema(3) }, ['type', 'object_id', 'center_m', 'half_extents_m']],
@@ -42,8 +45,8 @@ export function getOpenArmWorkcellDefinitions(facade) {
   if (c.profileId !== 'openarm' || c.simulationMode !== 'physical_mujoco' || c.workspaceStatus !== 'ready' || !c.simulationReady) return [];
   return [
     { name: 'inspect_openarm_workcell', title: 'Inspect OpenArm workcell', description: 'Read physical body poses, per-finger contacts/forces, observed pinch frames, equipment affordances, passive equipment joints, staged geometry and running-program progress. World metres, Z-up, radians. Simulator ground truth, not hardware sensor data.', inputSchema: { type: 'object', properties: {}, additionalProperties: false }, readOnly: true },
-    { name: 'manage_openarm_workcell', title: 'Build OpenArm lab equipment', description: `Stage bounded ${OPENARM_EQUIPMENT_VERSION} rigid-body equipment: platforms, hollow trays, compartment racks, vials, blocks, spring buttons, or custom assemblies of up to 12 primitives. position_m is bottom-centre in Z-up world metres; dimensions_m are FULL widths and height. Stage replaces the custom equipment list, not baseline fixtures. A wireframe preview is visible. Apply requires stage_id and acknowledge_reset:true, checks initial collisions, and explicitly resets into a new scene revision. Failed application preserves the old scene. Stage an empty list to remove custom equipment. No arbitrary code/XML/URLs or hidden object motion.`, inputSchema: createOpenArmWorkcellSchema(), readOnly: false },
-    { name: 'run_openarm_program', title: 'Run bounded OpenArm manipulation program', description: `Execute ${OPENARM_PROGRAM_VERSION} against the CURRENT scene without an implicit reset. Up to 32 segments and 60 worst-case simulation seconds. Each segment may send speed-bounded joint targets OR a Cartesian pinch-reference tool target, or just advance. Optional wait_for predicates require sustained observed contacts, placement, release, tool position or passive equipment-joint travel; failure stops the sequence and reports actual progress. Reference durations must fit the servo speed limits. Unspecified tool orientation is not constrained. No collision-free planning guarantee, attachment, hardware or publishing. Human Stop and Agent Assist revocation cancel execution.`, inputSchema: createOpenArmProgramSchema(), readOnly: false },
+    { name: 'manage_openarm_workcell', title: 'Build OpenArm lab equipment', description: `Stage bounded ${OPENARM_EQUIPMENT_VERSION} equipment, including hollow funnel/burette/beaker/erlenmeyer_flask, ring_stand, bottle, tile, and the existing trays/racks/vials/blocks/buttons/primitive assemblies. Inspect assetCatalog for dimensions and affordances. position_m is bottom-centre in Z-up world metres; dimensions_m are FULL widths and height. scene_mode:blank removes the baseline task fixtures/flask/beaker, preserving the robot, mount, table and floor. Stage an empty list with scene_mode:blank for a clean workcell; scene_mode:baseline restores the reference fixtures. Omitted mode preserves the current mode. Stage replaces the complete custom equipment list. Optional normalized quaternion_wxyz OR yaw_rad sets setup orientation; position_m remains the local bottom-centre origin. Dimensions/materials are illustrative, not recovered from image pixels. A wireframe preview is visible. Apply requires stage_id and acknowledge_reset:true, checks initial collisions, and explicitly resets into a new scene revision. Failed application preserves the old scene. Stage an empty list to remove custom equipment. No arbitrary code/XML/URLs or hidden object motion.`, inputSchema: createOpenArmWorkcellSchema(), readOnly: false },
+    { name: 'run_openarm_program', title: 'Run bounded OpenArm manipulation program', description: `Execute ${OPENARM_PROGRAM_VERSION} against the CURRENT scene without an implicit reset. Up to 32 segments and 60 worst-case simulation seconds. Each segment may send speed-bounded joint targets OR a Cartesian pinch-reference tool target, or just advance. Optional wait_for predicates require sustained observed contacts, placement, release, tool position, passive equipment-joint travel or funnel_seated (actual bore fit, receiver contact, release and settled motion; >=0.2 s dwell); failure stops the sequence and reports actual progress. Reference durations must fit the servo speed limits. Unspecified tool orientation is not constrained. No collision-free planning guarantee, attachment, hardware or publishing. Human Stop and Agent Assist revocation cancel execution.`, inputSchema: createOpenArmProgramSchema(), readOnly: false },
   ];
 }
 export function inspectOpenArmWorkcell(facade, input, epoch) {
@@ -54,7 +57,7 @@ export function inspectOpenArmWorkcell(facade, input, epoch) {
 }
 export async function manageOpenArmWorkcell(facade, input, signal, epoch) {
   plain(input); if (input.schema_version !== OPENARM_EQUIPMENT_VERSION) invalid('Unsupported equipment schema_version');
-  if (input.command === 'stage') { onlyKeys(input, ['schema_version', 'command', 'expected_scene_revision', 'equipment']); validateOpenArmEquipment(input.equipment); }
+  if (input.command === 'stage') { onlyKeys(input, ['schema_version', 'command', 'expected_scene_revision', 'equipment', 'scene_mode']); validateOpenArmEquipment(input.equipment); if (input.scene_mode !== undefined) validateOpenArmSceneMode(input.scene_mode); }
   else if (input.command === 'apply') { onlyKeys(input, ['schema_version', 'command', 'stage_id', 'acknowledge_reset']); if (typeof input.stage_id !== 'string' || input.acknowledge_reset !== true) invalid('Applying requires stage_id and acknowledge_reset:true'); }
   else if (input.command === 'discard') onlyKeys(input, ['schema_version', 'command']);
   else invalid('Equipment command must be stage, apply or discard');
@@ -67,7 +70,7 @@ export async function manageOpenArmWorkcell(facade, input, signal, epoch) {
     const guard = () => assertOpenArmCurrent(facade, baseline, epoch, signal, token);
     guard();
     let result;
-    if (input.command === 'stage') result = backend.stageEquipment(input.equipment);
+    if (input.command === 'stage') result = backend.stageEquipment(input.equipment, input.scene_mode);
     else if (input.command === 'discard') result = backend.discardStagedEquipment();
     else result = await backend.applyStagedEquipment(input.stage_id, true, guard);
     assertOpenArmCurrent(facade, baseline, epoch, signal, token, input.command === 'apply');
@@ -77,12 +80,17 @@ export async function manageOpenArmWorkcell(facade, input, signal, epoch) {
 }
 function validateCondition(raw, observation, geometryIds) {
   plain(raw, 'wait_for');
-  const fields = { bilateral_grasp: ['side', 'object_id'], released: ['side', 'object_id'], supported: ['object_id', 'support_geom'], in_region: ['object_id', 'center_m', 'half_extents_m'], equipment_joint: ['joint_id', 'minimum', 'maximum'], tool_reached: ['side', 'position_m', 'tolerance_m'] }[raw.type];
+  const fields = { funnel_seated: ['object_id', 'receiver_id'], bilateral_grasp: ['side', 'object_id'], released: ['side', 'object_id'], supported: ['object_id', 'support_geom'], in_region: ['object_id', 'center_m', 'half_extents_m'], equipment_joint: ['joint_id', 'minimum', 'maximum'], tool_reached: ['side', 'position_m', 'tolerance_m'] }[raw.type];
   if (!fields) invalid('Unsupported wait_for predicate');
   onlyKeys(raw, ['type', 'timeout_seconds', 'dwell_seconds', ...fields], 'wait_for');
   for (const field of fields) if (raw[field] === undefined) invalid(`wait_for requires ${field}`);
   if (fields.includes('side') && !['left', 'right'].includes(raw.side)) invalid('Invalid wait_for side');
   if (fields.includes('object_id') && (typeof raw.object_id !== 'string' || !observation.bodies?.[raw.object_id] || !objectGeometryIds(observation, raw.object_id).length)) invalid('wait_for object_id must identify a vessel or declared equipment body');
+  if (raw.type === 'funnel_seated') {
+    const assets = observation.openarm?.equipment || [];
+    const f = assets.find(e=>e.bodyId===raw.object_id), b = assets.find(e=>e.bodyId===raw.receiver_id);
+    if (f?.kind !== 'funnel' || !f.dynamic || b?.kind !== 'burette' || b.dynamic) invalid('funnel_seated requires a dynamic funnel object_id and fixed burette receiver_id');
+  }
   if (raw.type === 'supported' && !geometryIds.includes(raw.support_geom)) invalid('Unknown support_geom');
   if (raw.type === 'in_region') { vec(raw.center_m, 3, 'center_m'); vec(raw.half_extents_m, 3, 'half_extents_m').forEach(v => finite(v, .001, .5, 'half extent')); }
   if (raw.type === 'tool_reached') { validateTool({ side: raw.side, position_m: raw.position_m }); finite(raw.tolerance_m, .001, .01, 'tolerance_m'); }
@@ -91,7 +99,7 @@ function validateCondition(raw, observation, geometryIds) {
     if (!j) invalid('Unknown passive equipment joint');
     finite(raw.minimum, j.range[0], j.range[1], 'minimum'); finite(raw.maximum, raw.minimum, j.range[1], 'maximum');
   }
-  return { ...structuredClone(raw), dwell_seconds: raw.dwell_seconds === undefined ? .06 : finite(raw.dwell_seconds, .02, 1, 'dwell_seconds'), timeout_seconds: raw.timeout_seconds === undefined ? 3 : finite(raw.timeout_seconds, 0, 5, 'timeout_seconds') };
+  return { ...structuredClone(raw), dwell_seconds: raw.dwell_seconds === undefined ? (raw.type === 'funnel_seated' ? .20 : .06) : finite(raw.dwell_seconds, raw.type === 'funnel_seated' ? .20 : .02, 1, 'dwell_seconds'), timeout_seconds: raw.timeout_seconds === undefined ? 3 : finite(raw.timeout_seconds, 0, 5, 'timeout_seconds') };
 }
 export function validateOpenArmProgram(input, workcell, observation) {
   plain(input); onlyKeys(input, ['schema_version', 'expected_scene_revision', 'segments']);

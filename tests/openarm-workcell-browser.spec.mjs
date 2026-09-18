@@ -128,3 +128,66 @@ test('OpenArm contrast reports visible markers without changing physics, includi
   await page.screenshot({ path: testInfo.outputPath('openarm-contrast-rebuilt-workcell.png') });
   expect(errors).toEqual([]);
 });
+
+test('WebMCP clears baseline fixtures, builds hollow laboratory assets and checks seating without claiming a transfer', async ({page}, testInfo) => {
+  test.setTimeout(240000);
+  const errors=[];page.on('pageerror',error=>errors.push(String(error)));
+  await page.goto('/tests/fixtures/openarm.html');await page.waitForFunction(()=>window.ready,null,{timeout:60000});
+  await page.evaluate(async()=>{
+    const {createWebMcpRegistration}=await import('/src/webmcp/register-ide-tools.js');
+    window.tools=new Map();Object.defineProperty(document,'modelContext',{configurable:true,value:{registerTool:async(tool,{signal})=>{tools.set(tool.name,tool);signal.addEventListener('abort',()=>tools.delete(tool.name));}}});
+    let executionState='idle',epoch=0;
+    const app={sim:{backend:sim,getState:()=>sim.getState(),getPhysicalSession:()=>sim.getPhysicalSession(),getPhysicalAuthorityToken:()=>sim.getPhysicalAuthorityToken(),applyPhysicalTargets:(...a)=>sim.applyPhysicalTargets(...a)},runToken:0,
+      getExecutionState:()=>executionState,beginExecution(){if(executionState!=='idle')return null;executionState='running';return ++this.runToken;},finishExecution(token){if(token===this.runToken)executionState='idle';},cancelExecution(){this.runToken++;executionState='idle';},resetSimulation:()=>sim.reset(),setStatus:()=>{},renderPanels:()=>{}};
+    const facade={app,controlSequence:0,activeControlId:null,assertActive(e){if(e!==epoch)throw Error('stale access');},setRegistrationEpoch(e){epoch=e;},getRegistrationContext:()=>({profileId:'openarm',workspaceStatus:'ready',simulationReady:sim.isReady(),simulationMode:'physical_mujoco',workspaceGeneration:1,simulatorEpoch:1}),shouldRegisterMicroduckControl:()=>false};
+    window.registration=createWebMcpRegistration(facade);await registration.setAccess('assist');
+    window.callTool=(name,input)=>tools.get(name).execute(input,{});
+    window.stageLab=(equipment,scene_mode)=>callTool('manage_openarm_workcell',{schema_version:'robobuddy.openarm.equipment.v1',command:'stage',expected_scene_revision:sim.getPhysicalAuthorityToken().sceneRevision,equipment,...(scene_mode?{scene_mode}:{})});
+    window.applyLab=staged=>callTool('manage_openarm_workcell',{schema_version:'robobuddy.openarm.equipment.v1',command:'apply',stage_id:staged.result.id,acknowledge_reset:true});
+  });
+  const clear=await page.evaluate(async()=>{
+    const before=sim.getState(), staged=await stageLab([],'blank'), preview=sim.getState();
+    const applied=await applyLab(staged);sim.renderFrame();
+    const inspection=await callTool('inspect_openarm_workcell',{});
+    const reset=await callTool('control_openarm_simulation',{schema_version:'robobuddy.openarm.physical.v1',command:'reset'});
+    return {before,preview,staged,applied,inspection,reset,afterReset:sim.getWorkcellState(),markerCount:sim.canvas.dataset.highContrastPerimeterCount};
+  });
+  expect(clear.preview).toEqual(clear.before);expect(clear.applied.ok,JSON.stringify(clear.applied)).toBe(true);
+  expect(clear.inspection.sceneMode).toBe('blank');expect(clear.inspection.bodies.flask).toBeUndefined();expect(clear.inspection.bodies.beaker).toBeUndefined();
+  expect(clear.inspection.geometryIds).toContain('cell_table');expect(clear.inspection.geometryIds).not.toContain('left_hotplate');expect(clear.markerCount).toBe('0');
+  expect(clear.reset.ok).toBe(true);expect(clear.afterReset.sceneMode).toBe('blank');expect(clear.inspection.assetCatalog.funnel).toBeTruthy();
+  await page.screenshot({path:testInfo.outputPath('blank-openarm-workcell.png')});
+  const photo=await page.evaluate(async()=>{
+    const equipment=[
+      {id:'stand',kind:'ring_stand',position_m:[.6,.32,1.005],dimensions_m:[.16,.14,.435/.72]},
+      {id:'burette',kind:'burette',position_m:[.6,.32,1.18]},
+      {id:'tile',kind:'tile',position_m:[.6,.32,1.017],dimensions_m:[.095,.1,.008]},
+      {id:'flask',kind:'erlenmeyer_flask',position_m:[.6,.32,1.025]},
+      {id:'bottle',label:'Acetic acid (illustrative)',kind:'bottle',position_m:[.35,.35,1.005]},
+      {id:'waste',label:'Waste beaker',kind:'beaker',position_m:[.72,-.32,1.005]},
+      {id:'funnel',kind:'funnel',position_m:[.34,-.34,1.04],quaternion_wxyz:[Math.SQRT1_2,0,Math.SQRT1_2,0]},
+    ];
+    const staged=await stageLab(equipment), applied=await applyLab(staged);sim.renderFrame();
+    return {staged,applied,inspection:sim.getWorkcellState(),rendered:[...sim.presentation.geomMeshes.keys()]};
+  });
+  expect(photo.applied.ok,JSON.stringify(photo.applied)).toBe(true);expect(photo.inspection.sceneMode).toBe('blank');expect(photo.inspection.equipment).toHaveLength(7);
+  expect(photo.rendered).toContain('lab_funnel_bowl_0');expect(photo.rendered).toContain('lab_burette_tube_0');expect(photo.rendered).not.toContain('flask_grip_geom');
+  await page.screenshot({path:testInfo.outputPath('titration-catalog-workcell.png')});
+  const seating=await page.evaluate(async()=>{
+    // This setup-only drop tests bore topology. It must never be reported as a robot transfer.
+    const staged=await stageLab([{id:'burette',kind:'burette',position_m:[.38,-.35,1.005]},{id:'funnel',kind:'funnel',position_m:[.38,-.35,1.410]}]);
+    const applied=await applyLab(staged);
+    const result=await callTool('run_openarm_program',{schema_version:'robobuddy.openarm.program.v1',expected_scene_revision:sim.getPhysicalAuthorityToken().sceneRevision,segments:[{duration_seconds:2,wait_for:{type:'funnel_seated',object_id:'lab_funnel',receiver_id:'lab_burette',dwell_seconds:.2,timeout_seconds:2}}]});
+    return {applied,result,inspection:sim.getWorkcellState()};
+  });
+  expect(seating.result.ok,JSON.stringify(seating.result)).toBe(true);expect(seating.inspection.funnelSeating[0].seated).toBe(true);
+  expect(seating.inspection.taskEvaluation.success).toBe(false);expect(seating.inspection.taskEvaluation.scope).toContain('does not prove a robot transfer');
+  await page.screenshot({path:testInfo.outputPath('physical-funnel-seating.png')});
+  const restored=await page.evaluate(async()=>{
+    const result=await applyLab(await stageLab([],'baseline'));sim.renderFrame();
+    return {result,state:sim.getWorkcellState(),markerCount:sim.canvas.dataset.highContrastPerimeterCount};
+  });
+  expect(restored.result.ok).toBe(true);expect(restored.state.sceneMode).toBe('baseline');expect(restored.state.bodies.flask).toBeTruthy();expect(restored.markerCount).toBe('2');
+  expect(errors).toEqual([]);
+  await writeFile(testInfo.outputPath('lab-assets-webmcp.json'),JSON.stringify({clear,photo,seating,restored},null,2));
+});
