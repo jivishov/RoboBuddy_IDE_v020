@@ -29,7 +29,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm ci --ignore-scripts
+      - run: npm install --ignore-scripts --no-package-lock
       - name: Retain pinned browser dependencies for offline reproduction
         if: github.ref == 'refs/heads/fix/openarm-blank-lab-assets'
         run: tar -czf openarm-test-dependencies.tar.gz node_modules
