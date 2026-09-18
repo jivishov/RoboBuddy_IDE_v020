@@ -25,6 +25,18 @@ jobs:
     timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
+      - name: Retain the exact tracked source for independent reproduction
+        run: |
+          mkdir -p "$RUNNER_TEMP/general-scene-source"
+          git archive --format=tar.gz HEAD > "$RUNNER_TEMP/general-scene-source/source.tar.gz"
+          git rev-parse HEAD HEAD^{tree} > "$RUNNER_TEMP/general-scene-source/identity.txt"
+          cd "$RUNNER_TEMP/general-scene-source"
+          sha256sum source.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: general-laboratory-source
+          path: ${{ runner.temp }}/general-scene-source/
+          retention-days: 14
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
