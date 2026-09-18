@@ -1,0 +1,43 @@
+name: Materialize reviewed general-scene source
+on:
+  push:
+    branches: [feat/openarm-general-scene-builder]
+    paths: ['.github/general-scene-source/**', '.github/workflows/materialize-general-scene.yml']
+permissions:
+  contents: write
+jobs:
+  materialize:
+    if: github.repository == 'jivishov/RoboBuddy_IDE_v020' && github.ref == 'refs/heads/feat/openarm-general-scene-builder'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Verify and materialize exact locally tested source bytes on this branch only
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "711bfdedfe34b63e314bd222e2fc24989e48dd31"
+          python - <<'PYCODE'
+          import base64, hashlib, lzma, pathlib, subprocess, tempfile
+          hashes = ['3bd317b0e79fdec0bb7c1b4ee587dc28cf5f35ff6a2db27a5b60c9f9ccc51fb5', 'dbfa3b323ab5ac8bce80c35e8baeeb56534253af426a81d3c49798507069abc1', 'ae77d5d1b77c07a118c996361701838ae82b14f586a320958456231e7422b2dc', '0262ea524709745898a52ccb4b4803a05cbc68155a69641a6f96dc2d7d6522e2', 'c87fdae614089690c3272a9c4d986d454f39625f3fe2caa2a72dadd2ca9eb932', 'c1f97b33f0c37f3fc9ec83352c6aa69dbe7586b8c929392c9777d247de789ec3']
+          chunks = []
+          for i, expected in enumerate(hashes):
+              content = pathlib.Path(f'.github/general-scene-source/part-{i}.txt').read_text().strip()
+              assert hashlib.sha256(content.encode()).hexdigest() == expected, f'Source chunk {i} checksum mismatch'
+              chunks.append(content)
+          patch = lzma.decompress(base64.b64decode(''.join(chunks), validate=True), memlimit=128*1024*1024)
+          assert len(patch) == 188375
+          assert hashlib.sha256(patch).hexdigest() == 'fe2a3888522a3296db94b68ffa3c091bf99bf6a99e5ccb5be5d6ac3a4621b5f0'
+          with tempfile.NamedTemporaryFile() as f:
+              f.write(patch); f.flush()
+              subprocess.run(['git','apply','--unidiff-zero','--index','--check',f.name],check=True)
+              subprocess.run(['git','apply','--unidiff-zero','--index',f.name],check=True)
+          PYCODE
+          git rm .github/general-scene-source/part-*.txt .github/workflows/materialize-general-scene.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(openarm): general laboratory scene construction with explicit uncertainty and causal task evidence" -m "Materialize checksum-verified implementation and tests. Unknown equipment is authored through bounded geometry rather than catalog-only selection. The following validation workflow is read-only and tests the committed source. No main branch or Pages deployment is changed."
+          test "$(git ls-remote origin refs/heads/feat/openarm-general-scene-builder | cut -f1)" = "$GITHUB_SHA"
+          git push origin HEAD:refs/heads/feat/openarm-general-scene-builder
