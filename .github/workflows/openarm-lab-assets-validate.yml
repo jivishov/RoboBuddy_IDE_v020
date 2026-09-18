@@ -30,20 +30,13 @@ jobs:
         with:
           node-version: '22'
       - run: npm install --ignore-scripts --no-package-lock
-      - name: Retain pinned browser dependencies for offline reproduction
-        if: github.ref == 'refs/heads/fix/openarm-blank-lab-assets'
-        run: tar -czf openarm-test-dependencies.tar.gz node_modules
-      - uses: actions/upload-artifact@v4
-        if: github.ref == 'refs/heads/fix/openarm-blank-lab-assets'
-        with:
-          name: openarm-test-dependencies
-          path: openarm-test-dependencies.tar.gz
-          retention-days: 1
       - name: Core contracts and real MuJoCo WASM regressions
         run: |
           node tests/physics/openarm-phase5a-core.mjs
           node tests/physics/openarm-worker.mjs
           node tests/physics/openarm-lab-assets.mjs
+          mkdir -p lab-asset-evidence
+          cp test-results/openarm-lab-assets.json lab-asset-evidence/
       - run: npx playwright install --with-deps chromium
       - name: Browser workcell and WebMCP regression tests
         run: npx playwright test tests/openarm-workcell-browser.spec.mjs tests/webmcp.spec.mjs
@@ -51,5 +44,7 @@ jobs:
         if: always()
         with:
           name: openarm-lab-assets-evidence
-          path: test-results/
+          path: |
+            test-results/
+            lab-asset-evidence/
           retention-days: 7
