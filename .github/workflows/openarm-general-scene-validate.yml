@@ -51,10 +51,11 @@ jobs:
           node tests/physics/openarm-worker.mjs
           node tests/physics/openarm-general-contracts.mjs
           node tests/physics/openarm-general-scene.mjs
+          node tests/physics/openarm-general-review.mjs
           python tests/validate_openarm_schemas.py
           python tests/validate_general_scene_schemas.py
           mkdir -p general-scene-evidence
-          cp test-results/openarm-general-scene.json general-scene-evidence/
+          cp test-results/openarm-general-*.json general-scene-evidence/
           printf '%s\n' "$GITHUB_SHA" > general-scene-evidence/source-commit.txt
       - run: npx playwright install --with-deps chromium
       - name: Registered tools, real browser physics, human review and regressions
