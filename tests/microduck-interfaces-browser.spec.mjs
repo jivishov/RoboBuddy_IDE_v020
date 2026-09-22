@@ -153,7 +153,10 @@ for (const mode of ['abort', 'access-off']) {
     expect(result.before).toBeCloseTo(0.02, 8);
     expect(result.after).toBe(result.before);
     // Cancellation is scoped to the tool call, not a permanent simulator latch.
-    await page.locator('#agentAccessToggle').click();
+    // A call abort leaves consent enabled; only access-off needs a fresh opt-in.
+    await expect(page.locator('#agentAccessToggle')).toHaveAttribute('aria-checked', mode === 'access-off' ? 'false' : 'true');
+    if (mode === 'access-off') await page.locator('#agentAccessToggle').click();
+    await expect(page.locator('#agentAccessToggle')).toHaveAttribute('aria-checked', 'true');
     const resumed = await invoke(page, { command: 'advance', advance_seconds: 0.02 });
     expect(resumed.ok, JSON.stringify(resumed)).toBe(true);
     expect(resumed.actual.simulationTimeSeconds).toBeCloseTo(0.04, 8);
