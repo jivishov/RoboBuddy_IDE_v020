@@ -40,7 +40,7 @@ export function installGeneralLabBuilder(app) {
     #generalLabPanel input[type=file] { max-width:100%; }
   `;
   document.head.append(css);
-  const launch=element('button','Lab Builder',{id:'generalLabOpen',type:'button',title:'Author and review laboratory scenes. Requires the OpenArm physical workspace.'});host.append(launch);
+  const launch=element('button','Lab Builder',{id:'generalLabOpen',type:'button','aria-expanded':'false','aria-controls':'generalLabPanel',title:'Author and review laboratory scenes. Requires the OpenArm physical workspace.'});host.append(launch);
   const panel=element('dialog',undefined,{id:'generalLabPanel','aria-label':'General laboratory scene builder'});
   const header=element('header');header.append(element('strong','Laboratory scene builder'));
   const close=element('button','Close',{type:'button'});header.append(close);panel.append(header);
@@ -112,8 +112,8 @@ export function installGeneralLabBuilder(app) {
     const idle=ready()&&app.getExecutionState()==='idle';mutations.forEach(b=>b.disabled=!idle);
     if(panel.open&&ready()){const s=backend().getGeneralSceneState();report.textContent=stringify({sceneMode:s.sceneMode,staged:s.staged,report:s.report,task:s.task});}
   }
-  function hide(){panel.close();if(poll)clearInterval(poll);poll=null;launch.focus();}
-  close.onclick=hide;launch.onclick=()=>{panel.show();refresh();if(!poll)poll=setInterval(refresh,1000);};
+  function hide(){panel.close();launch.setAttribute('aria-expanded','false');if(poll)clearInterval(poll);poll=null;launch.focus();}
+  close.onclick=hide;launch.onclick=()=>{if(panel.open){hide();return;}panel.show();launch.setAttribute('aria-expanded','true');refresh();if(!poll)poll=setInterval(refresh,1000);};
   panel.addEventListener('keydown',event=>{if(['Escape','F5','F10'].includes(event.key)){event.preventDefault();event.stopImmediatePropagation();if(event.key==='Escape')hide();}},true);
   document.body.append(panel);app.onAgentContextChange?.(refresh);refresh();
   return {panel,refresh};

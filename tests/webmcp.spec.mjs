@@ -53,21 +53,21 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   page.on('pageerror', (error) => pageErrors.push(String(error?.stack || error)));
   await openReadyApp(page);
   const control = page.locator('#agentAccessControl');
-  const indicator = control.locator('.agent-access-dot');
+  const toggle = page.getByRole('switch', { name: 'Agent Assist' });
   await expect(control).toHaveAttribute('data-access', 'off');
   await expect(control).toHaveAttribute('data-available', 'true');
   await expect(control).toHaveAttribute('data-tools', 'disabled');
-  await expect(indicator).toHaveCSS('background-color', 'rgb(220, 90, 100)');
-  await expect(indicator).toHaveCSS('animation-name', 'none');
+  await expect(toggle).toHaveAttribute('aria-checked', 'false');
+  await expect(control.locator('.agent-access-state')).toHaveText('OFF');
   expect(await page.evaluate(() => window.__webMcpRegistrations.length)).toBe(0);
-  await page.locator('[data-agent-access="assist"]').evaluate((button) => button.click());
+  await page.locator('#agentAccessToggle').evaluate((button) => button.click());
   await expect(control).toHaveAttribute('data-access', 'off');
   expect(await page.evaluate(() => window.__webMcpRegistrations.length)).toBe(0);
-  await page.locator('[data-agent-access="assist"]').click();
+  await page.locator('#agentAccessToggle').click();
   await expect(control).toHaveAttribute('data-access', 'assist');
   await expect(control).toHaveAttribute('data-tools', 'enabled');
-  await expect(indicator).toHaveCSS('background-color', 'rgb(70, 209, 124)');
-  await expect(indicator).toHaveCSS('animation-name', 'agent-assist-blink');
+  await expect(toggle).toHaveAttribute('aria-checked', 'true');
+  await expect(control.locator('.agent-access-state')).toHaveText('ON');
   await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
   const registered = await page.evaluate(() => window.__webMcpRegistrations.filter(({ signal }) => !signal?.aborted).map(({ tool }) => ({ name: tool.name, annotations: tool.annotations, inputSchema: tool.inputSchema })));
   for (const tool of registered) {
@@ -116,7 +116,7 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
   expect(run.simulation.status).toContain('physical task criteria');
   const cancelled = await callTool(page, 'run_robobuddy_program', {}, { aborted: true });
   expect(cancelled).toMatchObject({ ok: false, error: { code: 'OPERATION_CANCELLED', retryable: true } });
-  await page.locator('[data-agent-access="off"]').click();
+  await page.locator('#agentAccessToggle').click();
   await expect(control).toHaveAttribute('data-access', 'off');
   await expect(control).toHaveAttribute('data-tools', 'disabled');
   expect(await page.evaluate(() => window.__webMcpRegistrations.every(({ signal }) => signal.aborted))).toBe(true);
@@ -131,7 +131,7 @@ test('explicit human Agent Assist registers a bounded, cancellation-aware RoboBu
 test('ready physical MicroDuck registers only its bounded physical tool and removes it on profile changes', async ({ page }) => {
   test.setTimeout(180_000);
   await openReadyApp(page);
-  await page.locator('[data-agent-access="assist"]').click();
+  await page.locator('#agentAccessToggle').click();
   await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
   await page.locator('#robotSelect').selectOption('microduck');
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 120_000 });
@@ -153,7 +153,7 @@ test('ready physical MicroDuck registers only its bounded physical tool and remo
 
 test('loading and failed MicroDuck workspaces keep only the six base tools', async ({ page }) => {
   await openReadyApp(page);
-  await page.locator('[data-agent-access="assist"]').click();
+  await page.locator('#agentAccessToggle').click();
   await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
   await page.route('**/assets/microduck/generated/procedural-rig.json', async (route) => { await new Promise(resolve => setTimeout(resolve, 250)); await route.abort('failed'); });
   await page.locator('#robotSelect').selectOption('microduck');
@@ -168,7 +168,7 @@ test('partial WebMCP registration failure aborts the entire attempted group', as
   await installWebMcpMock(page, { failAt: 3 });
   await page.goto('/?ci=webmcp-partial-failure', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
-  await page.locator('[data-agent-access="assist"]').click();
+  await page.locator('#agentAccessToggle').click();
   await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-error', 'true');
   expect(await activeTools(page)).toEqual([]);
   expect(await page.evaluate(() => window.__webMcpRegistrations.every(({ signal }) => signal.aborted))).toBe(true);
@@ -178,7 +178,7 @@ test('unsupported browsers keep the IDE usable without registering WebMCP tools'
   await page.goto('/?ci=webmcp-unsupported', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('#statusMessage')).toContainText('Ready', { timeout: 60_000 });
   await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-available', 'false');
-  await expect(page.locator('[data-agent-access="assist"]')).toBeDisabled();
+  await expect(page.locator('#agentAccessToggle')).toBeDisabled();
   await expect(page.locator('#simCanvas')).toBeVisible();
 });
 
@@ -187,7 +187,7 @@ test('full IDE OpenArm equipment and program tools share the real application le
   const errors = [];
   page.on('pageerror', error => errors.push(String(error.stack || error)));
   await openReadyApp(page);
-  await page.locator('[data-agent-access="assist"]').click();
+  await page.locator('#agentAccessToggle').click();
   await expect.poll(() => activeTools(page)).toEqual(OPENARM_TOOLS);
   const before = await callTool(page, 'inspect_openarm_workcell');
   expect(before.ok).toBe(true);
@@ -232,7 +232,7 @@ test('full IDE OpenArm equipment and program tools share the real application le
   expect(acquired).toBe('running');
   const competing = await callTool(page, 'control_openarm_simulation', { schema_version: 'robobuddy.openarm.physical.v1', command: 'advance', seconds: .1 });
   expect(competing).toMatchObject({ ok: false, error: { code: 'SIMULATION_BUSY' } });
-  await page.locator('[data-agent-access="off"]').click();
+  await page.locator('#agentAccessToggle').click();
   const revoked = await page.evaluate(() => window.__revokedOpenArmRun);
   expect(revoked.ok, JSON.stringify(revoked)).toBe(false);
   await expect.poll(() => page.evaluate(() => window.__robobuddyCi.app.getExecutionState())).toBe('idle');

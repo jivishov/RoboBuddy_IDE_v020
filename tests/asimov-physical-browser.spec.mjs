@@ -84,7 +84,7 @@ test('Asimov IDE selector exposes only user experiments while references remain 
  await expect(page.locator('#physicsBackendBadge')).toContainText('browser-mujoco');
  await expect(page.locator('#simBadge')).toContainText('MUJOCO');
  expect(await page.locator('#telemetryPanel').textContent()).not.toContain('NaN');
- await page.locator('#agentAccessControl button[data-agent-access="assist"]').click();
+ await page.locator('#agentAccessToggle').click();
  const agent=await page.evaluate(async()=>{
   const {agentFacade:facade}=window.__robobuddyCi;
   const {executeAsimovPhysicalControl,WEBMCP_ASIMOV_SCHEMA_VERSION}=await import('/src/webmcp/asimov-physical-control.js');
@@ -135,7 +135,7 @@ test('Asimov actuator experiment: sensor isolation, continuous caps and physical
  expect(standing.evaluation.status).toBe('passed');expect(standing.evaluation.success).toBe(true);expect(standing.evaluation.validDwellSeconds).toBeGreaterThan(10);
  await expect(page.locator('#simActionLabel')).toHaveText('Physical task complete');
  await page.screenshot({path:'test-results/asimov-standing-trial.png'});
- await page.locator('#agentAccessControl button[data-agent-access="assist"]').click();
+ await page.locator('#agentAccessToggle').click();
  const agent=await page.evaluate(async()=>{
   const {app,agentFacade:f}=window.__robobuddyCi;
   const {executeAsimovPhysicalControl:execute,WEBMCP_ASIMOV_SCHEMA_VERSION:v}=await import('/src/webmcp/asimov-physical-control.js');
@@ -176,7 +176,7 @@ test('Sensor standing and bounded programs are available through the registered 
  expect(python.state.standing_assessment.controllerId).toBe('asimov-sensor-stance-v2');
  expect(python.state.standing_assessment.status).toBe('passed');
  expect(python.state.standing_assessment.sensorFeedback.groundTruthFallback).toBe(false);
- await page.locator('#agentAccessControl button[data-agent-access="assist"]').click();
+ await page.locator('#agentAccessToggle').click();
  const result=await page.evaluate(async()=>{
   const {agentFacade:facade,app}=window.__robobuddyCi;
   const v='robobuddy.asimov.physical.v1';

@@ -282,7 +282,7 @@ test('LeKiwi Phase 5B drives, grasps, carries, delivers and returns through one 
 
   // 11. WebMCP reaches the same session, and it reports a request separately from achieved state.
   await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-available', 'true');
-  await page.locator('[data-agent-access="assist"]').click();
+  await page.locator('#agentAccessToggle').click();
   await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-access', 'assist');
   await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-tools', 'enabled');
   // The physical tool is the one that actually reaches the agent surface, exactly once.
