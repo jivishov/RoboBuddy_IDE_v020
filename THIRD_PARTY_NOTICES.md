@@ -32,3 +32,7 @@ hardware and GPL-2.0 for software. These source-derived assets are **not MIT**.
 The reproducible transformations, limitations and numerical checks are documented
 in `docs/physics/asimov-provenance.md`. The added ideal torque actuators and PD
 gains are simulator assumptions, not an official Menlo policy or hardware calibration.
+
+## IBM Plex Sans
+
+The locally hosted UI font in `assets/fonts/ibm-plex-sans-latin-variable.woff2` is distributed under the SIL Open Font License 1.1. Source: `@fontsource-variable/ibm-plex-sans` 5.3.0. See `assets/fonts/OFL-IBM-Plex-Sans.txt` for the complete license and copyright notice.
