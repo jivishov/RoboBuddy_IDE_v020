@@ -49,13 +49,24 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .toolbar #taskSelect { width:clamp(170px,21vw,290px); text-overflow:ellipsis; }
 .toolbar-sep { height:22px; margin-inline:3px; background:var(--line); }
 .robot-title { font-size:11px; }
-.agent-access-control, :root[data-theme="calm-light"] .agent-access-control { height:32px; padding:3px; border-color:var(--line); border-radius:5px; background:var(--bg); }
-.agent-access-label, :root[data-theme="calm-light"] .agent-access-label { color:var(--muted); font-size:9px; letter-spacing:.04em; }
-.agent-access-dot { background:#8c8c7e; box-shadow:none; width:5px; height:5px; }
-.agent-access-control[data-access="assist"] .agent-access-dot { background:#559666; box-shadow:none; animation:none; }
-.toolbar .agent-access-control button, :root[data-theme="calm-light"] .toolbar .agent-access-control button { color:var(--muted); height:24px; min-height:24px; padding-inline:7px; border-radius:3px; background:none; font-size:11px; }
-.toolbar .agent-access-control button.active, :root[data-theme="calm-light"] .toolbar .agent-access-control button.active { background:var(--surface-hover); color:var(--text); }
-.toolbar .agent-access-control[data-access="assist"][data-tools="enabled"] button.active, :root[data-theme="calm-light"] .toolbar .agent-access-control[data-access="assist"][data-tools="enabled"] button.active { background:var(--surface-active); color:var(--accent); }
+/* A single, keyboard-operable switch expresses session access independently of tool registration. */
+.agent-access-control { position:relative; display:inline-flex; flex:0 0 auto; }
+.toolbar #agentAccessToggle { display:inline-flex; align-items:center; gap:8px; padding:0 10px; border-radius:999px; background:var(--panel); box-shadow:0 1px 2px rgb(24 27 22 / 5%); transition:background-color 160ms,border-color 160ms; }
+.agent-access-label { color:var(--text); font-size:11px; font-weight:600; }
+.agent-access-state { width:23px; color:var(--muted); font-size:9px; font-weight:650; letter-spacing:.05em; text-align:center; }
+.agent-switch-track { display:block; position:relative; width:32px; height:18px; flex:0 0 auto; border:1px solid var(--muted); border-radius:999px; background:var(--muted); transition:background-color 180ms,border-color 180ms; }
+.agent-switch-thumb { position:absolute; inset:2px auto auto 2px; display:grid; place-items:center; width:12px; height:12px; border-radius:50%; background:var(--panel); color:var(--warn); box-shadow:0 1px 2px rgb(0 0 0 / 20%); font:700 10px/1 var(--font-ui); transition:transform 180ms cubic-bezier(.2,.8,.2,1); }
+.toolbar #agentAccessToggle[aria-checked="true"] { background:var(--surface-active); border-color:color-mix(in srgb,var(--accent) 50%,var(--line)); }
+#agentAccessToggle[aria-checked="true"] .agent-switch-track { background:var(--accent); border-color:var(--accent); }
+#agentAccessToggle[aria-checked="true"] .agent-switch-thumb { transform:translateX(14px); background:var(--accent-text); }
+#agentAccessToggle[aria-checked="true"] .agent-access-state { color:var(--accent); }
+.toolbar #agentAccessToggle:hover:not(:disabled) { border-color:var(--accent); background:var(--surface-hover); }
+.toolbar #agentAccessToggle:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.toolbar #agentAccessToggle:disabled { opacity:.7; cursor:not-allowed; }
+.agent-access-control[data-access="assist"][data-tools="enabling"] .agent-switch-thumb::after { content:"·"; }
+.agent-access-control[data-access="assist"][data-error="true"] .agent-switch-thumb::after { content:"!"; }
+.agent-access-control[data-access="assist"][data-error="true"] .agent-switch-track { background:var(--warn); border-color:var(--warn); }
+.agent-access-status { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
 .sidebar, .side-content { background:var(--bg); }
 .activity { padding-top:10px; gap:8px; background:var(--panel2); }
 .activity button { border-radius:5px; color:var(--muted); width:32px; height:34px; }
@@ -103,12 +114,20 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .cm-executing-line { background:color-mix(in srgb,var(--accent) 12%,transparent) !important; }
 .splitter { background:var(--line); }
 .splitter:hover, .resizing .splitter { background:var(--accent); }
-.sim-head { height:auto; min-height:38px; padding:7px 9px; gap:6px; flex-wrap:wrap; background:var(--panel); }
+.sim-head { height:auto; min-height:38px; padding:8px 10px; gap:6px; flex-wrap:wrap; background:var(--panel); }
 .sim-head strong { color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.05em; white-space:nowrap; flex:0 0 auto; }
 .sim-action-label { color:var(--muted); font-size:10px; flex:1 1 30px; }
-.sim-head button { height:26px; flex:0 0 auto; background:var(--surface-input); color:var(--text); border-color:var(--line); border-radius:4px; padding-inline:8px; font-size:11px; white-space:nowrap; }
-.sim-head button:hover { background:var(--surface-hover); }
-.sim-head .scene-contrast-toggle.active { background:var(--surface-active); color:var(--accent); border-color:color-mix(in srgb,var(--accent) 35%,var(--line)); }
+.sim-head button { display:inline-flex; align-items:center; justify-content:center; gap:6px; height:30px; flex:0 0 auto; padding:0 9px; border:1px solid var(--line); border-radius:7px; background:var(--surface-input); color:var(--text); box-shadow:0 1px 2px rgb(24 27 22 / 6%); font:500 11px/1 var(--font-ui); white-space:nowrap; transition:background-color 140ms,border-color 140ms,box-shadow 140ms; }
+.sim-head button::before { content:""; display:block; width:14px; height:14px; flex:0 0 auto; background:currentColor; mask:var(--sim-control-icon) center / contain no-repeat; opacity:.8; }
+.sim-head #fitBtn { --sim-control-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5'/%3E%3Crect x='8' y='8' width='8' height='8' rx='1'/%3E%3C/svg%3E"); }
+.sim-head #highContrastSceneBtn { --sim-control-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='9' fill='none' stroke='black' stroke-width='1.7'/%3E%3Cpath d='M12 3a9 9 0 0 1 0 18Z'/%3E%3C/svg%3E"); }
+.sim-head #panelToggle { --sim-control-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 3v6m0 4v8M12 3v12m0 4v2M19 3v2m0 4v12'/%3E%3Cpath d='M2 9h6v4H2zM9 15h6v4H9zM16 5h6v4h-6z'/%3E%3C/svg%3E"); }
+.sim-head #generalLabOpen { --sim-control-icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M9 3h6M10 3v6L4 19a1.3 1.3 0 0 0 1.1 2h13.8a1.3 1.3 0 0 0 1.1-2L14 9V3M7 15h10'/%3E%3C/svg%3E"); }
+.sim-head button:hover:not(:disabled) { background:var(--surface-hover); border-color:var(--muted); box-shadow:0 2px 4px rgb(24 27 22 / 9%); }
+.sim-head button:active:not(:disabled) { box-shadow:inset 0 1px 2px rgb(24 27 22 / 12%); }
+.sim-head .scene-contrast-toggle.active, .sim-head button[aria-expanded="true"] { background:var(--surface-active); color:var(--accent); border-color:color-mix(in srgb,var(--accent) 45%,var(--line)); }
+.sim-head button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.sim-head button:disabled { opacity:.5; cursor:not-allowed; box-shadow:none; }
 .physics-backend-badge { order:10; flex:1 0 100%; max-width:none; border:0; border-top:1px solid var(--line); border-radius:0; padding:6px 0 0; color:var(--muted); background:none; font:9px/1.3 var(--font-code); letter-spacing:.02em; }
 .sim-viewport { background:#c3c9c5; }
 .sim-badge { background:rgb(36 40 33 / 90%); color:#e4e7dc; border:1px solid #666f5c; border-radius:4px; font:9px/1.5 var(--font-code); padding:6px 9px; }
@@ -193,6 +212,7 @@ html #generalLabPanel output[data-error=true] { border-color:var(--danger); }
   .bottom-tabs { gap:2px; }
   .statusbar { padding-inline:8px; }
   .problem { grid-template-columns:1fr; row-gap:3px; }
+  .sim-head button { min-height:34px; }
 }
 @media (max-height:620px) {
   .app { grid-template-rows:36px 44px minmax(0,1fr) var(--bottom-row) 24px; }
