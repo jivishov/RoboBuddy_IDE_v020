@@ -840,6 +840,7 @@ class App {
   openBottom(name) {
     $('app').classList.add('bottom-open');
     $('bottomPanel').classList.remove('collapsed');
+    $('panelToggle').setAttribute('aria-expanded', 'true');
     document.querySelectorAll('.bottom-tab').forEach((button) => button.classList.toggle('active', button.dataset.panel === name));
     document.querySelectorAll('.panel-view').forEach((view) => { view.hidden = true; });
     const map = { problems: 'problemsPanel', telemetry: 'telemetryPanel', commands: 'commandsPanel', contacts: 'contactsPanel', task: 'taskBottomPanel' };
@@ -851,6 +852,7 @@ class App {
   closeBottom() {
     $('bottomPanel').classList.add('collapsed');
     $('app').classList.remove('bottom-open');
+    $('panelToggle').setAttribute('aria-expanded', 'false');
     setTimeout(() => { this.editor.refresh(); this.sim.resize(); }, 30);
   }
 
@@ -1000,21 +1002,20 @@ class App {
     control.dataset.available = String(available);
     control.dataset.tools = pending ? 'enabling' : (registered ? 'enabled' : 'disabled');
     control.dataset.error = String(error);
-    for (const button of control.querySelectorAll('[data-agent-access]')) {
-      const active = button.dataset.agentAccess === this.agentAccess;
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-pressed', String(active));
-    }
-    const assistButton = control.querySelector('[data-agent-access="assist"]');
-    if (assistButton) {
-      assistButton.disabled = !available;
-      assistButton.title = available
-        ? 'Enable this session’s bounded WebMCP tools for human-agent collaboration'
-        : 'WebMCP is not available in this browser';
-    }
-    control.title = error
-      ? 'WebMCP tool registration failed. Turn Agent Assist off and on to retry.'
-      : (available ? 'Agent Assist is session-only and never saves or publishes source.' : 'Open this app in a WebMCP-capable browser to enable Agent Assist.');
+    const enabled = this.agentAccess === 'assist';
+    const toggle = $('agentAccessToggle');
+    toggle.setAttribute('aria-checked', String(enabled));
+    // Access can always be revoked, even if the host becomes unavailable.
+    toggle.disabled = !available && !enabled;
+    control.querySelector('.agent-access-state').textContent = enabled ? 'ON' : 'OFF';
+    const status = !enabled
+      ? (available ? 'Agent access is off. Turn on to enable bounded WebMCP tools for this session.' : 'WebMCP is not available in this browser. Agent access is off.')
+      : error ? 'Tool registration failed. Turn Agent off and on to retry.'
+      : pending ? 'Agent access is on. Connecting tools…'
+      : registered ? 'Agent access is on. Bounded WebMCP tools are connected for this session.'
+      : 'Agent access is on, but no tools are connected.';
+    $('agentAccessStatus').textContent = status;
+    toggle.title = `${status} ${enabled ? 'Click to turn off and revoke access.' : 'Access is session-only and never saves or publishes source.'}`;
   }
 
   getAgentSnapshot() {
@@ -1135,9 +1136,8 @@ class App {
     $('commandClose').onclick = () => $('commandPalette').hidden = true; $('commandInput').oninput = (event) => this.renderPalette(event.target.value); $('commandPalette').onclick = (event) => { if (event.target === $('commandPalette')) $('commandPalette').hidden = true; };
     $('aboutCloseBtn').onclick = () => $('aboutDialog').close();
     $('importFile').onchange = (event) => { const file = event.target.files?.[0]; if (file) this.importFile(file); event.target.value = ''; };
-    $('agentAccessControl').addEventListener('click', (event) => {
-      const button = event.target.closest('[data-agent-access]');
-      if (button) this.setAgentAccessFromTrustedEvent(button.dataset.agentAccess, event);
+    $('agentAccessToggle').addEventListener('click', (event) => {
+      this.setAgentAccessFromTrustedEvent(this.agentAccess === 'assist' ? 'off' : 'assist', event);
     });
     this.renderAgentAccessControl();
     document.addEventListener('keydown', (event) => {
