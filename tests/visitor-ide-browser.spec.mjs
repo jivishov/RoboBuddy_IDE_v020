@@ -15,7 +15,7 @@ async function ready(page){
 }
 const call=(page,name,input={})=>page.evaluate(({name,input})=>visitorTools.get(name).execute(input,{}),{name,input});
 
-test('Help manuals open separate tabs without changing the active OpenArm scene',async({page})=>{
+test('Help manuals open separate tabs without changing the active OpenArm scene',async({page},info)=>{
   await ready(page);
   await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-access','off');
   const before=await page.evaluate(()=>({authority:__robobuddyCi.app.sim.getPhysicalAuthorityToken(),token:__robobuddyCi.app.runToken}));
@@ -28,6 +28,15 @@ test('Help manuals open separate tabs without changing the active OpenArm scene'
   }
   expect(await page.evaluate(()=>({authority:__robobuddyCi.app.sim.getPhysicalAuthorityToken(),token:__robobuddyCi.app.runToken}))).toEqual(before);
   await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-access','off');
+  // Retain visual evidence of both themes on the real, ready workspace.
+  await page.evaluate(()=>document.fonts.ready);
+  await page.screenshot({path:info.outputPath('openarm-paper.png')});
+  await page.locator('[data-menu="theme"]').click();
+  await page.locator('[data-theme-id="midnight-teal"]').click();
+  await page.screenshot({path:info.outputPath('openarm-graphite.png')});
+  await page.setViewportSize({width:390,height:844});
+  await page.locator('#mobileSimBtn').click();
+  await page.screenshot({path:info.outputPath('openarm-mobile.png')});
 });
 
 test('published manual files execute a full contact-driven transfer through the actual IDE tools',async({page},info)=>{
