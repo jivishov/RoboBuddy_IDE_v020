@@ -11,7 +11,7 @@ test('Asimov WebMCP executes bounded agent-generated whole-body keyframes on the
   await page.goto('/?ci=asimov-physical',{waitUntil:'domcontentloaded'});
   await expect(page.locator('#statusMessage')).toContainText('Ready',{timeout:120000});
   await expect(page.locator('#simCanvas')).toHaveAttribute('data-asimov-root-mode','free-base');
-  await page.locator('#agentAccessControl button[data-agent-access="assist"]').click();
+  await page.locator('#agentAccessToggle').click();
   const result=await page.evaluate(async()=>{
     const {app}=window.__robobuddyCi;
     const tool=window.asimovWholeBodyTools.findLast(t=>t.name==='control_asimov_physical_simulation');

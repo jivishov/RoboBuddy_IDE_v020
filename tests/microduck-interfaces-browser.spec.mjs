@@ -29,7 +29,7 @@ test('registered MicroDuck WebMCP commands reach the real controller through the
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
   await openPhysical(page);
-  await page.locator('[data-agent-access="assist"]').click();
+  await page.locator('#agentAccessToggle').click();
   await expect.poll(() => page.evaluate(() => window.__interfaceRegistrations.some(({ tool, signal }) => tool.name === 'control_microduck_physical_simulation' && !signal?.aborted))).toBe(true);
   const move = await invoke(page, { command: 'set_command', request: { vx: 0.35 }, advance_seconds: 0.1 });
   expect(move.ok, JSON.stringify(move)).toBe(true);
@@ -86,7 +86,7 @@ for (const mode of ['abort', 'access-off']) {
     const errors = [];
     page.on('pageerror', (error) => errors.push(String(error)));
     await openPhysical(page);
-    await page.locator('[data-agent-access="assist"]').click();
+    await page.locator('#agentAccessToggle').click();
     await expect.poll(() => page.evaluate(() => window.__interfaceRegistrations.some(({ tool, signal }) => tool.name === 'control_microduck_physical_simulation' && !signal?.aborted))).toBe(true);
     await page.evaluate(() => {
       const sim = window.__robobuddyCi.app.sim.backend;
@@ -127,7 +127,7 @@ for (const mode of ['abort', 'access-off']) {
     await expect.poll(() => page.evaluate(() => window.__cancellationProbe.pending)).toBe(true);
     if (mode === 'abort') await page.evaluate(() => window.__cancellationProbe.abort.abort());
     else {
-      await page.locator('[data-agent-access="off"]').click();
+      await page.locator('#agentAccessToggle').click();
       await expect(page.locator('#agentAccessControl')).toHaveAttribute('data-access', 'off');
     }
     const result = await page.evaluate(async () => {
@@ -153,7 +153,7 @@ for (const mode of ['abort', 'access-off']) {
     expect(result.before).toBeCloseTo(0.02, 8);
     expect(result.after).toBe(result.before);
     // Cancellation is scoped to the tool call, not a permanent simulator latch.
-    await page.locator('[data-agent-access="assist"]').click();
+    await page.locator('#agentAccessToggle').click();
     const resumed = await invoke(page, { command: 'advance', advance_seconds: 0.02 });
     expect(resumed.ok, JSON.stringify(resumed)).toBe(true);
     expect(resumed.actual.simulationTimeSeconds).toBeCloseTo(0.04, 8);

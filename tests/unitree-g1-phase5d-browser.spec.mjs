@@ -148,8 +148,8 @@ test('The Unitree profile exposes a physical workspace beside the source pose wo
 
   // --- bounded WebMCP over the same session -------------------------------------------------------
   // Agent Assist stays opt-in and is granted here the way a person grants it: by clicking.
-  await page.locator('#agentAccessControl button[data-agent-access="assist"]').click();
-  await expect(page.locator('#agentAccessControl button[data-agent-access="assist"]')).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#agentAccessToggle').click();
+  await expect(page.locator('#agentAccessToggle')).toHaveAttribute('aria-checked', 'true');
 
   // The tool must actually be registered with the browser interface, not merely definable.
   const registered = await page.evaluate(() => window.__webMcpRegistrations.filter(({ signal }) => !signal?.aborted).map(({ tool }) => tool.name));

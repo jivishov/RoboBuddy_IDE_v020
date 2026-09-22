@@ -5,7 +5,7 @@ for(const f of files){if(!fs.existsSync(new URL(f,root)))throw new Error(`missin
 // The executable workspace moved to ide.html; keep all original IDE assertions.
 const index=fs.readFileSync(new URL('ide.html',root),'utf8');
 for(const token of ['id="editor"','id="simCanvas"','id="taskSelect"','value="unitree"','value="microduck"','id="microduckControlDeck"','id="modeChip"','id="simBadge"','src/app-v2.js','pyodide.js'])if(!index.includes(token))throw new Error(`index missing ${token}`);
-for(const token of ['id="agentAccessControl"','data-agent-access="assist"'])if(!index.includes(token))throw new Error(`index missing WebMCP access control: ${token}`);
+for(const token of ['id="agentAccessControl"','id="agentAccessToggle"','role="switch"','aria-checked="false"'])if(!index.includes(token))throw new Error(`index missing WebMCP access control: ${token}`);
 if(/blockly/i.test(index))throw new Error('Blockly dependency found');
 for(const token of ['data-action="about"','id="aboutDialog"','Dr. Emil Jivishov','© 2026','MIT License','Open source under the MIT License.'])if(!index.includes(token))throw new Error('index missing About dialog content');
 const all=files.filter(f=>f.endsWith('.js')||f.endsWith('.html')).map(f=>fs.readFileSync(new URL(f,root),'utf8')).join('\n');
