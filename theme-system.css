@@ -97,6 +97,9 @@ button:focus-visible, a:focus-visible, select:focus-visible, input:focus-visible
 .cm-s-material-darker .cm-string { color:#b0c698; }
 .cm-s-material-darker .cm-number, .cm-s-material-darker .cm-atom { color:#e3bf81; }
 .cm-s-material-darker .cm-builtin { color:#9dc1d0; }
+.cm-s-material-darker .cm-variable, .cm-s-material-darker .cm-variable-2,
+.cm-s-material-darker .cm-property { color:var(--text); }
+.cm-s-material-darker .cm-operator { color:#b8bfae; }
 .cm-executing-line { background:color-mix(in srgb,var(--accent) 12%,transparent) !important; }
 .splitter { background:var(--line); }
 .splitter:hover, .resizing .splitter { background:var(--accent); }
